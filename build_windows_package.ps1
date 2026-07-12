@@ -379,11 +379,9 @@ try {
     New-Item -ItemType Directory -Force -Path $PublicResDir | Out-Null
     Copy-Item -Path (Join-Path $Root "res\public\*") -Destination $PublicResDir -Force
     $fallback = if (Test-Path -LiteralPath $ReferenceDir -PathType Container) { $ReferenceDir } else { "" }
-    Download-Or-Fallback "geoip.dat" "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat" $PublicResDir $fallback -Refresh:$RefreshGeodata
-    Download-Or-Fallback "geosite.dat" "https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat" $PublicResDir $fallback -Refresh:$RefreshGeodata
     Download-Or-Fallback "geoip.db" "https://github.com/SagerNet/sing-geoip/releases/latest/download/geoip.db" $PublicResDir $fallback -Refresh:$RefreshGeodata
     Download-Or-Fallback "geosite.db" "https://github.com/SagerNet/sing-geosite/releases/latest/download/geosite.db" $PublicResDir $fallback -Refresh:$RefreshGeodata
-    Copy-Item -Path (Join-Path $PublicResDir "*") -Destination $PackageDir -Force
+    Copy-Item -Path (Join-Path $PublicResDir "*") -Destination $PackageDir -Force -Exclude @("geoip.dat", "geosite.dat")
 
     if (!$SkipGoBuild) {
         Write-Step "Build updater.exe"
@@ -417,8 +415,6 @@ try {
         "routefluent-sing-box-manifest.json",
         "nekobox.png",
         "qtbase_zh_CN.qm",
-        "geoip.dat",
-        "geosite.dat",
         "geoip.db",
         "geosite.db",
         "Qt6Core.dll",
@@ -438,7 +434,7 @@ try {
         Require-PackageFile $required
     }
 
-    foreach ($forbidden in @("nekoray.exe", "nekoray_core.exe", "nekoray.png", "d3dcompiler_47.dll", "opengl32sw.dll")) {
+    foreach ($forbidden in @("nekoray.exe", "nekoray_core.exe", "nekoray.png", "d3dcompiler_47.dll", "opengl32sw.dll", "geoip.dat", "geosite.dat")) {
         if (Test-Path -LiteralPath (Join-Path $PackageDir $forbidden)) {
             Fail "Package contains forbidden legacy or optional file: $forbidden"
         }

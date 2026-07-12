@@ -8,11 +8,41 @@
 #include "main/GuiUtils.hpp"
 #include "main/NekoGui.hpp"
 
+#include <QCoreApplication>
+#include <QFile>
 #include <QStyleFactory>
 #include <QFileDialog>
 #include <QInputDialog>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <QMessageBox>
 #include <QTimer>
+
+namespace {
+    QString RouteFluentCoreSummary() {
+        const auto manifestPath = QCoreApplication::applicationDirPath() + "/routefluent-sing-box-manifest.json";
+        QFile file(manifestPath);
+        if (!file.open(QFile::ReadOnly | QFile::Text)) {
+            return QObject::tr("RouteFluent sing-box manifest not found.");
+        }
+
+        QJsonParseError error{};
+        const auto doc = QJsonDocument::fromJson(file.readAll(), &error);
+        if (error.error != QJsonParseError::NoError || !doc.isObject()) {
+            return QObject::tr("RouteFluent sing-box manifest is invalid.");
+        }
+
+        const auto obj = doc.object();
+        QStringList features;
+        for (const auto &value: obj["features"].toArray()) {
+            features << value.toString();
+        }
+        return QStringLiteral("%1\nPatch: %2\nFeatures: %3")
+            .arg(obj["version_name"].toString(),
+                 obj["patch_id"].toString(),
+                 features.join(", "));
+    }
+} // namespace
 
 class ExtraCoreWidget : public QWidget {
 public:
@@ -155,6 +185,7 @@ DialogBasicSettings::DialogBasicSettings(QWidget *parent)
     // Core
 
     ui->groupBox_core->setTitle(software_core_name);
+    ui->core_features->setText(RouteFluentCoreSummary());
     //
     CACHE.extraCore = QString2QJsonObject(NekoGui::dataStore->extraCore->core_map);
     if (!CACHE.extraCore.contains("naive")) CACHE.extraCore.insert("naive", "");

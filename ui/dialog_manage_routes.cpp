@@ -2,7 +2,6 @@
 #include "ui_dialog_manage_routes.h"
 
 #include "3rdparty/qv2ray/v2/ui/widgets/editors/w_JsonEditor.hpp"
-#include "3rdparty/qv2ray/v3/components/GeositeReader/GeositeReader.hpp"
 #include "main/GuiUtils.hpp"
 #include "fmt/Preset.hpp"
 
@@ -63,15 +62,12 @@ DialogManageRoutes::DialogManageRoutes(QWidget *parent) : QDialog(parent), ui(ne
     builtInSchemesMenu->addActions(this->getBuiltInSchemes());
     ui->preset->setMenu(builtInSchemesMenu);
 
-    QString geoipFn = NekoGui::FindCoreAsset("geoip.dat");
-    QString geositeFn = NekoGui::FindCoreAsset("geosite.dat");
-    //
-    const auto sourceStringsDomain = Qv2ray::components::GeositeReader::ReadGeoSiteFromFile(geositeFn);
+    const QStringList sourceStringsDomain;
     directDomainTxt = new AutoCompleteTextEdit("geosite", sourceStringsDomain, this);
     proxyDomainTxt = new AutoCompleteTextEdit("geosite", sourceStringsDomain, this);
     blockDomainTxt = new AutoCompleteTextEdit("geosite", sourceStringsDomain, this);
     //
-    const auto sourceStringsIP = Qv2ray::components::GeositeReader::ReadGeoSiteFromFile(geoipFn);
+    const QStringList sourceStringsIP;
     directIPTxt = new AutoCompleteTextEdit("geoip", sourceStringsIP, this);
     proxyIPTxt = new AutoCompleteTextEdit("geoip", sourceStringsIP, this);
     blockIPTxt = new AutoCompleteTextEdit("geoip", sourceStringsIP, this);

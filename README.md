@@ -100,13 +100,9 @@ XMR
 
 Core:
 
-- [v2fly/v2ray-core](https://github.com/v2fly/v2ray-core) ( < 3.10 )
-- [MatsuriDayo/Matsuri](https://github.com/MatsuriDayo/Matsuri) ( < 3.10 )
-- [MatsuriDayo/v2ray-core](https://github.com/MatsuriDayo/v2ray-core) ( < 3.10 )
-- [XTLS/Xray-core](https://github.com/XTLS/Xray-core) ( 3.10 <= Version <= 3.26 )
-- [MatsuriDayo/Xray-core](https://github.com/MatsuriDayo/Xray-core) ( 3.10 <= Version <= 3.26 )
+- [RouteFluent patched sing-box](https://github.com/DavidYordan/routefluent-sing-box)
 - [SagerNet/sing-box](https://github.com/SagerNet/sing-box)
-- [Matsuridayo/sing-box-extra](https://github.com/MatsuriDayo/sing-box-extra)
+- [anytls/sing-anytls](https://github.com/anytls/sing-anytls)
 
 Gui:
 

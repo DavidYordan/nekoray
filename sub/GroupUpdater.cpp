@@ -6,6 +6,8 @@
 #include "GroupUpdater.hpp"
 
 #include <QInputDialog>
+#include <QSet>
+#include <QUrl>
 #include <QUrlQuery>
 
 #ifndef NKR_NO_YAML
@@ -233,13 +235,63 @@ namespace NekoGui_sub {
         return {};
     }
 
+    bool IsValidClashDohUpstream(const QString &raw) {
+        const auto url = QUrl(raw.trimmed());
+        if (!url.isValid() || url.scheme().toLower() != "https") return false;
+        if (url.host().isEmpty()) return false;
+        if (url.path().isEmpty() || url.path() == "/") return false;
+        if (!url.userName().isEmpty() || !url.password().isEmpty()) return false;
+        if (url.hasQuery() || url.hasFragment()) return false;
+        return true;
+    }
+
+    QStringList FilterClashDohUpstreams(const QStringList &rawList) {
+        QStringList out;
+        QSet<QString> seen;
+        for (const auto &raw: rawList) {
+            const auto value = raw.trimmed();
+            if (value.isEmpty() || seen.contains(value) || !IsValidClashDohUpstream(value)) continue;
+            seen.insert(value);
+            out << value;
+        }
+        return out;
+    }
+
+    QStringList ExtractClashProxyServerDohUpstreams(const YAML::Node &root) {
+        auto dns = root["dns"];
+        if (!dns.IsMap()) return {};
+
+        auto upstreams = FilterClashDohUpstreams(Node2QStringList(NodeChild(dns, {
+            "proxy-server-nameserver",
+            "proxy_server_nameserver",
+        })));
+
+        if (upstreams.isEmpty()) {
+            upstreams = FilterClashDohUpstreams(Node2QStringList(NodeChild(dns, {
+                "nameserver",
+            })));
+        }
+        return upstreams;
+    }
+
+    bool IsVisibleAsciiAnyTLSClientValue(const QString &value) {
+        if (value.isEmpty() || value.size() > 128) return false;
+        for (auto ch: value) {
+            const auto code = ch.unicode();
+            if (code < 0x21 || code > 0x7e) return false;
+        }
+        return true;
+    }
+
 #endif
 
     // https://github.com/Dreamacro/clash/wiki/configuration
     void RawUpdater::updateClash(const QString &str) {
 #ifndef NKR_NO_YAML
         try {
-            auto proxies = YAML::Load(str.toStdString())["proxies"];
+            auto root = YAML::Load(str.toStdString());
+            const auto clashDohUpstreams = ExtractClashProxyServerDohUpstreams(root);
+            auto proxies = root["proxies"];
             for (auto proxy: proxies) {
                 auto type = Node2QString(proxy["type"]).toLower();
                 auto type_clash = type;
@@ -256,10 +308,17 @@ namespace NekoGui_sub {
                 ent->bean->serverAddress = Node2QString(proxy["server"]);
                 ent->bean->serverPort = Node2Int(proxy["port"]);
                 auto serverResolver = NodeChild(proxy, {"server-resolver", "server_resolver"});
+                bool hasExplicitServerResolver = false;
                 if (serverResolver.IsMap()) {
+                    hasExplicitServerResolver = true;
                     ent->bean->serverResolverDohUpstreams = Node2QStringList(NodeChild(serverResolver, {"doh-upstreams", "doh_upstreams"})).join("\n");
                     auto fallback = NodeChild(serverResolver, {"allow-local-fallback", "allow_local_fallback"});
                     ent->bean->serverResolverAllowLocalFallback = fallback.IsDefined() ? Node2Bool(fallback, true) : true;
+                }
+                if (!hasExplicitServerResolver && !clashDohUpstreams.isEmpty() &&
+                    !ent->bean->serverAddress.isEmpty() && !IsIpAddress(ent->bean->serverAddress)) {
+                    ent->bean->serverResolverDohUpstreams = clashDohUpstreams.join("\n");
+                    ent->bean->serverResolverAllowLocalFallback = true;
                 }
 
                 if (type_clash == "ss") {
@@ -501,9 +560,22 @@ namespace NekoGui_sub {
                                                : Node2Int(proxy["min_idle_session"]);
                     bean->anytlsClientMode = FIRST_OR_SECOND(Node2QString(proxy["anytls-client-mode"]),
                                                              Node2QString(proxy["anytls_client_mode"])).trimmed().toLower();
-                    if (bean->anytlsClientMode.isEmpty()) bean->anytlsClientMode = "native";
                     bean->anytlsClientValue = FIRST_OR_SECOND(Node2QString(proxy["anytls-client-value"]),
                                                               Node2QString(proxy["anytls_client_value"])).trimmed();
+                    const auto clashAnyTLSClient = Node2QString(proxy["client"]).trimmed();
+                    if (bean->anytlsClientMode.isEmpty() && !clashAnyTLSClient.isEmpty()) {
+                        if (clashAnyTLSClient == "mihomo/1.19.28") {
+                            bean->anytlsClientMode = "mihomo";
+                        } else if (IsVisibleAsciiAnyTLSClientValue(clashAnyTLSClient)) {
+                            bean->anytlsClientMode = "custom";
+                            bean->anytlsClientValue = clashAnyTLSClient;
+                        }
+                    }
+                    if (bean->anytlsClientMode.isEmpty()) bean->anytlsClientMode = "native";
+                    if (bean->anytlsClientMode == "custom" && bean->anytlsClientValue.isEmpty() &&
+                        IsVisibleAsciiAnyTLSClientValue(clashAnyTLSClient)) {
+                        bean->anytlsClientValue = clashAnyTLSClient;
+                    }
                     if (bean->anytlsClientMode != "custom") bean->anytlsClientValue = "";
 
                     auto reality = NodeChild(proxy, {"reality-opts", "reality"});
