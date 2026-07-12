@@ -243,6 +243,14 @@ namespace NekoGui_fmt {
             }
             return items;
         };
+        auto isVisibleAscii = [](const QString &value) {
+            if (value.isEmpty() || value.size() > 128) return false;
+            for (auto ch: value) {
+                auto code = ch.unicode();
+                if (code < 0x21 || code > 0x7e) return false;
+            }
+            return true;
+        };
 
         QJsonObject tls{
             {"enabled", true},
@@ -285,6 +293,24 @@ namespace NekoGui_fmt {
         if (!idleCheck.isEmpty()) outbound["idle_session_check_interval"] = idleCheck;
         if (!idleTimeout.isEmpty()) outbound["idle_session_timeout"] = idleTimeout;
         if (minIdleSession > 0) outbound["min_idle_session"] = minIdleSession;
+
+        auto clientMode = anytlsClientMode.trimmed().toLower();
+        if (clientMode.isEmpty()) clientMode = "native";
+        if (clientMode == "native") {
+            // Omit sing-box AnyTLS client field.
+        } else if (clientMode == "mihomo") {
+            outbound["client"] = "mihomo/1.19.28";
+        } else if (clientMode == "custom") {
+            auto clientValue = anytlsClientValue.trimmed();
+            if (!isVisibleAscii(clientValue)) {
+                result.error = "invalid AnyTLS custom client value";
+                return result;
+            }
+            outbound["client"] = clientValue;
+        } else {
+            result.error = "invalid AnyTLS client mode";
+            return result;
+        }
 
         result.outbound = outbound;
         return result;

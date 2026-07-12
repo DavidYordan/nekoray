@@ -11,6 +11,9 @@ namespace NekoGui_fmt {
         QString idleSessionTimeout = "";
         int minIdleSession = 0;
 
+        QString anytlsClientMode = "native";
+        QString anytlsClientValue = "";
+
         bool allowInsecure = false;
         bool disableSni = false;
         QString sni = "";
@@ -25,6 +28,8 @@ namespace NekoGui_fmt {
             _add(new configItem("idle_chk", &idleSessionCheckInterval, itemType::string));
             _add(new configItem("idle_timeout", &idleSessionTimeout, itemType::string));
             _add(new configItem("min_idle", &minIdleSession, itemType::integer));
+            _add(new configItem("anytls_client_mode", &anytlsClientMode, itemType::string));
+            _add(new configItem("anytls_client_value", &anytlsClientValue, itemType::string));
             _add(new configItem("insecure", &allowInsecure, itemType::boolean));
             _add(new configItem("disable_sni", &disableSni, itemType::boolean));
             _add(new configItem("sni", &sni, itemType::string));

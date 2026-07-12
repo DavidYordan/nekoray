@@ -8,7 +8,8 @@ import (
 	"github.com/matsuridayo/libneko/neko_common"
 	"github.com/matsuridayo/libneko/neko_log"
 	box "github.com/sagernet/sing-box"
-	"github.com/sagernet/sing-box/boxapi"
+
+	"nekobox_core/internal/boxapi"
 )
 
 var instance *box.Box

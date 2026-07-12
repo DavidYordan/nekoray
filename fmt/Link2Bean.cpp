@@ -328,6 +328,12 @@ namespace NekoGui_fmt {
                                        GetQueryValue(query, "min-idle-session"));
         if (!minIdle.isEmpty()) minIdleSession = minIdle.toInt();
 
+        anytlsClientMode = FIRST_OR_SECOND(GetQueryValue(query, "anytls_client_mode"),
+                                           GetQueryValue(query, "anytls-client-mode")).trimmed().toLower();
+        if (anytlsClientMode.isEmpty()) anytlsClientMode = "native";
+        anytlsClientValue = FIRST_OR_SECOND(GetQueryValue(query, "anytls_client_value"),
+                                            GetQueryValue(query, "anytls-client-value")).trimmed();
+
         sni = FIRST_OR_SECOND(GetQueryValue(query, "sni"),
                               FIRST_OR_SECOND(GetQueryValue(query, "servername"),
                                               GetQueryValue(query, "server_name")));

@@ -17,6 +17,15 @@ $Root = $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($Root)) {
     $Root = (Get-Location).Path
 }
+$RouteFluentSingBoxVersion = "1.13.12-routefluent-anytls-client.7"
+$RouteFluentSingBoxPatchId = "routefluent-anytls-client-dns-resolver-group-check-v1"
+$RouteFluentSingBoxFeatures = @(
+    "anytls_outbound_client_field",
+    "routefluent_dns_resolver_group",
+    "routefluent_dns_check_start_validation"
+)
+$GoBuildTags = "with_clash_api,with_gvisor,with_quic,with_wireguard,with_utls"
+$RouteFluentCoreTags = $GoBuildTags -replace ",", " "
 
 function Write-Step([string] $Message) {
     Write-Host ""
@@ -37,6 +46,19 @@ function Invoke-Checked {
     & $FilePath @Arguments
     if ($LASTEXITCODE -ne 0) {
         Fail "$Label failed with exit code $LASTEXITCODE"
+    }
+}
+
+function Invoke-ExpectedFailure {
+    param(
+        [string] $FilePath,
+        [string[]] $Arguments,
+        [string] $Label = $FilePath
+    )
+
+    & $FilePath @Arguments
+    if ($LASTEXITCODE -eq 0) {
+        Fail "$Label unexpectedly succeeded"
     }
 }
 
@@ -176,6 +198,36 @@ function Require-PackageFile([string] $RelativePath) {
     }
 }
 
+function Find-Python {
+    foreach ($name in @("python.exe", "python3.exe")) {
+        $candidate = Find-CommandPath $name
+        if (![string]::IsNullOrWhiteSpace($candidate)) {
+            return $candidate
+        }
+    }
+    Fail "python.exe was not found. RouteFluent patched sing-box source preparation requires Python 3.9+."
+}
+
+function Assert-RouteFluentManifest([string] $ManifestPath) {
+    $manifest = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
+    if ($manifest.version_name -ne $RouteFluentSingBoxVersion) {
+        Fail "Unexpected RouteFluent sing-box version: $($manifest.version_name)"
+    }
+    if ($manifest.patch_id -ne $RouteFluentSingBoxPatchId) {
+        Fail "Unexpected RouteFluent sing-box patch id: $($manifest.patch_id)"
+    }
+    foreach ($feature in $RouteFluentSingBoxFeatures) {
+        if ($manifest.features -notcontains $feature) {
+            Fail "RouteFluent sing-box manifest is missing feature: $feature"
+        }
+    }
+    foreach ($tag in $RouteFluentCoreTags.Split(" ", [System.StringSplitOptions]::RemoveEmptyEntries)) {
+        if ($manifest.tags -notcontains $tag) {
+            Fail "RouteFluent sing-box manifest is missing build tag: $tag"
+        }
+    }
+}
+
 Push-Location $Root
 try {
     Write-Step "Resolve local toolchain"
@@ -199,6 +251,11 @@ try {
     if ([string]::IsNullOrWhiteSpace($Go)) {
         Fail "go.exe was not found."
     }
+    $Python = Find-Python
+    $Git = Find-CommandPath "git.exe"
+    if ([string]::IsNullOrWhiteSpace($Git)) {
+        Fail "git.exe was not found. RouteFluent patched sing-box source preparation requires Git."
+    }
 
     $Ninja = Find-CommandPath "ninja.exe"
     if (![string]::IsNullOrWhiteSpace($Ninja)) {
@@ -215,6 +272,9 @@ try {
     $DeployRoot = Join-Path $Root "deployment"
     $PackageDir = Join-Path $DeployRoot "windows64"
     $PublicResDir = Join-Path $DeployRoot "public_res"
+    $RouteFluentCoreBuildDir = Join-Path $Root "build-routefluent-sing-box"
+    $RouteFluentCoreExe = Join-Path $RouteFluentCoreBuildDir "sing-box-windows-amd64.exe"
+    $RouteFluentCoreManifest = Join-Path $RouteFluentCoreBuildDir "sing-box-windows-amd64.routefluent-anytls-client.json"
     $ZipStageRoot = Join-Path $DeployRoot "zip-stage"
     $ZipStagePackage = Join-Path $ZipStageRoot "nekoray"
     $ZipPath = Join-Path $DeployRoot "$VersionStandalone-windows64.zip"
@@ -226,6 +286,7 @@ try {
     Write-Host "Generator:  $Generator"
     Write-Host "Build dir:  $BuildDirFull"
     Write-Host "Package:    $PackageDir"
+    Write-Host "RF core:    $RouteFluentSingBoxVersion"
 
     $oldPath = $env:PATH
     $oldGoos = $env:GOOS
@@ -246,6 +307,20 @@ try {
     Remove-SafeDirectory $PackageDir $DeployRoot
     Remove-SafeDirectory $ZipStageRoot $DeployRoot
     New-Item -ItemType Directory -Force -Path $PackageDir | Out-Null
+
+    Write-Step "Prepare RouteFluent patched sing-box"
+    Invoke-Checked $Git @("submodule", "update", "--init", "--recursive", "third_party/routefluent-sing-box") "RouteFluent sing-box submodule init"
+    $RouteFluentSingBoxScript = Require-File (Join-Path $Root "third_party\routefluent-sing-box\build_routefluent_sing_box.py") "RouteFluent sing-box build script"
+    Invoke-Checked $Python @(
+        $RouteFluentSingBoxScript,
+        "--goos", "windows",
+        "--goarch", "amd64",
+        "--tags", $RouteFluentCoreTags,
+        "--output", $RouteFluentCoreExe,
+        "--manifest", $RouteFluentCoreManifest
+    ) "RouteFluent sing-box source preparation"
+    Require-Directory (Join-Path $Root "third_party\routefluent-sing-box\work\src\sing-box-1.13.12") "RouteFluent patched sing-box source" | Out-Null
+    Assert-RouteFluentManifest $RouteFluentCoreManifest
 
     if (!$SkipGuiBuild) {
         Write-Step "Configure and build GUI"
@@ -322,9 +397,8 @@ try {
         Write-Step "Build nekobox_core.exe"
         Push-Location (Join-Path $Root "go\cmd\nekobox_core")
         try {
-            $ldflags = "-w -s -X github.com/matsuridayo/libneko/neko_common.Version_neko=$VersionStandalone"
-            $tags = "with_clash_api,with_gvisor,with_quic,with_wireguard,with_utls"
-            Invoke-Checked $Go @("build", "-v", "-o", (Join-Path $PackageDir "nekobox_core.exe"), "-trimpath", "-ldflags", $ldflags, "-tags", $tags) "go build nekobox_core"
+            $ldflags = "-w -s -X github.com/matsuridayo/libneko/neko_common.Version_neko=$VersionStandalone -X github.com/sagernet/sing-box/constant.Version=$RouteFluentSingBoxVersion"
+            Invoke-Checked $Go @("build", "-v", "-o", (Join-Path $PackageDir "nekobox_core.exe"), "-trimpath", "-ldflags", $ldflags, "-tags", $GoBuildTags) "go build nekobox_core"
         } finally {
             Pop-Location
         }
@@ -333,12 +407,14 @@ try {
         Require-File (Join-Path $PackageDir "updater.exe") "updater.exe" | Out-Null
         Require-File (Join-Path $PackageDir "nekobox_core.exe") "nekobox_core.exe" | Out-Null
     }
+    Copy-Item -LiteralPath $RouteFluentCoreManifest -Destination (Join-Path $PackageDir "routefluent-sing-box-manifest.json") -Force
 
     Write-Step "Validate package contents"
     foreach ($required in @(
         "nekobox.exe",
         "nekobox_core.exe",
         "updater.exe",
+        "routefluent-sing-box-manifest.json",
         "nekobox.png",
         "qtbase_zh_CN.qm",
         "geoip.dat",
@@ -372,7 +448,16 @@ try {
     }
 
     Write-Step "Smoke-check nekobox_core"
-    Invoke-Checked (Join-Path $PackageDir "nekobox_core.exe") @("version") "nekobox_core version"
+    $CoreExe = Join-Path $PackageDir "nekobox_core.exe"
+    $versionOutput = & $CoreExe version
+    if ($LASTEXITCODE -ne 0) {
+        Fail "nekobox_core version failed with exit code $LASTEXITCODE"
+    }
+    $versionOutputText = ($versionOutput | Out-String).Trim()
+    Write-Host $versionOutputText
+    if ($versionOutputText -notmatch [Regex]::Escape($RouteFluentSingBoxVersion)) {
+        Fail "nekobox_core version does not contain RouteFluent patched sing-box version: $RouteFluentSingBoxVersion"
+    }
     $checkConfig = Join-Path ([System.IO.Path]::GetTempPath()) "nekoray-anytls-package-check.json"
     @'
 {
@@ -397,6 +482,7 @@ try {
       "server": "example.com",
       "server_port": 443,
       "password": "secret",
+      "client": "mihomo/1.19.28",
       "tls": {
         "enabled": true,
         "server_name": "example.com",
@@ -414,13 +500,28 @@ try {
     ],
     "default_domain_resolver": { "server": "dns-direct" },
     "final": "anytls-out"
-  }
+    }
 }
 '@ | Set-Content -LiteralPath $checkConfig -Encoding ASCII
     try {
-        Invoke-Checked (Join-Path $PackageDir "nekobox_core.exe") @("check", "-c", $checkConfig) "nekobox_core check"
+        Invoke-Checked $CoreExe @("check", "-c", $checkConfig) "nekobox_core check"
     } finally {
         Remove-Item -LiteralPath $checkConfig -Force -ErrorAction SilentlyContinue
+    }
+    $RouteFluentTestData = Join-Path $Root "third_party\routefluent-sing-box\testdata"
+    foreach ($validFixture in @(
+        "anytls-client-check.json",
+        "routefluent-dns-resolver-group-check.json",
+        "routefluent-dns-doh-bootstrap-check.json"
+    )) {
+        Invoke-Checked $CoreExe @("check", "-c", (Join-Path $RouteFluentTestData $validFixture)) "RouteFluent valid fixture $validFixture"
+    }
+    foreach ($invalidFixture in @(
+        "routefluent-dns-invalid-primary-local.json",
+        "routefluent-dns-invalid-fallback-https.json",
+        "routefluent-dns-invalid-fallback-missing-probes.json"
+    )) {
+        Invoke-ExpectedFailure $CoreExe @("check", "-c", (Join-Path $RouteFluentTestData $invalidFixture)) "RouteFluent invalid fixture $invalidFixture"
     }
 
     Write-Step "Create formal zip with nekoray root folder"

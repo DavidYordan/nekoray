@@ -61,6 +61,43 @@
            <item row="3" column="1">
             <widget class="QLineEdit" name="port"/>
            </item>
+           <item row="4" column="0">
+            <widget class="QLabel" name="serverResolverMode_l">
+             <property name="text">
+              <string>Server Resolver</string>
+             </property>
+            </widget>
+           </item>
+           <item row="4" column="1">
+            <widget class="QComboBox" name="serverResolverMode"/>
+           </item>
+           <item row="5" column="0">
+            <widget class="QLabel" name="serverResolverDohUpstreams_l">
+             <property name="text">
+              <string>DoH Upstreams</string>
+             </property>
+            </widget>
+           </item>
+           <item row="5" column="1">
+            <widget class="QPlainTextEdit" name="serverResolverDohUpstreams">
+             <property name="maximumSize">
+              <size>
+               <width>16777215</width>
+               <height>64</height>
+              </size>
+             </property>
+             <property name="placeholderText">
+              <string notr="true">https://1.1.1.1/dns-query</string>
+             </property>
+            </widget>
+           </item>
+           <item row="6" column="1">
+            <widget class="QCheckBox" name="serverResolverAllowLocalFallback">
+             <property name="text">
+              <string>Allow Local Fallback</string>
+             </property>
+            </widget>
+           </item>
            <item row="0" column="0">
             <widget class="QLabel" name="type_l">
              <property name="text">
@@ -647,6 +684,9 @@ security (QUIC)</string>
   <tabstop>name</tabstop>
   <tabstop>address</tabstop>
   <tabstop>port</tabstop>
+  <tabstop>serverResolverMode</tabstop>
+  <tabstop>serverResolverDohUpstreams</tabstop>
+  <tabstop>serverResolverAllowLocalFallback</tabstop>
   <tabstop>custom_outbound_edit</tabstop>
   <tabstop>custom_config_edit</tabstop>
   <tabstop>apply_to_group</tabstop>

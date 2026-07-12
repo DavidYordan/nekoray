@@ -6,9 +6,24 @@
 
 #include <QInputDialog>
 
+namespace {
+    bool isVisibleAsciiClientValue(const QString &value) {
+        if (value.isEmpty() || value.size() > 128) return false;
+        for (auto ch: value) {
+            auto code = ch.unicode();
+            if (code < 0x21 || code > 0x7e) return false;
+        }
+        return true;
+    }
+} // namespace
+
 EditAnyTLS::EditAnyTLS(QWidget *parent) : QWidget(parent), ui(new Ui::EditAnyTLS) {
     ui->setupUi(this);
     ui->utlsFingerprint->addItems(Preset::SingBox::UtlsFingerPrint);
+    ui->anytlsClientMode->addItems({"native", "mihomo", "custom"});
+    connect(ui->anytlsClientMode, &QComboBox::currentTextChanged, this, [this](const QString &) {
+        ui->anytlsClientValue->setEnabled(ui->anytlsClientMode->currentText() == "custom");
+    });
 }
 
 EditAnyTLS::~EditAnyTLS() {
@@ -23,6 +38,9 @@ void EditAnyTLS::onStart(std::shared_ptr<NekoGui::ProxyEntity> _ent) {
     P_LOAD_STRING(idleSessionCheckInterval);
     P_LOAD_STRING(idleSessionTimeout);
     P_LOAD_INT(minIdleSession);
+    P_LOAD_COMBO_STRING(anytlsClientMode);
+    P_LOAD_STRING(anytlsClientValue);
+    ui->anytlsClientValue->setEnabled(ui->anytlsClientMode->currentText() == "custom");
 
     P_LOAD_STRING(sni);
     P_LOAD_STRING(alpn);
@@ -41,6 +59,18 @@ bool EditAnyTLS::onEnd() {
     P_SAVE_STRING(idleSessionCheckInterval);
     P_SAVE_STRING(idleSessionTimeout);
     P_SAVE_INT(minIdleSession);
+    bean->anytlsClientMode = ui->anytlsClientMode->currentText().trimmed().toLower();
+    if (bean->anytlsClientMode.isEmpty()) bean->anytlsClientMode = "native";
+    auto clientValue = ui->anytlsClientValue->text().trimmed();
+    if (bean->anytlsClientMode == "custom") {
+        if (!isVisibleAsciiClientValue(clientValue)) {
+            MessageBoxWarning(tr("AnyTLS client"), tr("Custom client value must be 1..128 visible ASCII characters without spaces."));
+            return false;
+        }
+        bean->anytlsClientValue = clientValue;
+    } else {
+        bean->anytlsClientValue = "";
+    }
 
     P_SAVE_STRING(sni);
     P_SAVE_STRING(alpn);

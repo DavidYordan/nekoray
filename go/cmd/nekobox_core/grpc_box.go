@@ -11,11 +11,12 @@ import (
 	"github.com/matsuridayo/libneko/neko_common"
 	"github.com/matsuridayo/libneko/speedtest"
 	box "github.com/sagernet/sing-box"
-	"github.com/sagernet/sing-box/boxapi"
 
 	"log"
 
 	"github.com/sagernet/sing-box/option"
+
+	"nekobox_core/internal/boxapi"
 )
 
 type server struct {

@@ -35,6 +35,9 @@ namespace NekoGui_fmt {
         QString custom_config = "";
         QString custom_outbound = "";
 
+        QString serverResolverDohUpstreams = "";
+        bool serverResolverAllowLocalFallback = true;
+
         explicit AbstractBean(int version);
 
         //

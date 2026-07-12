@@ -235,6 +235,8 @@ namespace NekoGui_fmt {
         if (!idleSessionCheckInterval.isEmpty()) q.addQueryItem("idle_session_check_interval", idleSessionCheckInterval);
         if (!idleSessionTimeout.isEmpty()) q.addQueryItem("idle_session_timeout", idleSessionTimeout);
         if (minIdleSession > 0) q.addQueryItem("min_idle_session", Int2String(minIdleSession));
+        if (!anytlsClientMode.isEmpty() && anytlsClientMode != "native") q.addQueryItem("anytls_client_mode", anytlsClientMode);
+        if (anytlsClientMode == "custom" && !anytlsClientValue.isEmpty()) q.addQueryItem("anytls_client_value", anytlsClientValue);
         if (!sni.isEmpty()) q.addQueryItem("sni", sni);
         if (!alpn.isEmpty()) q.addQueryItem("alpn", alpn);
         if (!utlsFingerprint.isEmpty()) q.addQueryItem("fp", utlsFingerprint);

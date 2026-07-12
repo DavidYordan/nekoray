@@ -160,10 +160,14 @@ func checkSingBoxWithOptions(ctx context.Context, options option.Options) error 
 		Context: ctx,
 		Options: options,
 	})
-	if err == nil {
-		_ = instance.Close()
+	if err != nil {
+		return err
 	}
-	return err
+	err = instance.PreStart()
+	if err != nil {
+		return err
+	}
+	return instance.Close()
 }
 
 func CreateSingBox(config []byte, platformWriter sblog.PlatformWriter) (*box.Box, context.CancelFunc, error) {

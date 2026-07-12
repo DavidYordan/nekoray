@@ -1,3 +1,6 @@
 [submodule "3rdparty/QHotkey"]
 	path = 3rdparty/QHotkey
 	url = https://github.com/Skycoder42/QHotkey.git
+[submodule "third_party/routefluent-sing-box"]
+	path = third_party/routefluent-sing-box
+	url = https://github.com/DavidYordan/routefluent-sing-box.git

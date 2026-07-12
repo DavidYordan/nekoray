@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>500</width>
-    <height>300</height>
+    <height>340</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -70,6 +70,34 @@
      </item>
      <item row="1" column="1">
       <widget class="MyLineEdit" name="minIdleSession"/>
+     </item>
+    </layout>
+   </item>
+   <item>
+    <layout class="QGridLayout" name="clientIdentity">
+     <item row="0" column="0">
+      <widget class="QLabel" name="anytlsClientMode_l">
+       <property name="text">
+        <string>Client Identity</string>
+       </property>
+      </widget>
+     </item>
+     <item row="0" column="1">
+      <widget class="QComboBox" name="anytlsClientMode"/>
+     </item>
+     <item row="0" column="2">
+      <widget class="QLabel" name="anytlsClientValue_l">
+       <property name="text">
+        <string>Custom Client</string>
+       </property>
+      </widget>
+     </item>
+     <item row="0" column="3">
+      <widget class="MyLineEdit" name="anytlsClientValue">
+       <property name="placeholderText">
+        <string notr="true">provider/2.0.0</string>
+       </property>
+      </widget>
      </item>
     </layout>
    </item>
@@ -162,6 +190,8 @@
   <tabstop>idleSessionCheckInterval</tabstop>
   <tabstop>idleSessionTimeout</tabstop>
   <tabstop>minIdleSession</tabstop>
+  <tabstop>anytlsClientMode</tabstop>
+  <tabstop>anytlsClientValue</tabstop>
   <tabstop>sni</tabstop>
   <tabstop>disableSni</tabstop>
   <tabstop>alpn</tabstop>

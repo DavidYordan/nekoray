@@ -255,6 +255,12 @@ namespace NekoGui_sub {
                 ent->bean->name = Node2QString(proxy["name"]);
                 ent->bean->serverAddress = Node2QString(proxy["server"]);
                 ent->bean->serverPort = Node2Int(proxy["port"]);
+                auto serverResolver = NodeChild(proxy, {"server-resolver", "server_resolver"});
+                if (serverResolver.IsMap()) {
+                    ent->bean->serverResolverDohUpstreams = Node2QStringList(NodeChild(serverResolver, {"doh-upstreams", "doh_upstreams"})).join("\n");
+                    auto fallback = NodeChild(serverResolver, {"allow-local-fallback", "allow_local_fallback"});
+                    ent->bean->serverResolverAllowLocalFallback = fallback.IsDefined() ? Node2Bool(fallback, true) : true;
+                }
 
                 if (type_clash == "ss") {
                     auto bean = ent->ShadowSocksBean();
@@ -493,6 +499,12 @@ namespace NekoGui_sub {
                     bean->minIdleSession = proxy["min-idle-session"].IsDefined()
                                                ? Node2Int(proxy["min-idle-session"])
                                                : Node2Int(proxy["min_idle_session"]);
+                    bean->anytlsClientMode = FIRST_OR_SECOND(Node2QString(proxy["anytls-client-mode"]),
+                                                             Node2QString(proxy["anytls_client_mode"])).trimmed().toLower();
+                    if (bean->anytlsClientMode.isEmpty()) bean->anytlsClientMode = "native";
+                    bean->anytlsClientValue = FIRST_OR_SECOND(Node2QString(proxy["anytls-client-value"]),
+                                                              Node2QString(proxy["anytls_client_value"])).trimmed();
+                    if (bean->anytlsClientMode != "custom") bean->anytlsClientValue = "";
 
                     auto reality = NodeChild(proxy, {"reality-opts", "reality"});
                     if (reality.IsMap()) {

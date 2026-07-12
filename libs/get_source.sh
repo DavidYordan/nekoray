@@ -8,13 +8,7 @@ pushd ..
 
 ####
 
-if [ ! -d "sing-box" ]; then
-  git clone --no-checkout https://github.com/MatsuriDayo/sing-box.git
-fi
-pushd sing-box
-git checkout "$COMMIT_SING_BOX"
-
-popd
+git -C nekoray submodule update --init --recursive third_party/routefluent-sing-box
 
 ####
 

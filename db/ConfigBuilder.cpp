@@ -4,8 +4,11 @@
 #include "fmt/Preset.hpp"
 
 #include <QApplication>
+#include <QCryptographicHash>
 #include <QFile>
 #include <QFileInfo>
+#include <QMap>
+#include <QSet>
 #include <QUrl>
 
 #define BOX_UNDERLYING_DNS dataStore->core_box_underlying_dns.isEmpty() ? "local" : dataStore->core_box_underlying_dns
@@ -73,6 +76,159 @@ namespace NekoGui {
         const auto value = strategy.trimmed();
         if (value.compare("AsIs", Qt::CaseInsensitive) == 0) return {};
         return value;
+    }
+
+    QJsonObject BuildDomainResolverObject(const QString &server, const QString &strategy = "ipv4_only") {
+        QJsonObject resolver{{"server", server}};
+        const auto normalizedStrategy = NormalizeDnsStrategy(strategy);
+        if (!normalizedStrategy.isEmpty()) resolver["strategy"] = normalizedStrategy;
+        return resolver;
+    }
+
+    QString StableRouteFluentTag(const QString &prefix, const QString &key) {
+        const auto digest = QCryptographicHash::hash(key.toUtf8(), QCryptographicHash::Sha1).toHex().left(12);
+        return prefix + "-" + digest;
+    }
+
+    QStringList ParseResolverDohUpstreams(const QString &raw) {
+        auto normalized = raw;
+        normalized.replace(",", "\n");
+        QStringList out;
+        QSet<QString> seen;
+        for (const auto &line: SplitLinesSkipSharp(normalized)) {
+            const auto value = line.trimmed();
+            if (value.isEmpty() || seen.contains(value)) continue;
+            seen.insert(value);
+            out << value;
+        }
+        return out;
+    }
+
+    bool IsValidDohUpstream(const QString &raw, QString *error = nullptr) {
+        const auto url = QUrl(raw.trimmed());
+        const auto label = raw.trimmed();
+        auto setError = [&](const QString &message) {
+            if (error != nullptr) *error = QStringLiteral("%1: %2").arg(label, message);
+            return false;
+        };
+        if (!url.isValid() || url.scheme().toLower() != "https") return setError("DoH URL must use https scheme");
+        if (url.host().isEmpty()) return setError("DoH URL must have host");
+        if (url.path().isEmpty() || url.path() == "/") return setError("DoH URL must have non-root path");
+        if (!url.userName().isEmpty() || !url.password().isEmpty()) return setError("DoH URL must not include credentials");
+        if (url.hasQuery()) return setError("DoH URL must not include query");
+        if (url.hasFragment()) return setError("DoH URL must not include fragment");
+        return true;
+    }
+
+    QJsonObject BuildRouteFluentDohServer(const QString &tag, const QString &rawUrl) {
+        const auto url = QUrl(rawUrl.trimmed());
+        const auto host = url.host();
+        QJsonObject server{
+            {"tag", tag},
+            {"type", "https"},
+            {"server", host},
+            {"server_port", url.port(443)},
+            {"path", url.path()},
+        };
+        if (!IsIpAddress(host)) {
+            server["domain_resolver"] = BuildDomainResolverObject("local-system");
+            server["tls"] = QJsonObject{
+                {"enabled", true},
+                {"server_name", host},
+            };
+        }
+        return server;
+    }
+
+    QJsonObject BuildRouteFluentResolverGroup(const QString &tag, const QStringList &primaryTags, bool allowLocalFallback) {
+        QJsonObject group{
+            {"tag", tag},
+            {"type", "routefluent_resolver_group"},
+        };
+        if (primaryTags.isEmpty()) {
+            group["mode"] = "local_only";
+            group["fallback"] = "local-system";
+            group["fallback_enabled"] = true;
+            group["fallback_ttl_cap"] = "60s";
+            return group;
+        }
+        group["primary"] = QList2QJsonArray(primaryTags);
+        if (allowLocalFallback) {
+            group["fallback"] = "local-system";
+            group["fallback_enabled"] = true;
+            group["probe_domains"] = QJsonArray{"www.gstatic.com", "cloudflare.com"};
+            group["failure_threshold"] = 2;
+            group["recovery_success_threshold"] = 2;
+            group["probe_interval"] = "30s";
+            group["unhealthy_cooldown"] = "20s";
+            group["fallback_ttl_cap"] = "60s";
+        }
+        return group;
+    }
+
+    bool DnsServersContainTag(const QJsonArray &servers, const QString &tag) {
+        for (const auto &value: servers) {
+            if (value.isObject() && value.toObject()["tag"].toString() == tag) return true;
+        }
+        return false;
+    }
+
+    void AppendDnsServerIfMissing(QJsonArray &servers, const QJsonObject &server) {
+        const auto tag = server["tag"].toString();
+        if (!tag.isEmpty() && DnsServersContainTag(servers, tag)) return;
+        servers += server;
+    }
+
+    void ApplyRouteFluentResolverBindings(const std::shared_ptr<BuildConfigStatus> &status, QJsonArray &dnsServers) {
+        if (status->resolverBindingRequests.isEmpty()) return;
+
+        AppendDnsServerIfMissing(dnsServers, QJsonObject{
+                                                 {"tag", "local-system"},
+                                                 {"type", "local"},
+                                             });
+
+        QMap<QString, QString> dohTagByUrl;
+        QSet<QString> resolverGroupKeys;
+        bool localOnlyGroupAdded = false;
+
+        for (const auto &request: status->resolverBindingRequests) {
+            QString resolverTag;
+            if (request.dohUpstreams.isEmpty()) {
+                resolverTag = "rf-resolver-no-doh-local";
+                if (!localOnlyGroupAdded) {
+                    AppendDnsServerIfMissing(dnsServers, BuildRouteFluentResolverGroup(resolverTag, {}, true));
+                    localOnlyGroupAdded = true;
+                }
+            } else {
+                QStringList primaryTags;
+                for (const auto &upstream: request.dohUpstreams) {
+                    QString error;
+                    if (!IsValidDohUpstream(upstream, &error)) {
+                        status->result->error = QStringLiteral("invalid server resolver DoH upstream for %1: %2")
+                                                    .arg(request.outboundTag, error);
+                        return;
+                    }
+                    auto normalizedUrl = QUrl(upstream.trimmed()).toString(QUrl::FullyEncoded);
+                    if (!dohTagByUrl.contains(normalizedUrl)) {
+                        const auto dohTag = StableRouteFluentTag("rf-doh", normalizedUrl);
+                        dohTagByUrl[normalizedUrl] = dohTag;
+                        AppendDnsServerIfMissing(dnsServers, BuildRouteFluentDohServer(dohTag, normalizedUrl));
+                    }
+                    primaryTags << dohTagByUrl[normalizedUrl];
+                }
+                const auto groupKey = primaryTags.join("|") + "|fallback=" + (request.allowLocalFallback ? "1" : "0");
+                resolverTag = StableRouteFluentTag("rf-resolver", groupKey);
+                if (!resolverGroupKeys.contains(groupKey)) {
+                    AppendDnsServerIfMissing(dnsServers, BuildRouteFluentResolverGroup(resolverTag, primaryTags, request.allowLocalFallback));
+                    resolverGroupKeys.insert(groupKey);
+                }
+            }
+
+            if (request.outboundIndex < 0 || request.outboundIndex >= status->outbounds.size()) continue;
+            auto outbound = status->outbounds[request.outboundIndex].toObject();
+            outbound["domain_resolver"] = BuildDomainResolverObject(resolverTag);
+            status->outbounds.replace(request.outboundIndex, outbound);
+        }
     }
 
     void ApplyDnsServerDialOptions(QJsonObject &server, const QString &detour, const QString &domainResolver) {
@@ -468,17 +624,15 @@ namespace NekoGui {
             // apply custom outbound settings
             MergeJson(outbound, QString2QJsonObject(ent->bean->custom_outbound));
 
-            // Bypass Lookup for the first profile
-            auto serverAddress = ent->bean->serverAddress;
-
-            auto customBean = dynamic_cast<NekoGui_fmt::CustomBean *>(ent->bean.get());
-            if (customBean != nullptr && customBean->core == "internal") {
-                auto server = QString2QJsonObject(customBean->config_simple)["server"].toString();
-                if (!server.isEmpty()) serverAddress = server;
-            }
-
-            if (!IsIpAddress(serverAddress)) {
-                status->domainListDNSDirect += "full:" + serverAddress;
+            const auto outboundServer = outbound["server"].toString().trimmed();
+            if (!outboundServer.isEmpty() && !IsIpAddress(outboundServer)) {
+                status->resolverBindingRequests += ResolverBindingRequest{
+                    static_cast<int>(status->outbounds.size()),
+                    tagOut,
+                    outboundServer,
+                    ParseResolverDohUpstreams(ent->bean->serverResolverDohUpstreams),
+                    ent->bean->serverResolverAllowLocalFallback,
+                };
             }
 
             status->outbounds += outbound;
@@ -561,7 +715,6 @@ namespace NekoGui {
         if (!status->forTest) QJSONARRAY_ADD(status->inbounds, QString2QJsonObject(dataStore->custom_inbound)["inbounds"].toArray())
 
         status->result->coreConfig.insert("inbounds", status->inbounds);
-        status->result->coreConfig.insert("outbounds", status->outbounds);
 
         // user rule
         if (!status->forTest) {
@@ -692,8 +845,13 @@ namespace NekoGui {
 
         if (dataStore->routing->use_dns_object) {
             dns = QString2QJsonObject(dataStore->routing->dns_object);
+            dnsServers = dns["servers"].toArray();
         }
+        ApplyRouteFluentResolverBindings(status, dnsServers);
+        if (!status->result->error.isEmpty()) return;
+        dns["servers"] = dnsServers;
         status->result->coreConfig.insert("dns", dns);
+        status->result->coreConfig.insert("outbounds", status->outbounds);
 
         // Routing
 

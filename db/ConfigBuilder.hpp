@@ -4,6 +4,14 @@
 #include "sys/ExternalProcess.hpp"
 
 namespace NekoGui {
+    struct ResolverBindingRequest {
+        int outboundIndex = -1;
+        QString outboundTag;
+        QString server;
+        QStringList dohUpstreams;
+        bool allowLocalFallback = true;
+    };
+
     class BuildConfigResult {
     public:
         QString error;
@@ -42,6 +50,7 @@ namespace NekoGui {
         QJsonArray routingRules;
         QJsonArray inbounds;
         QJsonArray outbounds;
+        QList<ResolverBindingRequest> resolverBindingRequests;
     };
 
     std::shared_ptr<BuildConfigResult> BuildConfig(const std::shared_ptr<ProxyEntity> &ent, bool forTest, bool forExport);

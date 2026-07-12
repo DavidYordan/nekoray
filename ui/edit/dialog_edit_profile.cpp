@@ -18,6 +18,40 @@
 #include "main/GuiUtils.hpp"
 
 #include <QInputDialog>
+#include <QSet>
+#include <QUrl>
+
+namespace {
+    QStringList parseResolverDohUpstreamsForUi(const QString &raw) {
+        auto normalized = raw;
+        normalized.replace(",", "\n");
+        QStringList out;
+        QSet<QString> seen;
+        for (const auto &line: SplitLinesSkipSharp(normalized)) {
+            const auto value = line.trimmed();
+            if (value.isEmpty() || seen.contains(value)) continue;
+            seen.insert(value);
+            out << value;
+        }
+        return out;
+    }
+
+    bool isValidDohUpstreamForUi(const QString &raw, QString *error = nullptr) {
+        const auto value = raw.trimmed();
+        const auto url = QUrl(value);
+        auto fail = [&](const QString &message) {
+            if (error != nullptr) *error = QStringLiteral("%1: %2").arg(value, message);
+            return false;
+        };
+        if (!url.isValid() || url.scheme().toLower() != "https") return fail("must use https");
+        if (url.host().isEmpty()) return fail("must have host");
+        if (url.path().isEmpty() || url.path() == "/") return fail("must have non-root path");
+        if (!url.userName().isEmpty() || !url.password().isEmpty()) return fail("must not include credentials");
+        if (url.hasQuery()) return fail("must not include query");
+        if (url.hasFragment()) return fail("must not include fragment");
+        return true;
+    }
+} // namespace
 
 #define ADJUST_SIZE runOnUiThread([=] { adjustSize(); adjustPosition(mainwindow); }, this);
 #define LOAD_TYPE(a) ui->type->addItem(NekoGui::ProfileManager::NewProxyEntity(a)->bean->DisplayType(), a);
@@ -27,6 +61,13 @@ DialogEditProfile::DialogEditProfile(const QString &_type, int profileOrGroupId,
     // setup UI
     ui->setupUi(this);
     ui->dialog_layout->setAlignment(ui->left, Qt::AlignTop);
+    ui->serverResolverMode->addItems({"local", "doh"});
+    connect(ui->serverResolverMode, &QComboBox::currentTextChanged, this, [=](const QString &txt) {
+        const auto enableDoh = txt == "doh";
+        ui->serverResolverDohUpstreams->setEnabled(enableDoh);
+        ui->serverResolverDohUpstreams_l->setEnabled(enableDoh);
+        ui->serverResolverAllowLocalFallback->setEnabled(enableDoh);
+    });
 
     // network changed
     network_title_base = ui->network_box->title();
@@ -208,6 +249,11 @@ void DialogEditProfile::typeSelected(const QString &newType) {
     ui->address_l->setVisible(showAddressPort);
     ui->port->setVisible(showAddressPort);
     ui->port_l->setVisible(showAddressPort);
+    ui->serverResolverMode->setVisible(showAddressPort);
+    ui->serverResolverMode_l->setVisible(showAddressPort);
+    ui->serverResolverDohUpstreams->setVisible(showAddressPort);
+    ui->serverResolverDohUpstreams_l->setVisible(showAddressPort);
+    ui->serverResolverAllowLocalFallback->setVisible(showAddressPort);
 
     // 右边 stream
     auto stream = GetStreamSettings(ent->bean.get());
@@ -276,6 +322,13 @@ void DialogEditProfile::typeSelected(const QString &newType) {
     ui->address->setText(ent->bean->serverAddress);
     ui->port->setText(Int2String(ent->bean->serverPort));
     ui->port->setValidator(QRegExpValidator_Number);
+    ui->serverResolverMode->setCurrentText(ent->bean->serverResolverDohUpstreams.trimmed().isEmpty() ? "local" : "doh");
+    ui->serverResolverDohUpstreams->setPlainText(ent->bean->serverResolverDohUpstreams);
+    ui->serverResolverAllowLocalFallback->setChecked(ent->bean->serverResolverAllowLocalFallback);
+    const auto enableResolverDoh = ui->serverResolverMode->currentText() == "doh";
+    ui->serverResolverDohUpstreams->setEnabled(enableResolverDoh);
+    ui->serverResolverDohUpstreams_l->setEnabled(enableResolverDoh);
+    ui->serverResolverAllowLocalFallback->setEnabled(enableResolverDoh);
 
     // 星号
     ADD_ASTERISK(this)
@@ -344,6 +397,23 @@ bool DialogEditProfile::onEnd() {
     ent->bean->name = ui->name->text();
     ent->bean->serverAddress = ui->address->text().remove(' ');
     ent->bean->serverPort = ui->port->text().toInt();
+    ent->bean->serverResolverDohUpstreams = "";
+    ent->bean->serverResolverAllowLocalFallback = ui->serverResolverAllowLocalFallback->isChecked();
+    if (ui->serverResolverMode->currentText() == "doh" && !IsIpAddress(ent->bean->serverAddress)) {
+        auto upstreams = parseResolverDohUpstreamsForUi(ui->serverResolverDohUpstreams->toPlainText());
+        if (upstreams.isEmpty()) {
+            MessageBoxWarning(tr("Server resolver"), tr("Provider DoH mode requires at least one HTTPS DoH upstream."));
+            return false;
+        }
+        for (const auto &upstream: upstreams) {
+            QString error;
+            if (!isValidDohUpstreamForUi(upstream, &error)) {
+                MessageBoxWarning(tr("Server resolver"), tr("Invalid DoH upstream: %1").arg(error));
+                return false;
+            }
+        }
+        ent->bean->serverResolverDohUpstreams = upstreams.join("\n");
+    }
 
     // 右边 stream
     auto stream = GetStreamSettings(ent->bean.get());
@@ -454,6 +524,9 @@ void DialogEditProfile::on_apply_to_group_clicked() {
         apply_to_group_ui[ui->utlsFingerprint] = new FloatCheckBox(ui->utlsFingerprint, this);
         apply_to_group_ui[ui->insecure] = new FloatCheckBox(ui->insecure, this);
         apply_to_group_ui[ui->certificate_edit] = new FloatCheckBox(ui->certificate_edit, this);
+        apply_to_group_ui[ui->serverResolverMode] = new FloatCheckBox(ui->serverResolverMode, this);
+        apply_to_group_ui[ui->serverResolverDohUpstreams] = new FloatCheckBox(ui->serverResolverDohUpstreams, this);
+        apply_to_group_ui[ui->serverResolverAllowLocalFallback] = new FloatCheckBox(ui->serverResolverAllowLocalFallback, this);
         apply_to_group_ui[ui->custom_config_edit] = new FloatCheckBox(ui->custom_config_edit, this);
         apply_to_group_ui[ui->custom_outbound_edit] = new FloatCheckBox(ui->custom_outbound_edit, this);
         ui->apply_to_group->setText(tr("Confirm"));
@@ -521,6 +594,10 @@ void DialogEditProfile::do_apply_to_group(const std::shared_ptr<NekoGui::Group> 
         copyStream(&stream->allow_insecure);
     } else if (key == ui->certificate_edit) {
         copyStream(&stream->certificate);
+    } else if (key == ui->serverResolverMode || key == ui->serverResolverDohUpstreams) {
+        copyBean(&ent->bean->serverResolverDohUpstreams);
+    } else if (key == ui->serverResolverAllowLocalFallback) {
+        copyBean(&ent->bean->serverResolverAllowLocalFallback);
     } else if (key == ui->custom_config_edit) {
         copyBean(&ent->bean->custom_config);
     } else if (key == ui->custom_outbound_edit) {
