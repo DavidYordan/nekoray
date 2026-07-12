@@ -552,7 +552,6 @@ try {
     }
 
     Remove-SafeDirectory $ZipStageRoot $DeployRoot
-    Remove-SafeDirectory $RouteFluentWorkDir (Join-Path $Root "third_party\routefluent-sing-box")
 
     Write-Step "Done"
     Write-Host "Folder: $PackageDir"
