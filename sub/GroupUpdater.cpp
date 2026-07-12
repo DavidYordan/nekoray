@@ -138,6 +138,14 @@ namespace NekoGui_sub {
             if (!ok) return;
         }
 
+        // AnyTLS
+        if (str.startsWith("anytls://")) {
+            needFix = false;
+            ent = NekoGui::ProfileManager::NewProxyEntity("anytls");
+            auto ok = ent->AnyTLSBean()->TryParseLink(str);
+            if (!ok) return;
+        }
+
         if (ent == nullptr) return;
 
         // Fix
@@ -167,6 +175,8 @@ namespace NekoGui_sub {
                     list << item.as<std::string>().c_str();
                 }
                 return list;
+            } else if (n.IsScalar()) {
+                return {Node2QString(n)};
             } else {
                 return {};
             }
@@ -197,6 +207,21 @@ namespace NekoGui_sub {
             qDebug() << ex.what();
             return def;
         }
+    }
+
+    QString Node2DurationSeconds(const YAML::Node &n) {
+        if (!n.IsDefined()) return {};
+
+        auto duration = Node2QString(n).trimmed();
+        if (duration.isEmpty()) {
+            auto seconds = Node2Int(n);
+            if (seconds > 0) duration = Int2String(seconds);
+        }
+
+        bool ok = false;
+        duration.toLongLong(&ok);
+        if (ok && !duration.isEmpty()) duration += "s";
+        return duration;
     }
 
     // NodeChild returns the first defined children or Null Node
@@ -367,7 +392,7 @@ namespace NekoGui_sub {
                         bean->stream->path = Node2QString(ws["path"]);
                         bean->stream->ws_early_data_length = Node2Int(ws["max-early-data"]);
                         bean->stream->ws_early_data_name = Node2QString(ws["early-data-header-name"]);
-                        // for Xray
+                        // Legacy WebSocket early data compatibility.
                         if (Node2QString(ws["early-data-header-name"]) == "Sec-WebSocket-Protocol") {
                             bean->stream->path += "?ed=" + Node2QString(ws["max-early-data"]);
                         }
@@ -444,6 +469,37 @@ namespace NekoGui_sub {
                     if (!Node2QString(proxy["ip"]).isEmpty()) {
                         if (bean->sni.isEmpty()) bean->sni = bean->serverAddress;
                         bean->serverAddress = Node2QString(proxy["ip"]);
+                    }
+                } else if (type == "anytls") {
+                    auto bean = ent->AnyTLSBean();
+
+                    bean->password = Node2QString(proxy["password"]);
+                    bean->allowInsecure = Node2Bool(proxy["skip-cert-verify"]) || Node2Bool(proxy["insecure"]);
+                    bean->disableSni = Node2Bool(proxy["disable-sni"]) || Node2Bool(proxy["disable_sni"]);
+                    bean->certificate = FIRST_OR_SECOND(Node2QString(proxy["ca-str"]),
+                                                        Node2QString(proxy["certificate"]));
+                    bean->sni = FIRST_OR_SECOND(Node2QString(proxy["sni"]),
+                                                FIRST_OR_SECOND(Node2QString(proxy["servername"]),
+                                                                Node2QString(proxy["server_name"])));
+                    bean->alpn = Node2QStringList(proxy["alpn"]).join(",");
+                    bean->utlsFingerprint = FIRST_OR_SECOND(Node2QString(proxy["client-fingerprint"]),
+                                                            FIRST_OR_SECOND(Node2QString(proxy["fingerprint"]),
+                                                                            Node2QString(proxy["utls_fingerprint"])));
+
+                    bean->idleSessionCheckInterval = FIRST_OR_SECOND(Node2DurationSeconds(proxy["idle-session-check-interval"]),
+                                                                     Node2DurationSeconds(proxy["idle_session_check_interval"]));
+                    bean->idleSessionTimeout = FIRST_OR_SECOND(Node2DurationSeconds(proxy["idle-session-timeout"]),
+                                                               Node2DurationSeconds(proxy["idle_session_timeout"]));
+                    bean->minIdleSession = proxy["min-idle-session"].IsDefined()
+                                               ? Node2Int(proxy["min-idle-session"])
+                                               : Node2Int(proxy["min_idle_session"]);
+
+                    auto reality = NodeChild(proxy, {"reality-opts", "reality"});
+                    if (reality.IsMap()) {
+                        bean->realityPublicKey = FIRST_OR_SECOND(Node2QString(reality["public-key"]),
+                                                                 Node2QString(reality["public_key"]));
+                        bean->realityShortId = FIRST_OR_SECOND(Node2QString(reality["short-id"]),
+                                                               Node2QString(reality["short_id"]));
                     }
                 } else {
                     continue;

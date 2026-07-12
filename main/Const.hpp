@@ -16,10 +16,4 @@ namespace NekoGui {
         };
     }
 
-    namespace CoreType {
-        enum CoreType {
-            V2RAY, // DO NOT USE
-            SING_BOX,
-        };
-    }
 } // namespace NekoGui

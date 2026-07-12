@@ -222,4 +222,29 @@ namespace NekoGui_fmt {
         return url.toString(QUrl::FullyEncoded);
     }
 
+    QString AnyTLSBean::ToShareLink() {
+        QUrl url;
+        QUrlQuery q;
+
+        url.setScheme("anytls");
+        url.setUserName(password);
+        url.setHost(serverAddress);
+        url.setPort(serverPort);
+        if (!name.isEmpty()) url.setFragment(name);
+
+        if (!idleSessionCheckInterval.isEmpty()) q.addQueryItem("idle_session_check_interval", idleSessionCheckInterval);
+        if (!idleSessionTimeout.isEmpty()) q.addQueryItem("idle_session_timeout", idleSessionTimeout);
+        if (minIdleSession > 0) q.addQueryItem("min_idle_session", Int2String(minIdleSession));
+        if (!sni.isEmpty()) q.addQueryItem("sni", sni);
+        if (!alpn.isEmpty()) q.addQueryItem("alpn", alpn);
+        if (!utlsFingerprint.isEmpty()) q.addQueryItem("fp", utlsFingerprint);
+        if (!realityPublicKey.isEmpty()) q.addQueryItem("pbk", realityPublicKey);
+        if (!realityShortId.isEmpty()) q.addQueryItem("sid", realityShortId);
+        if (allowInsecure) q.addQueryItem("insecure", "1");
+        if (disableSni) q.addQueryItem("disable_sni", "1");
+        if (!q.isEmpty()) url.setQuery(q);
+
+        return url.toString(QUrl::FullyEncoded);
+    }
+
 } // namespace NekoGui_fmt

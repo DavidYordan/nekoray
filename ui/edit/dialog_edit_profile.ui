@@ -490,7 +490,7 @@ security (QUIC)</string>
               </sizepolicy>
              </property>
              <property name="toolTip">
-              <string>When enabled, V2Ray will not check the validity of the TLS certificate provided by the remote host (the security is equivalent to plaintext)</string>
+              <string>When enabled, sing-box will not check the validity of the TLS certificate provided by the remote host (the security is equivalent to plaintext)</string>
              </property>
              <property name="text">
               <string>Allow insecure</string>

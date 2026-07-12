@@ -73,8 +73,7 @@
           <item row="2" column="0">
            <widget class="QLabel" name="label_6">
             <property name="toolTip">
-             <string notr="true">For V2Ray, it sets routing.domainStrategy
-For sing-box, it sets inbound.domain_strategy</string>
+             <string notr="true">For sing-box, it sets inbound.domain_strategy</string>
             </property>
             <property name="text">
              <string>Domain Strategy</string>

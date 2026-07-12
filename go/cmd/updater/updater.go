@@ -75,7 +75,6 @@ func Updater() {
 	// nekoray -> nekobox
 	os.Remove("./nekoray.exe")
 	os.Remove("./nekoray.png")
-	os.Remove("./nekoray_core.exe")
 }
 
 func Exist(path string) bool {

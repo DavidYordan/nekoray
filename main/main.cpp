@@ -176,14 +176,7 @@ int main(int argc, char* argv[]) {
     }
 
     // Load dataStore
-    switch (NekoGui::coreType) {
-        case NekoGui::CoreType::SING_BOX:
-            NekoGui::dataStore->fn = "groups/nekobox.json";
-            break;
-        default:
-            MessageBoxWarning("Error", "Unknown coreType.");
-            return 0;
-    }
+    NekoGui::dataStore->fn = "groups/nekobox.json";
     auto isLoaded = NekoGui::dataStore->Load();
     if (!isLoaded) {
         NekoGui::dataStore->Save();

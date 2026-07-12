@@ -176,7 +176,7 @@ namespace NekoGui_fmt {
             // TODO quic & kcp
             return true;
         } else {
-            // https://github.com/XTLS/Xray-core/discussions/716
+            // Modern VMess AEAD / VLESS URI format.
             auto url = QUrl(link);
             if (!url.isValid()) return false;
             auto query = GetQuery(url);
@@ -292,6 +292,57 @@ namespace NekoGui_fmt {
         }
 
         return true;
+    }
+
+    bool AnyTLSBean::TryParseLink(const QString &link) {
+        auto url = QUrl(link);
+        if (!url.isValid()) return false;
+        auto query = GetQuery(url);
+        auto normalizeDuration = [](const QString &value) {
+            auto duration = value.trimmed();
+            bool ok = false;
+            duration.toLongLong(&ok);
+            if (ok && !duration.isEmpty()) duration += "s";
+            return duration;
+        };
+        auto queryBool = [&](const QString &key) {
+            auto value = GetQueryValue(query, key).trimmed().toLower();
+            return value == "1" || value == "true" || value == "yes";
+        };
+
+        name = url.fragment(QUrl::FullyDecoded);
+        serverAddress = url.host();
+        serverPort = url.port();
+        if (serverPort == -1) serverPort = 443;
+        if (url.password().isEmpty()) {
+            password = url.userName();
+        } else {
+            password = url.userName() + ":" + url.password();
+        }
+
+        idleSessionCheckInterval = normalizeDuration(FIRST_OR_SECOND(GetQueryValue(query, "idle_session_check_interval"),
+                                                                     GetQueryValue(query, "idle-session-check-interval")));
+        idleSessionTimeout = normalizeDuration(FIRST_OR_SECOND(GetQueryValue(query, "idle_session_timeout"),
+                                                               GetQueryValue(query, "idle-session-timeout")));
+        auto minIdle = FIRST_OR_SECOND(GetQueryValue(query, "min_idle_session"),
+                                       GetQueryValue(query, "min-idle-session"));
+        if (!minIdle.isEmpty()) minIdleSession = minIdle.toInt();
+
+        sni = FIRST_OR_SECOND(GetQueryValue(query, "sni"),
+                              FIRST_OR_SECOND(GetQueryValue(query, "servername"),
+                                              GetQueryValue(query, "server_name")));
+        alpn = GetQueryValue(query, "alpn");
+        utlsFingerprint = FIRST_OR_SECOND(GetQueryValue(query, "fp"),
+                                          FIRST_OR_SECOND(GetQueryValue(query, "fingerprint"),
+                                                          FIRST_OR_SECOND(GetQueryValue(query, "client-fingerprint"),
+                                                                          GetQueryValue(query, "utls_fingerprint"))));
+        realityPublicKey = FIRST_OR_SECOND(GetQueryValue(query, "pbk"), GetQueryValue(query, "public-key"));
+        realityShortId = FIRST_OR_SECOND(GetQueryValue(query, "sid"), GetQueryValue(query, "short-id"));
+        allowInsecure = queryBool("insecure") || queryBool("allowInsecure") ||
+                        queryBool("allow_insecure") || queryBool("skip-cert-verify");
+        disableSni = queryBool("disable_sni") || queryBool("disable-sni");
+
+        return !(password.isEmpty() || serverAddress.isEmpty());
     }
 
 } // namespace NekoGui_fmt

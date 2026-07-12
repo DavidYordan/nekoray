@@ -225,6 +225,71 @@ namespace NekoGui_fmt {
         return result;
     }
 
+    CoreObjOutboundBuildResult AnyTLSBean::BuildCoreObjSingBox() {
+        CoreObjOutboundBuildResult result;
+
+        auto normalizeDuration = [](const QString &value) {
+            auto duration = value.trimmed();
+            bool ok = false;
+            duration.toLongLong(&ok);
+            if (ok && !duration.isEmpty()) duration += "s";
+            return duration;
+        };
+        auto splitCommaTrimmed = [](const QString &value) {
+            QStringList items;
+            for (auto item: value.split(",")) {
+                item = item.trimmed();
+                if (!item.isEmpty()) items << item;
+            }
+            return items;
+        };
+
+        QJsonObject tls{
+            {"enabled", true},
+            {"disable_sni", disableSni},
+        };
+        if (allowInsecure || NekoGui::dataStore->skip_cert) tls["insecure"] = true;
+        auto serverName = sni.trimmed();
+        if (!serverName.isEmpty()) tls["server_name"] = serverName;
+        if (!certificate.trimmed().isEmpty()) tls["certificate"] = certificate.trimmed();
+        auto alpnList = splitCommaTrimmed(alpn);
+        if (!alpnList.isEmpty()) tls["alpn"] = QList2QJsonArray(alpnList);
+
+        QString fp = utlsFingerprint.trimmed();
+        auto realityPublicKeyTrimmed = realityPublicKey.trimmed();
+        if (!realityPublicKeyTrimmed.isEmpty()) {
+            auto realityShortIds = splitCommaTrimmed(realityShortId);
+            tls["reality"] = QJsonObject{
+                {"enabled", true},
+                {"public_key", realityPublicKeyTrimmed},
+                {"short_id", realityShortIds.value(0)},
+            };
+            if (fp.isEmpty()) fp = "random";
+        }
+        if (!fp.isEmpty()) {
+            tls["utls"] = QJsonObject{
+                {"enabled", true},
+                {"fingerprint", fp},
+            };
+        }
+
+        QJsonObject outbound{
+            {"type", "anytls"},
+            {"server", serverAddress},
+            {"server_port", serverPort},
+            {"password", password},
+            {"tls", tls},
+        };
+        auto idleCheck = normalizeDuration(idleSessionCheckInterval);
+        auto idleTimeout = normalizeDuration(idleSessionTimeout);
+        if (!idleCheck.isEmpty()) outbound["idle_session_check_interval"] = idleCheck;
+        if (!idleTimeout.isEmpty()) outbound["idle_session_timeout"] = idleTimeout;
+        if (minIdleSession > 0) outbound["min_idle_session"] = minIdleSession;
+
+        result.outbound = outbound;
+        return result;
+    }
+
     CoreObjOutboundBuildResult CustomBean::BuildCoreObjSingBox() {
         CoreObjOutboundBuildResult result;
 

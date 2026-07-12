@@ -1,0 +1,176 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>EditAnyTLS</class>
+ <widget class="QWidget" name="EditAnyTLS">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>500</width>
+    <height>300</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string notr="true">EditAnyTLS</string>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <layout class="QGridLayout" name="authentication">
+     <item row="0" column="0">
+      <widget class="QLabel" name="password_l">
+       <property name="toolTip">
+        <string notr="true">Required</string>
+       </property>
+       <property name="text">
+        <string>Password</string>
+       </property>
+      </widget>
+     </item>
+     <item row="0" column="1" colspan="3">
+      <widget class="MyLineEdit" name="password"/>
+     </item>
+    </layout>
+   </item>
+   <item>
+    <layout class="QGridLayout" name="session">
+     <item row="0" column="0">
+      <widget class="QLabel" name="idleSessionCheckInterval_l">
+       <property name="text">
+        <string>Idle Check Interval</string>
+       </property>
+      </widget>
+     </item>
+     <item row="0" column="1">
+      <widget class="MyLineEdit" name="idleSessionCheckInterval">
+       <property name="placeholderText">
+        <string notr="true">30s</string>
+       </property>
+      </widget>
+     </item>
+     <item row="0" column="2">
+      <widget class="QLabel" name="idleSessionTimeout_l">
+       <property name="text">
+        <string>Idle Timeout</string>
+       </property>
+      </widget>
+     </item>
+     <item row="0" column="3">
+      <widget class="MyLineEdit" name="idleSessionTimeout">
+       <property name="placeholderText">
+        <string notr="true">30s</string>
+       </property>
+      </widget>
+     </item>
+     <item row="1" column="0">
+      <widget class="QLabel" name="minIdleSession_l">
+       <property name="text">
+        <string>Min Idle Session</string>
+       </property>
+      </widget>
+     </item>
+     <item row="1" column="1">
+      <widget class="MyLineEdit" name="minIdleSession"/>
+     </item>
+    </layout>
+   </item>
+   <item>
+    <layout class="QGridLayout" name="TLS">
+     <item row="0" column="0">
+      <widget class="QLabel" name="sni_l">
+       <property name="text">
+        <string>SNI</string>
+       </property>
+      </widget>
+     </item>
+     <item row="0" column="1">
+      <widget class="MyLineEdit" name="sni"/>
+     </item>
+     <item row="0" column="2">
+      <widget class="QCheckBox" name="disableSni">
+       <property name="text">
+        <string>Disable SNI</string>
+       </property>
+      </widget>
+     </item>
+     <item row="1" column="0">
+      <widget class="QLabel" name="alpn_l">
+       <property name="text">
+        <string notr="true">ALPN</string>
+       </property>
+      </widget>
+     </item>
+     <item row="1" column="1">
+      <widget class="MyLineEdit" name="alpn"/>
+     </item>
+     <item row="1" column="2">
+      <widget class="QCheckBox" name="allowInsecure">
+       <property name="text">
+        <string>Allow Insecure</string>
+       </property>
+      </widget>
+     </item>
+     <item row="2" column="0">
+      <widget class="QLabel" name="utlsFingerprint_l">
+       <property name="text">
+        <string>Fingerprint</string>
+       </property>
+      </widget>
+     </item>
+     <item row="2" column="1">
+      <widget class="QComboBox" name="utlsFingerprint"/>
+     </item>
+     <item row="2" column="2">
+      <widget class="QPushButton" name="certificate">
+       <property name="text">
+        <string notr="true">PushButton</string>
+       </property>
+      </widget>
+     </item>
+     <item row="3" column="0">
+      <widget class="QLabel" name="realityPublicKey_l">
+       <property name="text">
+        <string>Reality Public Key</string>
+       </property>
+      </widget>
+     </item>
+     <item row="3" column="1" colspan="2">
+      <widget class="MyLineEdit" name="realityPublicKey"/>
+     </item>
+     <item row="4" column="0">
+      <widget class="QLabel" name="realityShortId_l">
+       <property name="text">
+        <string>Reality Short ID</string>
+       </property>
+      </widget>
+     </item>
+     <item row="4" column="1" colspan="2">
+      <widget class="MyLineEdit" name="realityShortId"/>
+     </item>
+    </layout>
+   </item>
+  </layout>
+ </widget>
+ <customwidgets>
+  <customwidget>
+   <class>MyLineEdit</class>
+   <extends>QLineEdit</extends>
+   <header>ui/widget/MyLineEdit.h</header>
+  </customwidget>
+ </customwidgets>
+ <tabstops>
+  <tabstop>password</tabstop>
+  <tabstop>idleSessionCheckInterval</tabstop>
+  <tabstop>idleSessionTimeout</tabstop>
+  <tabstop>minIdleSession</tabstop>
+  <tabstop>sni</tabstop>
+  <tabstop>disableSni</tabstop>
+  <tabstop>alpn</tabstop>
+  <tabstop>allowInsecure</tabstop>
+  <tabstop>utlsFingerprint</tabstop>
+  <tabstop>certificate</tabstop>
+  <tabstop>realityPublicKey</tabstop>
+  <tabstop>realityShortId</tabstop>
+ </tabstops>
+ <resources/>
+ <connections/>
+</ui>

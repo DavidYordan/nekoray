@@ -9,11 +9,9 @@ import (
 	"grpc_server/gen"
 
 	"github.com/matsuridayo/libneko/neko_common"
-	"github.com/matsuridayo/libneko/neko_log"
 	"github.com/matsuridayo/libneko/speedtest"
 	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/boxapi"
-	boxmain "github.com/sagernet/sing-box/cmd/sing-box"
 
 	"log"
 
@@ -44,17 +42,18 @@ func (s *server) Start(ctx context.Context, in *gen.LoadConfigReq) (out *gen.Err
 		return
 	}
 
-	instance, instance_cancel, err = boxmain.Create([]byte(in.CoreConfig))
+	instance, instance_cancel, err = CreateSingBox([]byte(in.CoreConfig), nekoPlatformWriter{})
 
 	if instance != nil {
-		// Logger
-		instance.SetLogWritter(neko_log.LogWriter)
-		// V2ray Service
+		instance_stats = nil
 		if in.StatsOutbounds != nil {
-			instance.Router().SetV2RayServer(boxapi.NewSbV2rayServer(option.V2RayStatsServiceOptions{
+			instance_stats = boxapi.NewSbStatsService(option.V2RayStatsServiceOptions{
 				Enabled:   true,
 				Outbounds: in.StatsOutbounds,
-			}))
+			})
+			if instance_stats != nil {
+				instance.Router().AppendTracker(instance_stats)
+			}
 		}
 	}
 
@@ -79,6 +78,7 @@ func (s *server) Stop(ctx context.Context, in *gen.EmptyReq) (out *gen.ErrorResp
 	instance.Close()
 
 	instance = nil
+	instance_stats = nil
 
 	return
 }
@@ -98,7 +98,7 @@ func (s *server) Test(ctx context.Context, in *gen.TestReq) (out *gen.TestResp, 
 		var cancel context.CancelFunc
 		if in.Config != nil {
 			// Test instance
-			i, cancel, err = boxmain.Create([]byte(in.Config.CoreConfig))
+			i, cancel, err = CreateSingBox([]byte(in.Config.CoreConfig), nekoPlatformWriter{})
 			if i != nil {
 				defer i.Close()
 				defer cancel()
@@ -114,11 +114,11 @@ func (s *server) Test(ctx context.Context, in *gen.TestReq) (out *gen.TestResp, 
 			}
 		}
 		// Latency
-		out.Ms, err = speedtest.UrlTest(boxapi.CreateProxyHttpClient(i), in.Url, in.Timeout, speedtest.UrlTestStandard_RTT)
+		out.Ms, err = speedtest.UrlTest(boxapi.CreateProxyHttpClient(i, nil), in.Url, in.Timeout, speedtest.UrlTestStandard_RTT)
 	} else if in.Mode == gen.TestMode_TcpPing {
 		out.Ms, err = speedtest.TcpPing(in.Address, in.Timeout)
 	} else if in.Mode == gen.TestMode_FullTest {
-		i, cancel, err := boxmain.Create([]byte(in.Config.CoreConfig))
+		i, cancel, err := CreateSingBox([]byte(in.Config.CoreConfig), nekoPlatformWriter{})
 		if i != nil {
 			defer i.Close()
 			defer cancel()
@@ -135,10 +135,8 @@ func (s *server) Test(ctx context.Context, in *gen.TestReq) (out *gen.TestResp, 
 func (s *server) QueryStats(ctx context.Context, in *gen.QueryStatsReq) (out *gen.QueryStatsResp, _ error) {
 	out = &gen.QueryStatsResp{}
 
-	if instance != nil {
-		if ss, ok := instance.Router().V2RayServer().(*boxapi.SbV2rayServer); ok {
-			out.Traffic = ss.QueryStats(fmt.Sprintf("outbound>>>%s>>>traffic>>>%s", in.Tag, in.Direct))
-		}
+	if instance_stats != nil {
+		out.Traffic, _ = instance_stats.GetStats(context.TODO(), fmt.Sprintf("outbound>>>%s>>>traffic>>>%s", in.Tag, in.Direct), true)
 	}
 
 	return
