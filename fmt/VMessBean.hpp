@@ -1,7 +1,7 @@
 #pragma once
 
 #include "fmt/AbstractBean.hpp"
-#include "fmt/V2RayStreamSettings.hpp"
+#include "fmt/SingBoxTransportSettings.hpp"
 
 namespace NekoGui_fmt {
     class VMessBean : public AbstractBean {
@@ -10,7 +10,7 @@ namespace NekoGui_fmt {
         int aid = 0;
         QString security = "auto";
 
-        std::shared_ptr<V2rayStreamSettings> stream = std::make_shared<V2rayStreamSettings>();
+        std::shared_ptr<SingBoxTransportSettings> stream = std::make_shared<SingBoxTransportSettings>();
 
         VMessBean() : AbstractBean(0) {
             _add(new configItem("id", &uuid, itemType::string));

@@ -272,6 +272,7 @@ try {
     $DeployRoot = Join-Path $Root "deployment"
     $PackageDir = Join-Path $DeployRoot "windows64"
     $PublicResDir = Join-Path $DeployRoot "public_res"
+    $RouteFluentWorkDir = Join-Path $Root "third_party\routefluent-sing-box\work"
     $RouteFluentCoreBuildDir = Join-Path $Root "build-routefluent-sing-box"
     $RouteFluentCoreExe = Join-Path $RouteFluentCoreBuildDir "sing-box-windows-amd64.exe"
     $RouteFluentCoreManifest = Join-Path $RouteFluentCoreBuildDir "sing-box-windows-amd64.routefluent-anytls-client.json"
@@ -319,7 +320,7 @@ try {
         "--output", $RouteFluentCoreExe,
         "--manifest", $RouteFluentCoreManifest
     ) "RouteFluent sing-box source preparation"
-    Require-Directory (Join-Path $Root "third_party\routefluent-sing-box\work\src\sing-box-1.13.12") "RouteFluent patched sing-box source" | Out-Null
+    Require-Directory (Join-Path $RouteFluentWorkDir "src\sing-box-1.13.12") "RouteFluent patched sing-box source" | Out-Null
     Assert-RouteFluentManifest $RouteFluentCoreManifest
 
     if (!$SkipGuiBuild) {
@@ -551,6 +552,7 @@ try {
     }
 
     Remove-SafeDirectory $ZipStageRoot $DeployRoot
+    Remove-SafeDirectory $RouteFluentWorkDir (Join-Path $Root "third_party\routefluent-sing-box")
 
     Write-Step "Done"
     Write-Host "Folder: $PackageDir"

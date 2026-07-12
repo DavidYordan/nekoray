@@ -208,14 +208,6 @@
         <translation>Интервал (в минутах, значение считается неправильным, если меньше 30)</translation>
     </message>
     <message>
-        <source>Share VMess Link with v2rayN Format</source>
-        <translation>Поделиться ссылкой VMess в формате v2rayN</translation>
-    </message>
-    <message>
-        <source>Old Share Link Format</source>
-        <translation>Поделиться ссылкой в старом формате</translation>
-    </message>
-    <message>
         <source>Mixed (SOCKS+HTTP) Listen Port</source>
         <translation type="unfinished"></translation>
     </message>
@@ -394,7 +386,7 @@
         <translation>Настройки TLS</translation>
     </message>
     <message>
-        <source>When enabled, V2Ray will not check the validity of the TLS certificate provided by the remote host (the security is equivalent to plaintext)</source>
+        <source>When enabled, sing-box will not check the validity of the TLS certificate provided by the remote host (the security is equivalent to plaintext)</source>
         <translation>Если вкл., то  клиент не будет проверять валидность TLS-сертификата, предоставленного сервером</translation>
     </message>
     <message>
@@ -1655,7 +1647,7 @@ Release note:
     </message>
 </context>
 <context>
-    <name>Qv2ray::ui::widgets::AutoCompleteTextEdit</name>
+    <name>NekoQtCompat::ui::widgets::AutoCompleteTextEdit</name>
     <message>
         <source>You can not input space characters here.</source>
         <translation>Сюда нельзя вводить пробелы.</translation>

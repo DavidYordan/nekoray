@@ -3,7 +3,7 @@ set(PLATFORM_LIBRARIES wininet wsock32 ws2_32 user32 rasapi32 iphlpapi)
 
 include(cmake/windows/generate_product_version.cmake)
 generate_product_version(
-        QV2RAY_RC
+        NEKOBOX_RC
         ICON "${CMAKE_SOURCE_DIR}/res/nekobox.ico"
         NAME "nekobox"
         BUNDLE "nekobox"

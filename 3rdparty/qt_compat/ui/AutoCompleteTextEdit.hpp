@@ -55,7 +55,7 @@ QT_BEGIN_NAMESPACE
 class QCompleter;
 QT_END_NAMESPACE
 
-namespace Qv2ray {
+namespace NekoQtCompat {
     namespace ui {
         namespace widgets {
             class AutoCompleteTextEdit : public QPlainTextEdit {
@@ -81,5 +81,5 @@ namespace Qv2ray {
             };
         } // namespace widgets
     }     // namespace ui
-} // namespace Qv2ray
-using namespace Qv2ray::ui::widgets;
+} // namespace NekoQtCompat
+using namespace NekoQtCompat::ui::widgets;

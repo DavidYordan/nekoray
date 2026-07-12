@@ -61,8 +61,8 @@ https://matsuridayo.github.io
 
 ## 订阅 / Subscription
 
-- Raw: some widely used formats (like Shadowsocks, Clash and v2rayN)
-- 原始格式: 一些广泛使用的格式 (如 Shadowsocks、Clash 和 v2rayN)
+- Raw: supported sing-box-compatible link formats and Clash subscriptions
+- 原始格式: 支持的 sing-box 兼容链接格式与 Clash 订阅
 
 ## 运行参数
 
@@ -106,7 +106,6 @@ Core:
 
 Gui:
 
-- [Qv2ray](https://github.com/Qv2ray/Qv2ray)
 - [Qt](https://www.qt.io/)
 - [protobuf](https://github.com/protocolbuffers/protobuf)
 - [yaml-cpp](https://github.com/jbeder/yaml-cpp)

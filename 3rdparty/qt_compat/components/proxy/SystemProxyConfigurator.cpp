@@ -1,4 +1,4 @@
-#include "QvProxyConfigurator.hpp"
+#include "SystemProxyConfigurator.hpp"
 
 #ifdef Q_OS_WIN
 //
@@ -17,7 +17,7 @@
 #include <QProcess>
 
 #include "3rdparty/fix_old_qt.h"
-#include "3rdparty/qv2ray/wrapper.hpp"
+#include "3rdparty/qt_compat/wrapper.hpp"
 #include "fmt/Preset.hpp"
 #include "main/NekoGui.hpp"
 
@@ -25,7 +25,7 @@
 
 #define QSTRN(num) QString::number(num)
 
-namespace Qv2ray::components::proxy {
+namespace NekoQtCompat::components::proxy {
 
     using ProcessArgument = QPair<QString, QStringList>;
 #ifdef Q_OS_MACOS
@@ -236,7 +236,7 @@ namespace Qv2ray::components::proxy {
             LOG("Nothing?");
             return;
         } else {
-            LOG("Qv2ray will set system proxy to use HTTP");
+            LOG("System proxy helper will set system proxy to use HTTP");
         }
 #else
         if (!hasHTTP && !hasSOCKS) {
@@ -245,11 +245,11 @@ namespace Qv2ray::components::proxy {
         }
 
         if (hasHTTP) {
-            LOG("Qv2ray will set system proxy to use HTTP");
+            LOG("System proxy helper will set system proxy to use HTTP");
         }
 
         if (hasSOCKS) {
-            LOG("Qv2ray will set system proxy to use SOCKS");
+            LOG("System proxy helper will set system proxy to use SOCKS");
         }
 #endif
 
@@ -437,4 +437,4 @@ namespace Qv2ray::components::proxy {
 
 #endif
     }
-} // namespace Qv2ray::components::proxy
+} // namespace NekoQtCompat::components::proxy

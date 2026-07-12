@@ -1,7 +1,7 @@
 #pragma once
 
 #include "fmt/AbstractBean.hpp"
-#include "fmt/V2RayStreamSettings.hpp"
+#include "fmt/SingBoxTransportSettings.hpp"
 
 namespace NekoGui_fmt {
     class ShadowSocksBean : public AbstractBean {
@@ -11,7 +11,7 @@ namespace NekoGui_fmt {
         QString plugin = "";
         int uot = 0;
 
-        std::shared_ptr<V2rayStreamSettings> stream = std::make_shared<V2rayStreamSettings>();
+        std::shared_ptr<SingBoxTransportSettings> stream = std::make_shared<SingBoxTransportSettings>();
 
         ShadowSocksBean() : AbstractBean(0) {
             _add(new configItem("method", &method, itemType::string));

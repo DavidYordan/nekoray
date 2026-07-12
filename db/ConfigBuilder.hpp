@@ -34,7 +34,7 @@ namespace NekoGui {
         // priv
         QList<int> globalProfiles;
 
-        // xxList is V2Ray format string list
+        // xxList uses the legacy route-rule string list format.
 
         QStringList domainListDNSRemote;
         QStringList domainListDNSDirect;

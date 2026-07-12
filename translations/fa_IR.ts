@@ -210,14 +210,6 @@
         <translation type="unfinished">فاصله (به دقیقا ، اگر کمتر از ۳۰ باشد نادرست است)</translation>
     </message>
     <message>
-        <source>Share VMess Link with v2rayN Format</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <source>Old Share Link Format</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
         <source>Mixed (SOCKS+HTTP) Listen Port</source>
         <translation type="unfinished"></translation>
     </message>
@@ -360,7 +352,7 @@
         <translation>تنظیمات شبکه (1%)</translation>
     </message>
     <message>
-        <source>When enabled, V2Ray will not check the validity of the TLS certificate provided by the remote host (the security is equivalent to plaintext)</source>
+        <source>When enabled, sing-box will not check the validity of the TLS certificate provided by the remote host (the security is equivalent to plaintext)</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
@@ -1642,7 +1634,7 @@ Direct: %2</source>
     </message>
 </context>
 <context>
-    <name>Qv2ray::ui::widgets::AutoCompleteTextEdit</name>
+    <name>NekoQtCompat::ui::widgets::AutoCompleteTextEdit</name>
     <message>
         <source>You can not input space characters here.</source>
         <translation>شما نمی توانید کاراکتر فضای خالی در اینجا استفاده کنید.</translation>

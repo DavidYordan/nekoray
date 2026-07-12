@@ -1,7 +1,7 @@
 #pragma once
 
 #include "fmt/AbstractBean.hpp"
-#include "fmt/V2RayStreamSettings.hpp"
+#include "fmt/SingBoxTransportSettings.hpp"
 
 namespace NekoGui_fmt {
     class TrojanVLESSBean : public AbstractBean {
@@ -13,7 +13,7 @@ namespace NekoGui_fmt {
         QString password = "";
         QString flow = "";
 
-        std::shared_ptr<V2rayStreamSettings> stream = std::make_shared<V2rayStreamSettings>();
+        std::shared_ptr<SingBoxTransportSettings> stream = std::make_shared<SingBoxTransportSettings>();
 
         explicit TrojanVLESSBean(int _proxy_type) : AbstractBean(0) {
             proxy_type = _proxy_type;

@@ -131,12 +131,12 @@ set(PROJECT_SOURCES
         3rdparty/qrcodegen.cpp
         3rdparty/QtExtKeySequenceEdit.cpp
 
-        3rdparty/qv2ray/v2/ui/QvAutoCompleteTextEdit.cpp
-        3rdparty/qv2ray/v2/components/proxy/QvProxyConfigurator.cpp
-        3rdparty/qv2ray/v2/ui/widgets/common/QJsonModel.cpp
-        3rdparty/qv2ray/v2/ui/widgets/editors/w_JsonEditor.cpp
-        3rdparty/qv2ray/v2/ui/widgets/editors/w_JsonEditor.hpp
-        3rdparty/qv2ray/v2/ui/widgets/editors/w_JsonEditor.ui
+        3rdparty/qt_compat/ui/AutoCompleteTextEdit.cpp
+        3rdparty/qt_compat/components/proxy/SystemProxyConfigurator.cpp
+        3rdparty/qt_compat/ui/widgets/common/QJsonModel.cpp
+        3rdparty/qt_compat/ui/widgets/editors/w_JsonEditor.cpp
+        3rdparty/qt_compat/ui/widgets/editors/w_JsonEditor.hpp
+        3rdparty/qt_compat/ui/widgets/editors/w_JsonEditor.ui
 
         rpc/gRPC.cpp
 
@@ -233,7 +233,7 @@ set(PROJECT_SOURCES
 
         res/neko.qrc
         res/theme/feiyangqingyun/qss.qrc
-        ${QV2RAY_RC}
+        ${NEKOBOX_RC}
 )
 
 # Qt exe

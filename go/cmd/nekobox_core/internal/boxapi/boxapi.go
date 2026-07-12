@@ -11,7 +11,6 @@ import (
 	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/dialer"
-	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/bufio"
 	E "github.com/sagernet/sing/common/exceptions"
 	"github.com/sagernet/sing/common/metadata"
@@ -29,7 +28,14 @@ type SbStatsService struct {
 
 var _ adapter.ConnectionTracker = (*SbStatsService)(nil)
 
-func NewSbStatsService(options option.V2RayStatsServiceOptions) *SbStatsService {
+type StatsServiceOptions struct {
+	Enabled   bool
+	Inbounds  []string
+	Outbounds []string
+	Users     []string
+}
+
+func NewSbStatsService(options StatsServiceOptions) *SbStatsService {
 	if !options.Enabled {
 		return nil
 	}

@@ -67,11 +67,6 @@
        <string notr="true">obfs-local</string>
       </property>
      </item>
-     <item>
-      <property name="text">
-       <string notr="true">v2ray-plugin</string>
-      </property>
-     </item>
     </widget>
    </item>
    <item row="4" column="0">

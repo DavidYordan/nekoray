@@ -1,18 +1,18 @@
 #pragma once
 
-// Qv2ray wrapper
+// NekoQtCompat wrapper
 
 #include <QJsonDocument>
 #include <QDebug>
 
-#define LOG(...) Qv2ray::base::log_internal(__VA_ARGS__)
-#define DEBUG(...) Qv2ray::base::log_internal(__VA_ARGS__)
-namespace Qv2ray {
+#define LOG(...) NekoQtCompat::base::log_internal(__VA_ARGS__)
+#define DEBUG(...) NekoQtCompat::base::log_internal(__VA_ARGS__)
+namespace NekoQtCompat {
     namespace base {
         template<typename... T>
         inline void log_internal(T... v) {}
     } // namespace base
-} // namespace Qv2ray
+} // namespace NekoQtCompat
 
 #define JsonToString(a) QJsonObject2QString(a, false)
 #define JsonFromString(a) QString2QJsonObject(a)

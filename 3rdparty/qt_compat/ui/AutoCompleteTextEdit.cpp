@@ -48,7 +48,7 @@
 **
 ****************************************************************************/
 
-#include "QvAutoCompleteTextEdit.hpp"
+#include "AutoCompleteTextEdit.hpp"
 
 #include <QAbstractItemModel>
 #include <QAbstractItemView>
@@ -61,7 +61,7 @@
 #include <QToolTip>
 #include <QtDebug>
 
-namespace Qv2ray::ui::widgets {
+namespace NekoQtCompat::ui::widgets {
     AutoCompleteTextEdit::AutoCompleteTextEdit(const QString &prefix, const QStringList &sourceStrings, QWidget *parent) : QPlainTextEdit(parent) {
         this->prefix = prefix;
         this->setLineWrapMode(QPlainTextEdit::NoWrap);
@@ -154,4 +154,4 @@ namespace Qv2ray::ui::widgets {
         cr.setWidth(c->popup()->sizeHintForColumn(0) + c->popup()->verticalScrollBar()->sizeHint().width());
         c->complete(cr); // popup it up!
     }
-} // namespace Qv2ray::ui::widgets
+} // namespace NekoQtCompat::ui::widgets

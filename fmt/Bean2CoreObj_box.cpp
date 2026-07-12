@@ -2,8 +2,8 @@
 #include "fmt/includes.h"
 
 namespace NekoGui_fmt {
-    void V2rayStreamSettings::BuildStreamSettingsSingBox(QJsonObject *outbound) {
-        // https://sing-box.sagernet.org/configuration/shared/v2ray-transport
+    void SingBoxTransportSettings::BuildStreamSettingsSingBox(QJsonObject *outbound) {
+        // sing-box transport settings shared by VMess/VLESS/Trojan style outbounds.
 
         if (network != "tcp") {
             QJsonObject transport{{"type", network}};

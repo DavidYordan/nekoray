@@ -79,7 +79,7 @@ jobs:
         if: matrix.platform == 'windows-2022'
         uses: ilammy/msvc-dev-cmd@v1
         with:
-          # 14.1 is for vs2017, 14.2 is vs2019, following the upstream vcpkg build from Qv2ray-deps repo
+          # 14.1 is for vs2017, 14.2 is vs2019, following the upstream vcpkg build setup.
           toolset: 14.2
           arch: ${{ matrix.arch }}
       # ========================================================================================================= Qt Install

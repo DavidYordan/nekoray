@@ -444,7 +444,7 @@ namespace NekoGui {
         int index = 0;
 
         for (const auto &ent: ents) {
-            // tagOut: v2ray outbound tag for a profile
+            // tagOut: sing-box outbound tag for a profile
             // profile2 (in) (global)   tag g-(id)
             // profile1                 tag (chainTag)-(id)
             // profile0 (out)           tag (chainTag)-(id) / single: chainTag=g-(id)
@@ -742,7 +742,7 @@ namespace NekoGui {
                         ip_cidr += item;
                     }
                 } else {
-                    // https://www.v2fly.org/config/dns.html#dnsobject
+                    // Legacy routing syntax mapped to sing-box route fields.
                     if (item.startsWith("geosite:")) {
                         geosite += item.replace("geosite:", "");
                     } else if (item.startsWith("full:")) {
@@ -767,7 +767,7 @@ namespace NekoGui {
                     return rule;
                 }
                 rule["domain"] = domain_full;
-                rule["domain_suffix"] = domain_subdomain; // v2ray Subdomain => sing-box suffix
+                rule["domain_suffix"] = domain_subdomain;
                 rule["domain_keyword"] = domain_keyword;
                 rule["domain_regex"] = domain_regexp;
                 rule["geosite"] = geosite;

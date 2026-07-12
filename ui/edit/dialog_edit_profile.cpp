@@ -14,7 +14,7 @@
 #include "fmt/includes.h"
 #include "fmt/Preset.hpp"
 
-#include "3rdparty/qv2ray/v2/ui/widgets/editors/w_JsonEditor.hpp"
+#include "3rdparty/qt_compat/ui/widgets/editors/w_JsonEditor.hpp"
 #include "main/GuiUtils.hpp"
 
 #include <QInputDialog>

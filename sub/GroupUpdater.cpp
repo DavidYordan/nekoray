@@ -30,7 +30,7 @@ namespace NekoGui_sub {
         } else if (stream->security == "1" || stream->security == "true") {
             stream->security = "tls";
         }
-        // 2. TLS SNI: v2rayN config builder generate sni like this, so set sni here for their format.
+        // 2. TLS SNI: some legacy link builders encode SNI through host, so normalize it here.
         if (stream->security == "tls" && IsIpAddress(ent->bean->serverAddress) && (!stream->host.isEmpty()) && stream->sni.isEmpty()) {
             stream->sni = stream->host;
         }
@@ -341,18 +341,6 @@ namespace NekoGui_sub {
                             ssPlugin << "obfs-local";
                             ssPlugin << "obfs=" + Node2QString(pluginOpts_n["mode"]);
                             ssPlugin << "obfs-host=" + Node2QString(pluginOpts_n["host"]);
-                        } else if (plugin == "v2ray-plugin") {
-                            auto mode = Node2QString(pluginOpts_n["mode"]);
-                            auto host = Node2QString(pluginOpts_n["host"]);
-                            auto path = Node2QString(pluginOpts_n["path"]);
-                            ssPlugin << "v2ray-plugin";
-                            if (!mode.isEmpty() && mode != "websocket") ssPlugin << "mode=" + mode;
-                            if (Node2Bool(pluginOpts_n["tls"])) ssPlugin << "tls";
-                            if (!host.isEmpty()) ssPlugin << "host=" + host;
-                            if (!path.isEmpty()) ssPlugin << "path=" + path;
-                            // clash only: skip-cert-verify
-                            // clash only: headers
-                            // clash: mux=?
                         }
                         bean->plugin = ssPlugin.join(";");
                     }

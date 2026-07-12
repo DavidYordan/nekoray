@@ -1,7 +1,7 @@
 #pragma once
 
 #include "fmt/AbstractBean.hpp"
-#include "fmt/V2RayStreamSettings.hpp"
+#include "fmt/SingBoxTransportSettings.hpp"
 
 namespace NekoGui_fmt {
     class SocksHttpBean : public AbstractBean {
@@ -14,7 +14,7 @@ namespace NekoGui_fmt {
         QString username = "";
         QString password = "";
 
-        std::shared_ptr<V2rayStreamSettings> stream = std::make_shared<V2rayStreamSettings>();
+        std::shared_ptr<SingBoxTransportSettings> stream = std::make_shared<SingBoxTransportSettings>();
 
         explicit SocksHttpBean(int _socks_http_type) : AbstractBean(0) {
             this->socks_http_type = _socks_http_type;

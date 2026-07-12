@@ -1,7 +1,7 @@
 #include "dialog_basic_settings.h"
 #include "ui_dialog_basic_settings.h"
 
-#include "3rdparty/qv2ray/v2/ui/widgets/editors/w_JsonEditor.hpp"
+#include "3rdparty/qt_compat/ui/widgets/editors/w_JsonEditor.hpp"
 #include "fmt/Preset.hpp"
 #include "ui/ThemeManager.hpp"
 #include "ui/Icon.hpp"
@@ -102,7 +102,6 @@ DialogBasicSettings::DialogBasicSettings(QWidget *parent)
     D_LOAD_INT(test_download_timeout)
     D_LOAD_STRING(test_latency_url)
     D_LOAD_STRING(test_download_url)
-    D_LOAD_BOOL(old_share_link_format)
 
     connect(ui->custom_inbound_edit, &QPushButton::clicked, this, [=] {
         C_EDIT_JSON_ALLOW_EMPTY(custom_inbound)
@@ -254,7 +253,6 @@ void DialogBasicSettings::accept() {
     D_SAVE_INT(test_download_timeout)
     D_SAVE_STRING(test_latency_url)
     D_SAVE_STRING(test_download_url)
-    D_SAVE_BOOL(old_share_link_format)
 
     // Style
 

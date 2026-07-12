@@ -136,14 +136,6 @@
         <translation>高级系统代理设置。请选择一种格式。</translation>
     </message>
     <message>
-        <source>Old Share Link Format</source>
-        <translation>旧分享链接格式</translation>
-    </message>
-    <message>
-        <source>Share VMess Link with v2rayN Format</source>
-        <translation>用 v2rayN 的格式分享 VMess 链接</translation>
-    </message>
-    <message>
         <source>Clear servers before updating subscription</source>
         <translation>更新订阅前清除服务器</translation>
     </message>
@@ -350,8 +342,8 @@
         <translation>包编码，用于实现 UDP FullCone 等特性。需要服务器支持，选错无法连接。不懂请留空。</translation>
     </message>
     <message>
-        <source>When enabled, V2Ray will not check the validity of the TLS certificate provided by the remote host (the security is equivalent to plaintext)</source>
-        <translation>开启后 V2Ray 不会检查远端主机所提供的 TLS 证书的有效性（安全性相当于明文）</translation>
+        <source>When enabled, sing-box will not check the validity of the TLS certificate provided by the remote host (the security is equivalent to plaintext)</source>
+        <translation>开启后 sing-box 不会检查远端主机所提供的 TLS 证书的有效性（安全性相当于明文）</translation>
     </message>
     <message>
         <source>Server name indication, clear text.</source>
@@ -1655,7 +1647,7 @@ Release note:
     </message>
 </context>
 <context>
-    <name>Qv2ray::ui::widgets::AutoCompleteTextEdit</name>
+    <name>NekoQtCompat::ui::widgets::AutoCompleteTextEdit</name>
     <message>
         <source>You can not input space characters here.</source>
         <translation></translation>

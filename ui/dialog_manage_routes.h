@@ -3,7 +3,7 @@
 #include <QDialog>
 #include <QMenu>
 
-#include "3rdparty/qv2ray/v2/ui/QvAutoCompleteTextEdit.hpp"
+#include "3rdparty/qt_compat/ui/AutoCompleteTextEdit.hpp"
 #include "main/NekoGui.hpp"
 
 QT_BEGIN_NAMESPACE
@@ -29,13 +29,13 @@ private:
     } CACHE;
 
     QMenu *builtInSchemesMenu;
-    Qv2ray::ui::widgets::AutoCompleteTextEdit *directDomainTxt;
-    Qv2ray::ui::widgets::AutoCompleteTextEdit *proxyDomainTxt;
-    Qv2ray::ui::widgets::AutoCompleteTextEdit *blockDomainTxt;
+    NekoQtCompat::ui::widgets::AutoCompleteTextEdit *directDomainTxt;
+    NekoQtCompat::ui::widgets::AutoCompleteTextEdit *proxyDomainTxt;
+    NekoQtCompat::ui::widgets::AutoCompleteTextEdit *blockDomainTxt;
     //
-    Qv2ray::ui::widgets::AutoCompleteTextEdit *directIPTxt;
-    Qv2ray::ui::widgets::AutoCompleteTextEdit *blockIPTxt;
-    Qv2ray::ui::widgets::AutoCompleteTextEdit *proxyIPTxt;
+    NekoQtCompat::ui::widgets::AutoCompleteTextEdit *directIPTxt;
+    NekoQtCompat::ui::widgets::AutoCompleteTextEdit *blockIPTxt;
+    NekoQtCompat::ui::widgets::AutoCompleteTextEdit *proxyIPTxt;
     //
     NekoGui::Routing routing_cn_lan = NekoGui::Routing(1);
     NekoGui::Routing routing_global = NekoGui::Routing(0);

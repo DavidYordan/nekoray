@@ -14,8 +14,6 @@ import (
 
 	"log"
 
-	"github.com/sagernet/sing-box/option"
-
 	"nekobox_core/internal/boxapi"
 )
 
@@ -48,7 +46,7 @@ func (s *server) Start(ctx context.Context, in *gen.LoadConfigReq) (out *gen.Err
 	if instance != nil {
 		instance_stats = nil
 		if in.StatsOutbounds != nil {
-			instance_stats = boxapi.NewSbStatsService(option.V2RayStatsServiceOptions{
+			instance_stats = boxapi.NewSbStatsService(boxapi.StatsServiceOptions{
 				Enabled:   true,
 				Outbounds: in.StatsOutbounds,
 			})
