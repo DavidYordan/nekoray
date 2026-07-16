@@ -305,6 +305,23 @@ namespace NekoGui {
         }
     }
 
+    void AppendInboundRouteActions(const std::shared_ptr<BuildConfigStatus> &status, const QString &inboundTag) {
+        const auto inboundDomainStrategy = NormalizeDnsStrategy(dataStore->routing->domain_strategy);
+        if (!inboundDomainStrategy.isEmpty()) {
+            status->routingRules += QJsonObject{
+                {"inbound", inboundTag},
+                {"action", "resolve"},
+                {"strategy", inboundDomainStrategy},
+            };
+        }
+        if (dataStore->routing->sniffing_mode != SniffingMode::DISABLE) {
+            status->routingRules += QJsonObject{
+                {"inbound", inboundTag},
+                {"action", "sniff"},
+            };
+        }
+    }
+
     QJsonObject NormalizeRouteRuleActions(QJsonObject rule);
 
     QJsonArray NormalizeRouteRuleActions(const QJsonArray &rules) {
@@ -659,10 +676,6 @@ namespace NekoGui {
             inboundObj["type"] = "mixed";
             inboundObj["listen"] = dataStore->inbound_address;
             inboundObj["listen_port"] = dataStore->inbound_socks_port;
-            if (dataStore->routing->sniffing_mode != SniffingMode::DISABLE) {
-                inboundObj["sniff"] = true;
-                inboundObj["sniff_override_destination"] = dataStore->routing->sniffing_mode == SniffingMode::FOR_DESTINATION;
-            }
             if (dataStore->inbound_auth->NeedAuth()) {
                 inboundObj["users"] = QJsonArray{
                     QJsonObject{
@@ -671,8 +684,8 @@ namespace NekoGui {
                     },
                 };
             }
-            inboundObj["domain_strategy"] = dataStore->routing->domain_strategy;
             status->inbounds += inboundObj;
+            AppendInboundRouteActions(status, "mixed-in");
         }
 
         // tun-in
@@ -689,12 +702,8 @@ namespace NekoGui {
             QJsonArray tunAddress{"172.19.0.1/28"};
             if (dataStore->vpn_ipv6) tunAddress += "fdfe:dcba:9876::1/126";
             inboundObj["address"] = tunAddress;
-            if (dataStore->routing->sniffing_mode != SniffingMode::DISABLE) {
-                inboundObj["sniff"] = true;
-                inboundObj["sniff_override_destination"] = dataStore->routing->sniffing_mode == SniffingMode::FOR_DESTINATION;
-            }
-            inboundObj["domain_strategy"] = dataStore->routing->domain_strategy;
             status->inbounds += inboundObj;
+            AppendInboundRouteActions(status, "tun-in");
         }
 
         // Outbounds
