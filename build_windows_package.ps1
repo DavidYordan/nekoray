@@ -271,6 +271,8 @@ try {
     $BuildDirFull = Get-FullPath $BuildDir
     $DeployRoot = Join-Path $Root "deployment"
     $PackageDir = Join-Path $DeployRoot "windows64"
+    $PackageConfigDir = Join-Path $PackageDir "config"
+    $PackageConfigBackupDir = Join-Path $DeployRoot "windows64-config-preserve"
     $PublicResDir = Join-Path $DeployRoot "public_res"
     $RouteFluentWorkDir = Join-Path $Root "third_party\routefluent-sing-box\work"
     $RouteFluentCoreBuildDir = Join-Path $Root "build-routefluent-sing-box"
@@ -305,6 +307,10 @@ try {
     $env:CGO_ENABLED = "0"
 
     New-Item -ItemType Directory -Force -Path $DeployRoot | Out-Null
+    Remove-SafeDirectory $PackageConfigBackupDir $DeployRoot
+    if (Test-Path -LiteralPath $PackageConfigDir -PathType Container) {
+        Copy-Item -LiteralPath $PackageConfigDir -Destination $PackageConfigBackupDir -Recurse -Force
+    }
     Remove-SafeDirectory $PackageDir $DeployRoot
     Remove-SafeDirectory $ZipStageRoot $DeployRoot
     New-Item -ItemType Directory -Force -Path $PackageDir | Out-Null
@@ -552,6 +558,10 @@ try {
     }
 
     Remove-SafeDirectory $ZipStageRoot $DeployRoot
+    if (Test-Path -LiteralPath $PackageConfigBackupDir -PathType Container) {
+        Copy-Item -LiteralPath $PackageConfigBackupDir -Destination $PackageConfigDir -Recurse -Force
+    }
+    Remove-SafeDirectory $PackageConfigBackupDir $DeployRoot
 
     Write-Step "Done"
     Write-Host "Folder: $PackageDir"

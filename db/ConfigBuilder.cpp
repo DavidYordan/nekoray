@@ -234,7 +234,8 @@ namespace NekoGui {
     void ApplyDnsServerDialOptions(QJsonObject &server, const QString &detour, const QString &domainResolver) {
         const auto type = server["type"].toString();
         if (type == "local" || type == "fakeip" || type == "hosts") return;
-        if (!detour.trimmed().isEmpty()) server["detour"] = detour.trimmed();
+        const auto detourTag = detour.trimmed();
+        if (!detourTag.isEmpty() && detourTag != "direct" && detourTag != "bypass") server["detour"] = detourTag;
         if (!domainResolver.trimmed().isEmpty()) server["domain_resolver"] = domainResolver.trimmed();
     }
 
