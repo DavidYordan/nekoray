@@ -26,7 +26,11 @@ private:
         int front_proxy;
     } CACHE;
 
+    bool save_subscription_defaults_from_ui();
+
     void refresh_front_proxy();
+
+    void reset_profiles_to_inherit_defaults();
 
 private slots:
 

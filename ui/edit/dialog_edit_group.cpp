@@ -2,10 +2,12 @@
 #include "ui_dialog_edit_group.h"
 
 #include "db/Database.hpp"
+#include "fmt/AnyTLSBean.hpp"
 #include "sub/MultiMapperExport.hpp"
 #include "ui/mainwindow_interface.h"
 
 #include <QClipboard>
+#include <QMessageBox>
 #include <QSet>
 #include <QUrl>
 
@@ -123,12 +125,37 @@ DialogEditGroup::DialogEditGroup(const std::shared_ptr<NekoGui::Group> &ent, QWi
         QApplication::clipboard()->setText(NekoGui_sub::BuildMultiMapperExportJson(ent->ProfilesWithOrder()));
         MessageBoxInfo(software_name, tr("Copied"));
     });
+    connect(ui->reset_profiles_inherit_defaults, &QPushButton::clicked, this, [=] { reset_profiles_to_inherit_defaults(); });
 
     ADJUST_SIZE
 }
 
 DialogEditGroup::~DialogEditGroup() {
     delete ui;
+}
+
+bool DialogEditGroup::save_subscription_defaults_from_ui() {
+    ent->source_type = normalizeSourceType(ui->source_type->currentText());
+    ent->default_client_mode = ui->default_client_mode->currentText().trimmed().toLower();
+    if (ent->default_client_mode == "native") {
+        ent->default_client_mode.clear();
+        ent->default_client_value.clear();
+    } else if (ent->default_client_mode == "mihomo") {
+        ent->default_client_value = "mihomo/1.19.28";
+    } else if (ent->default_client_mode == "custom") {
+        const auto clientValue = ui->default_client_value->text().trimmed();
+        if (!isVisibleAsciiClientValue(clientValue)) {
+            MessageBoxWarning(tr("Default Client"), tr("Custom client value must be 1..128 visible ASCII characters without spaces."));
+            return false;
+        }
+        ent->default_client_value = clientValue;
+    } else {
+        ent->default_client_mode.clear();
+        ent->default_client_value.clear();
+    }
+    ent->default_server_resolver_doh = parseDohUpstreams(ui->default_server_resolver_doh->toPlainText()).join("\n");
+    ent->default_server_resolver_allow_local_fallback = ui->default_server_resolver_fallback->isChecked();
+    return true;
 }
 
 void DialogEditGroup::accept() {
@@ -142,26 +169,7 @@ void DialogEditGroup::accept() {
     ent->url = ui->url->text();
     ent->archive = ui->archive->isChecked();
     ent->skip_auto_update = ui->skip_auto_update->isChecked();
-    ent->source_type = normalizeSourceType(ui->source_type->currentText());
-    ent->default_client_mode = ui->default_client_mode->currentText().trimmed().toLower();
-    if (ent->default_client_mode == "native") {
-        ent->default_client_mode.clear();
-        ent->default_client_value.clear();
-    } else if (ent->default_client_mode == "mihomo") {
-        ent->default_client_value = "mihomo/1.19.28";
-    } else if (ent->default_client_mode == "custom") {
-        const auto clientValue = ui->default_client_value->text().trimmed();
-        if (!isVisibleAsciiClientValue(clientValue)) {
-            MessageBoxWarning(tr("Default Client"), tr("Custom client value must be 1..128 visible ASCII characters without spaces."));
-            return;
-        }
-        ent->default_client_value = clientValue;
-    } else {
-        ent->default_client_mode.clear();
-        ent->default_client_value.clear();
-    }
-    ent->default_server_resolver_doh = parseDohUpstreams(ui->default_server_resolver_doh->toPlainText()).join("\n");
-    ent->default_server_resolver_allow_local_fallback = ui->default_server_resolver_fallback->isChecked();
+    if (!save_subscription_defaults_from_ui()) return;
     ent->manually_column_width = ui->manually_column_width->isChecked();
     ent->front_proxy_id = CACHE.front_proxy;
     QDialog::accept();
@@ -170,6 +178,38 @@ void DialogEditGroup::accept() {
 void DialogEditGroup::refresh_front_proxy() {
     auto fEnt = NekoGui::profileManager->GetProfile(CACHE.front_proxy);
     ui->front_proxy->setText(fEnt == nullptr ? tr("None") : fEnt->bean->DisplayTypeAndName());
+}
+
+void DialogEditGroup::reset_profiles_to_inherit_defaults() {
+    if (ent->id < 0) return;
+    if (!save_subscription_defaults_from_ui()) return;
+    ent->Save();
+
+    const auto profiles = ent->Profiles();
+    if (profiles.isEmpty()) return;
+    if (QMessageBox::question(this,
+                              tr("Confirmation"),
+                              tr("Reset %1 profile(s) to inherit this group's default client and resolver?").arg(profiles.count()))
+        != QMessageBox::Yes) {
+        return;
+    }
+
+    int changed = 0;
+    for (const auto &profile: profiles) {
+        if (profile == nullptr || profile->bean == nullptr) continue;
+        profile->bean->inheritSubscriptionClient = true;
+        profile->bean->inheritSubscriptionResolver = true;
+        profile->bean->serverResolverDohUpstreams.clear();
+        profile->bean->serverResolverAllowLocalFallback = ent->default_server_resolver_allow_local_fallback;
+        if (profile->type == "anytls") {
+            auto anytls = profile->AnyTLSBean();
+            anytls->anytlsClientMode = "native";
+            anytls->anytlsClientValue.clear();
+        }
+        profile->Save();
+        changed++;
+    }
+    MessageBoxInfo(software_name, tr("Updated %1 profile(s).").arg(changed));
 }
 
 void DialogEditGroup::on_front_proxy_clicked() {

@@ -46,10 +46,6 @@ namespace NekoGui_fmt {
 
         QString ToNekorayShareLink(const QString &type);
 
-        void ResolveDomainToIP(const std::function<void()> &onFinished);
-
-        //
-
         [[nodiscard]] virtual QString DisplayAddress();
 
         [[nodiscard]] virtual QString DisplayName();

@@ -1,7 +1,5 @@
 #include "includes.h"
 
-#include <QApplication>
-#include <QHostInfo>
 #include <QUrl>
 
 namespace NekoGui_fmt {
@@ -43,41 +41,5 @@ namespace NekoGui_fmt {
 
     QString AbstractBean::DisplayTypeAndName() {
         return QStringLiteral("[%1] %2").arg(DisplayType(), DisplayName());
-    }
-
-    void AbstractBean::ResolveDomainToIP(const std::function<void()> &onFinished) {
-        bool noResolve = false;
-        if (dynamic_cast<ChainBean *>(this) != nullptr) noResolve = true;
-        if (dynamic_cast<CustomBean *>(this) != nullptr) noResolve = true;
-        if (dynamic_cast<NaiveBean *>(this) != nullptr) noResolve = true;
-        if (IsIpAddress(serverAddress)) noResolve = true;
-        if (noResolve) {
-            onFinished();
-            return;
-        }
-
-#if QT_VERSION >= QT_VERSION_CHECK(5, 11, 0) // TODO older QT
-        QHostInfo::lookupHost(serverAddress, QApplication::instance(), [=](const QHostInfo &host) {
-            auto addr = host.addresses();
-            if (!addr.isEmpty()) {
-                auto domain = serverAddress;
-                auto stream = GetStreamSettings(this);
-
-                // replace serverAddress
-                serverAddress = addr.first().toString();
-
-                // replace ws tls
-                if (stream != nullptr) {
-                    if (stream->security == "tls" && stream->sni.isEmpty()) {
-                        stream->sni = domain;
-                    }
-                    if (stream->network == "ws" && stream->host.isEmpty()) {
-                        stream->host = domain;
-                    }
-                }
-            }
-            onFinished();
-        });
-#endif
     }
 } // namespace NekoGui_fmt

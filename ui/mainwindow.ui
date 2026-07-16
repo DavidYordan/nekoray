@@ -822,7 +822,7 @@
   </action>
   <action name="menu_copy_links_multimapper">
    <property name="text">
-    <string>Copy selected to MultiMapper</string>
+    <string>Copy to MultiMapper</string>
    </property>
   </action>
   <action name="actionfake_2">

@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>460</width>
-    <height>640</height>
+    <height>680</height>
    </rect>
   </property>
   <property name="minimumSize">
@@ -233,6 +233,13 @@
         </property>
        </widget>
       </item>
+      <item row="6" column="1">
+       <widget class="QPushButton" name="reset_profiles_inherit_defaults">
+        <property name="text">
+         <string>Reset profiles to inherit defaults</string>
+        </property>
+       </widget>
+      </item>
      </layout>
     </widget>
    </item>
@@ -296,6 +303,7 @@
   <tabstop>default_client_value</tabstop>
   <tabstop>default_server_resolver_doh</tabstop>
   <tabstop>default_server_resolver_fallback</tabstop>
+  <tabstop>reset_profiles_inherit_defaults</tabstop>
   <tabstop>copy_links</tabstop>
   <tabstop>copy_links_nkr</tabstop>
   <tabstop>copy_links_multimapper</tabstop>
