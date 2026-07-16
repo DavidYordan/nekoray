@@ -559,7 +559,10 @@ namespace NekoGui_sub {
                             bean->anytlsClientValue = clashAnyTLSClient;
                         }
                     }
-                    if (bean->anytlsClientMode.isEmpty()) bean->anytlsClientMode = "native";
+                    if (bean->anytlsClientMode.isEmpty()) {
+                        // Clash AnyTLS nodes are authored for Mihomo's client identity unless explicitly overridden.
+                        bean->anytlsClientMode = "mihomo";
+                    }
                     if (bean->anytlsClientMode == "custom" && bean->anytlsClientValue.isEmpty() &&
                         IsVisibleAsciiAnyTLSClientValue(clashAnyTLSClient)) {
                         bean->anytlsClientValue = clashAnyTLSClient;
