@@ -14,6 +14,7 @@
 #include <QDesktopServices>
 #include <QMessageBox>
 #include <QDialogButtonBox>
+#include <QSet>
 
 // ext core
 
@@ -311,7 +312,15 @@ void MainWindow::neko_start(int _id) {
         req.set_core_config(QJsonObject2QString(result->coreConfig, false).toStdString());
         req.set_enable_nekoray_connections(NekoGui::dataStore->connection_statistics);
         if (NekoGui::dataStore->traffic_loop_interval > 0) {
-            req.add_stats_outbounds("proxy");
+            QSet<QString> statsTags;
+            for (const auto &item: result->outboundStats) {
+                const auto tag = QString::fromStdString(item->tag);
+                if (!tag.isEmpty()) statsTags.insert(tag);
+            }
+            statsTags.insert("proxy");
+            for (const auto &tag: statsTags) {
+                req.add_stats_outbounds(tag.toStdString());
+            }
             req.add_stats_outbounds("bypass");
         }
         //
@@ -447,13 +456,15 @@ void MainWindow::neko_stop(bool crash, bool sem) {
         }
 #endif
 
+        const auto clearedAuxProfiles = !sem && !crash && !NekoGui::dataStore->aux_profile_ports.isEmpty();
         NekoGui::dataStore->UpdateStartedId(-1919);
+        if (clearedAuxProfiles) NekoGui::dataStore->aux_profile_ports.clear();
         NekoGui::dataStore->need_keep_vpn_off = false;
         running = nullptr;
 
         runOnUiThread([=] {
             refresh_status();
-            refresh_proxy_list(id);
+            refresh_proxy_list(clearedAuxProfiles ? -1 : id);
         });
 
         return true;

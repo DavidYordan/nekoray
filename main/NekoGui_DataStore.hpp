@@ -67,6 +67,7 @@ namespace NekoGui {
         QString core_token;
         int core_port = 19810;
         int started_id = -1919;
+        QMap<int, int> aux_profile_ports = {};
         bool core_running = false;
         bool prepare_exit = false;
         bool spmode_vpn = false;

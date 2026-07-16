@@ -101,6 +101,12 @@ private slots:
 
     void on_menu_delete_triggered();
 
+    void on_menu_start_auxiliary_triggered();
+
+    void on_menu_stop_auxiliary_triggered();
+
+    void on_menu_copy_auxiliary_proxy_triggered();
+
     void on_menu_reset_traffic_triggered();
 
     void on_menu_profile_debug_info_triggered();

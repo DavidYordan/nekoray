@@ -570,6 +570,9 @@
     <addaction name="separator"/>
     <addaction name="menu_start"/>
     <addaction name="menu_stop"/>
+    <addaction name="menu_start_auxiliary"/>
+    <addaction name="menu_stop_auxiliary"/>
+    <addaction name="menu_copy_auxiliary_proxy"/>
     <addaction name="separator"/>
     <addaction name="menu_select_all"/>
     <addaction name="menu_move"/>
@@ -628,6 +631,21 @@
    </property>
    <property name="shortcut">
     <string notr="true">Ctrl+S</string>
+   </property>
+  </action>
+  <action name="menu_start_auxiliary">
+   <property name="text">
+    <string>Start auxiliary port</string>
+   </property>
+  </action>
+  <action name="menu_stop_auxiliary">
+   <property name="text">
+    <string>Stop auxiliary port</string>
+   </property>
+  </action>
+  <action name="menu_copy_auxiliary_proxy">
+   <property name="text">
+    <string>Copy auxiliary proxy</string>
    </property>
   </action>
   <action name="menu_routing_settings">

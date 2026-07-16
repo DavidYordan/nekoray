@@ -58,6 +58,7 @@
 #include <QNetworkProxy>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QTcpServer>
 
 #include <cstring>
 
@@ -75,6 +76,7 @@ namespace {
     enum class ResolveOutboundMode {
         Direct,
         MainProxy,
+        AuxProxy,
     };
 
     struct ResolveOptions {
@@ -82,6 +84,7 @@ namespace {
         ResolveOutboundMode outboundMode = ResolveOutboundMode::Direct;
         QStringList customDohUpstreams;
         QString resolverName;
+        int outboundPort = 0;
         QString outboundName = "Direct";
     };
 
@@ -237,6 +240,35 @@ namespace {
         };
     }
 
+    bool canListenLocalPort(int port) {
+        if (!IsValidPort(port)) return false;
+        QTcpServer server;
+        if (!server.listen(QHostAddress::LocalHost, port)) return false;
+        server.close();
+        return true;
+    }
+
+    int allocateAuxiliaryPort() {
+        QSet<int> used{
+            NekoGui::dataStore->inbound_socks_port,
+            NekoGui::dataStore->core_port,
+        };
+        if (NekoGui::dataStore->core_box_clash_api > 0) used.insert(NekoGui::dataStore->core_box_clash_api);
+        for (auto it = NekoGui::dataStore->aux_profile_ports.constBegin(); it != NekoGui::dataStore->aux_profile_ports.constEnd(); ++it) {
+            used.insert(it.value());
+        }
+        for (int port = 12100; port <= 12299; ++port) {
+            if (used.contains(port)) continue;
+            if (canListenLocalPort(port)) return port;
+        }
+        const auto randomPort = MkPort();
+        return used.contains(randomPort) ? -1 : randomPort;
+    }
+
+    QString auxiliaryProxyText(int port) {
+        return QStringLiteral("socks5h://127.0.0.1:%1\nhttp://127.0.0.1:%1").arg(port);
+    }
+
     QStringList groupResolverUpstreams(const std::shared_ptr<NekoGui::ProxyEntity> &profile) {
         if (profile == nullptr) return {};
         auto group = NekoGui::profileManager->GetGroup(profile->gid);
@@ -244,7 +276,7 @@ namespace {
         return splitResolverLines(group->default_server_resolver_doh);
     }
 
-    QStringList queryDoh(const QUrl &url, const QString &domain, quint16 qtype, ResolveOutboundMode outboundMode, QString *error) {
+    QStringList queryDoh(const QUrl &url, const QString &domain, quint16 qtype, const ResolveOptions &options, QString *error) {
         const auto query = buildDnsQuery(domain, qtype);
         if (query.isEmpty()) {
             if (error != nullptr) *error = "invalid domain name";
@@ -252,15 +284,20 @@ namespace {
         }
 
         QNetworkAccessManager manager;
-        if (outboundMode == ResolveOutboundMode::MainProxy) {
-            if (NekoGui::dataStore->started_id < 0) {
+        if (options.outboundMode == ResolveOutboundMode::MainProxy || options.outboundMode == ResolveOutboundMode::AuxProxy) {
+            const auto port = options.outboundMode == ResolveOutboundMode::MainProxy ? NekoGui::dataStore->inbound_socks_port : options.outboundPort;
+            if (options.outboundMode == ResolveOutboundMode::MainProxy && NekoGui::dataStore->started_id < 0) {
                 if (error != nullptr) *error = "main profile is not running";
+                return {};
+            }
+            if (!IsValidPort(port)) {
+                if (error != nullptr) *error = "selected proxy port is invalid";
                 return {};
             }
             QNetworkProxy proxy;
             proxy.setType(QNetworkProxy::Socks5Proxy);
             proxy.setHostName("127.0.0.1");
-            proxy.setPort(NekoGui::dataStore->inbound_socks_port);
+            proxy.setPort(port);
             proxy.setCapabilities(proxy.capabilities() | QNetworkProxy::HostNameLookupCapability);
             manager.setProxy(proxy);
         }
@@ -289,7 +326,7 @@ namespace {
         return parseDnsAddresses(body, qtype);
     }
 
-    QStringList resolveViaDoh(const QString &domain, const QStringList &upstreams, ResolveOutboundMode outboundMode, const QString &outboundName, QString *method, QString *error) {
+    QStringList resolveViaDoh(const QString &domain, const QStringList &upstreams, const ResolveOptions &options, QString *method, QString *error) {
         const auto dohUpstreams = httpsDohOnly(upstreams);
         if (dohUpstreams.isEmpty()) {
             if (error != nullptr) *error = "no HTTPS DoH upstream";
@@ -300,10 +337,10 @@ namespace {
         for (const auto &upstream: dohUpstreams) {
             const QUrl url(upstream);
             QString err;
-            auto addresses = queryDoh(url, domain, 1, outboundMode, &err);
-            if (addresses.isEmpty()) addresses = queryDoh(url, domain, 28, outboundMode, &err);
+            auto addresses = queryDoh(url, domain, 1, options, &err);
+            if (addresses.isEmpty()) addresses = queryDoh(url, domain, 28, options, &err);
             if (!addresses.isEmpty()) {
-                if (method != nullptr) *method = "DoH " + upstream + " via " + outboundName;
+                if (method != nullptr) *method = "DoH " + upstream + " via " + options.outboundName;
                 return addresses;
             }
             if (!err.isEmpty()) lastError = upstream + ": " + err;
@@ -389,8 +426,7 @@ namespace {
         } else {
             addresses = resolveViaDoh(result.originalAddress,
                                       resolverUpstreamsForMode(profile, options.serverMode, options.customDohUpstreams),
-                                      options.outboundMode,
-                                      options.outboundName,
+                                      options,
                                       &method,
                                       &error);
         }
@@ -799,6 +835,14 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWi
         }
         ui->menu_export_config->setVisible(name == software_core_name);
         ui->menu_export_config->setText(tr("Export %1 config").arg(name));
+    });
+    connect(ui->menu_server, &QMenu::aboutToShow, this, [=] {
+        const auto selected = get_now_selected_list();
+        const auto oneSelected = selected.count() == 1;
+        const auto hasAux = oneSelected && NekoGui::dataStore->aux_profile_ports.contains(selected.first()->id);
+        ui->menu_start_auxiliary->setEnabled(oneSelected && NekoGui::dataStore->started_id >= 0 && !hasAux);
+        ui->menu_stop_auxiliary->setEnabled(hasAux);
+        ui->menu_copy_auxiliary_proxy->setEnabled(hasAux);
     });
     refresh_status();
 
@@ -1258,7 +1302,16 @@ void MainWindow::refresh_status(const QString &traffic_update) {
     //
     auto display_socks = DisplayAddress(NekoGui::dataStore->inbound_address, NekoGui::dataStore->inbound_socks_port);
     auto inbound_txt = QStringLiteral("Mixed: %1").arg(display_socks);
+    QStringList auxTips;
+    for (auto it = NekoGui::dataStore->aux_profile_ports.constBegin(); it != NekoGui::dataStore->aux_profile_ports.constEnd(); ++it) {
+        auto profile = NekoGui::profileManager->GetProfile(it.key());
+        auxTips << QStringLiteral("%1: 127.0.0.1:%2")
+                       .arg(profile == nullptr ? QStringLiteral("#%1").arg(it.key()) : profile->bean->DisplayTypeAndName())
+                       .arg(it.value());
+    }
+    if (!auxTips.isEmpty()) inbound_txt += QStringLiteral(" | Aux: %1").arg(auxTips.count());
     ui->label_inbound->setText(inbound_txt);
+    ui->label_inbound->setToolTip(auxTips.join("\n"));
     //
     ui->checkBox_VPN->setChecked(NekoGui::dataStore->spmode_vpn);
     ui->checkBox_SystemProxy->setChecked(NekoGui::dataStore->spmode_system_proxy);
@@ -1453,6 +1506,9 @@ void MainWindow::refresh_proxy_list_impl_refresh_data(const int &id) {
         if (profile == nullptr) continue;
 
         auto isRunning = profileId == NekoGui::dataStore->started_id;
+        auto auxPort = NekoGui::dataStore->aux_profile_ports.value(profileId, 0);
+        auto isAuxRunning = auxPort > 0;
+        auto isActive = isRunning || isAuxRunning;
         auto f0 = std::make_unique<QTableWidgetItem>();
         f0->setData(114514, profileId);
 
@@ -1460,23 +1516,24 @@ void MainWindow::refresh_proxy_list_impl_refresh_data(const int &id) {
         auto check = f0->clone();
         check->setText(isRunning ? "✓" : Int2String(row + 1));
         ui->proxyListTable->setVerticalHeaderItem(row, check);
+        check->setText(isRunning ? "Main" : (isAuxRunning ? QStringLiteral("Aux:%1").arg(auxPort) : Int2String(row + 1)));
 
         // C0: Type
         auto f = f0->clone();
         f->setText(profile->bean->DisplayType());
-        if (isRunning) f->setForeground(palette().link());
+        if (isActive) f->setForeground(palette().link());
         ui->proxyListTable->setItem(row, 0, f);
 
         // C1: Address+Port
         f = f0->clone();
         f->setText(profile->bean->DisplayAddress());
-        if (isRunning) f->setForeground(palette().link());
+        if (isActive) f->setForeground(palette().link());
         ui->proxyListTable->setItem(row, 1, f);
 
         // C2: Name
         f = f0->clone();
         f->setText(profile->bean->name);
-        if (isRunning) f->setForeground(palette().link());
+        if (isActive) f->setForeground(palette().link());
         ui->proxyListTable->setItem(row, 2, f);
 
         // C3: Test Result
@@ -1570,6 +1627,76 @@ void MainWindow::on_menu_delete_triggered() {
         }
         refresh_proxy_list();
     }
+}
+
+void MainWindow::on_menu_start_auxiliary_triggered() {
+    auto ents = get_now_selected_list();
+    if (ents.count() != 1) {
+        MessageBoxWarning(software_name, tr("Please select one profile."));
+        return;
+    }
+    if (NekoGui::dataStore->started_id < 0) {
+        MessageBoxWarning(software_name, tr("Start a main profile first."));
+        return;
+    }
+
+    auto ent = ents.first();
+    if (NekoGui::dataStore->aux_profile_ports.contains(ent->id)) {
+        const auto port = NekoGui::dataStore->aux_profile_ports.value(ent->id);
+        QApplication::clipboard()->setText(auxiliaryProxyText(port));
+        show_log_impl(tr("Auxiliary proxy copied: 127.0.0.1:%1").arg(port));
+        return;
+    }
+
+    const auto port = allocateAuxiliaryPort();
+    if (!IsValidPort(port)) {
+        MessageBoxWarning(software_name, tr("No available auxiliary port."));
+        return;
+    }
+
+    const auto oldAuxPorts = NekoGui::dataStore->aux_profile_ports;
+    NekoGui::dataStore->aux_profile_ports.insert(ent->id, port);
+    auto mainProfile = NekoGui::profileManager->GetProfile(NekoGui::dataStore->started_id);
+    auto checkResult = mainProfile == nullptr ? nullptr : BuildConfig(mainProfile, false, false);
+    if (mainProfile == nullptr || checkResult == nullptr || !checkResult->error.isEmpty()) {
+        NekoGui::dataStore->aux_profile_ports = oldAuxPorts;
+        MessageBoxWarning("BuildConfig return error", checkResult == nullptr ? tr("Unknown main profile.") : checkResult->error);
+        return;
+    }
+
+    show_log_impl(tr("Starting auxiliary port %1 for %2").arg(port).arg(ent->bean->DisplayTypeAndName()));
+    neko_start(NekoGui::dataStore->started_id);
+    refresh_status();
+    refresh_proxy_list(ent->id);
+}
+
+void MainWindow::on_menu_stop_auxiliary_triggered() {
+    auto ents = get_now_selected_list();
+    if (ents.count() != 1) return;
+
+    auto ent = ents.first();
+    if (!NekoGui::dataStore->aux_profile_ports.contains(ent->id)) return;
+    const auto port = NekoGui::dataStore->aux_profile_ports.take(ent->id);
+    show_log_impl(tr("Stopping auxiliary port %1 for %2").arg(port).arg(ent->bean->DisplayTypeAndName()));
+    if (NekoGui::dataStore->started_id >= 0) {
+        neko_start(NekoGui::dataStore->started_id);
+    }
+    refresh_status();
+    refresh_proxy_list(ent->id);
+}
+
+void MainWindow::on_menu_copy_auxiliary_proxy_triggered() {
+    auto ents = get_now_selected_list();
+    if (ents.count() != 1) return;
+
+    auto ent = ents.first();
+    if (!NekoGui::dataStore->aux_profile_ports.contains(ent->id)) {
+        MessageBoxWarning(software_name, tr("This profile has no auxiliary port."));
+        return;
+    }
+    const auto port = NekoGui::dataStore->aux_profile_ports.value(ent->id);
+    QApplication::clipboard()->setText(auxiliaryProxyText(port));
+    show_log_impl(tr("Copied auxiliary proxy: 127.0.0.1:%1").arg(port));
 }
 
 void MainWindow::on_menu_reset_traffic_triggered() {
@@ -1880,12 +2007,39 @@ void MainWindow::on_menu_resolve_domain_triggered() {
             return true;
         }
 
-        QStringList outboundChoices{tr("No NekoRay proxy")};
+        struct OutboundChoice {
+            QString label;
+            ResolveOutboundMode mode = ResolveOutboundMode::Direct;
+            int port = 0;
+        };
+
+        QList<OutboundChoice> outboundOptions{
+            {tr("No NekoRay proxy"), ResolveOutboundMode::Direct, 0},
+        };
         if (NekoGui::dataStore->started_id >= 0) {
             auto running = NekoGui::profileManager->GetProfile(NekoGui::dataStore->started_id);
-            outboundChoices << tr("Main profile: %1")
-                                   .arg(running == nullptr ? QStringLiteral("127.0.0.1:%1").arg(NekoGui::dataStore->inbound_socks_port)
-                                                           : running->bean->DisplayTypeAndName());
+            outboundOptions << OutboundChoice{
+                tr("Main profile: %1 @ 127.0.0.1:%2")
+                    .arg(running == nullptr ? QStringLiteral("#%1").arg(NekoGui::dataStore->started_id) : running->bean->DisplayTypeAndName())
+                    .arg(NekoGui::dataStore->inbound_socks_port),
+                ResolveOutboundMode::MainProxy,
+                NekoGui::dataStore->inbound_socks_port,
+            };
+        }
+        for (auto it = NekoGui::dataStore->aux_profile_ports.constBegin(); it != NekoGui::dataStore->aux_profile_ports.constEnd(); ++it) {
+            auto profile = NekoGui::profileManager->GetProfile(it.key());
+            outboundOptions << OutboundChoice{
+                tr("Aux profile: %1 @ 127.0.0.1:%2")
+                    .arg(profile == nullptr ? QStringLiteral("#%1").arg(it.key()) : profile->bean->DisplayTypeAndName())
+                    .arg(it.value()),
+                ResolveOutboundMode::AuxProxy,
+                it.value(),
+            };
+        }
+
+        QStringList outboundChoices;
+        for (const auto &option: outboundOptions) {
+            outboundChoices << option.label;
         }
         auto outboundChoice = QInputDialog::getItem(this,
                                                     tr("Resolve domain"),
@@ -1895,13 +2049,11 @@ void MainWindow::on_menu_resolve_domain_triggered() {
                                                     false,
                                                     &ok);
         if (!ok) return false;
-        if (outboundChoices.indexOf(outboundChoice) == 1) {
-            options.outboundMode = ResolveOutboundMode::MainProxy;
-            options.outboundName = outboundChoice;
-        } else {
-            options.outboundMode = ResolveOutboundMode::Direct;
-            options.outboundName = tr("No NekoRay proxy");
-        }
+        const auto index = outboundChoices.indexOf(outboundChoice);
+        const auto selected = outboundOptions.value(index < 0 ? 0 : index);
+        options.outboundMode = selected.mode;
+        options.outboundPort = selected.port;
+        options.outboundName = selected.label;
         return true;
     };
 
@@ -1928,6 +2080,7 @@ void MainWindow::on_menu_resolve_domain_triggered() {
                 task.outboundName = tr("System resolver");
             } else {
                 task.outboundMode = outboundTemplate.outboundMode;
+                task.outboundPort = outboundTemplate.outboundPort;
                 task.outboundName = outboundTemplate.outboundName;
             }
             resolveTasks << task;

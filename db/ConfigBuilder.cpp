@@ -524,12 +524,7 @@ namespace NekoGui {
                 status->result->ignoreConnTag << tagOut;
             }
 
-            if (needGlobal) {
-                if (status->globalProfiles.contains(ent->id)) {
-                    continue;
-                }
-                status->globalProfiles += ent->id;
-            }
+            const auto globalAlreadyBuilt = needGlobal && status->globalProfiles.contains(ent->id);
 
             if (index > 0) {
                 // chain rules: past
@@ -547,7 +542,18 @@ namespace NekoGui {
             } else {
                 // index == 0 means last profile in chain / not chain
                 chainTagOut = tagOut;
-                status->result->outboundStat = ent->traffic_data;
+                if (chainId == 0) status->result->outboundStat = ent->traffic_data;
+            }
+
+            if (globalAlreadyBuilt) {
+                pastTag = tagOut;
+                pastExternalStat = 0;
+                index++;
+                continue;
+            }
+
+            if (needGlobal) {
+                status->globalProfiles += ent->id;
             }
 
             // chain rules: this
@@ -747,6 +753,39 @@ namespace NekoGui {
         // Outbounds
         auto tagProxy = BuildChain(0, status);
         if (!status->result->error.isEmpty()) return;
+
+        if (!status->forTest && !status->forExport) {
+            int auxChainId = 1000;
+            const auto mainEnt = status->ent;
+            for (auto it = dataStore->aux_profile_ports.constBegin(); it != dataStore->aux_profile_ports.constEnd(); ++it) {
+                auto auxProfile = profileManager->GetProfile(it.key());
+                if (auxProfile == nullptr || auxProfile->bean == nullptr) continue;
+                auto auxGroup = profileManager->GetGroup(auxProfile->gid);
+                if (auxGroup == nullptr || auxGroup->archive) continue;
+                if (!IsValidPort(it.value())) continue;
+
+                const auto inboundTag = QStringLiteral("aux-mixed-%1").arg(auxProfile->id);
+                status->inbounds += QJsonObject{
+                    {"tag", inboundTag},
+                    {"type", "mixed"},
+                    {"listen", "127.0.0.1"},
+                    {"listen_port", it.value()},
+                };
+                AppendInboundRouteActions(status, inboundTag);
+
+                status->ent = auxProfile;
+                const auto auxOutboundTag = BuildChain(auxChainId++, status);
+                status->ent = mainEnt;
+                if (!status->result->error.isEmpty()) return;
+                if (auxOutboundTag.isEmpty()) continue;
+
+                status->routingRules += QJsonObject{
+                    {"inbound", QJsonArray{inboundTag}},
+                    {"outbound", auxOutboundTag},
+                };
+            }
+            status->ent = mainEnt;
+        }
 
         // direct & bypass
         status->outbounds += QJsonObject{
