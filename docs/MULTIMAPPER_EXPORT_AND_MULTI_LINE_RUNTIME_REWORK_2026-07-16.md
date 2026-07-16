@@ -30,10 +30,11 @@
 
 1. MultiMapper 当前只面向 RouteFluent sing-box 运行态，不再自动兼容旧 Xray 或 stock sing-box。它的当前约束包括：AnyTLS client 默认 `mihomo/1.19.28`、server 域名解析走 RouteFluent runtime DoH、fallback 默认 `strict`、业务 outbounds 不允许 `direct` 偷跑。
 2. 本项目未来给 MultiMapper 的剪贴板导出，不应导出原始 Clash 全量 YAML。原始订阅可能很大，包含 Clash 分组、规则、dashboard、health-check、fake-ip 等 MultiMapper 不需要的运行时信息。
-3. 正确方向是新增一个“精简线路包”导出：保留单条线路连通所需字段、来源标识、订阅 DoH、AnyTLS client；丢弃 Clash 分组和规则。NekoRay 自身仍保留本项目数据库里的分流和路由，不把 Clash 分流作为本项目运行时来源。
+3. 正确方向是新增一个“精简线路包”导出：保留单条线路连通所需字段、来源标识、订阅级 DoH、订阅级 client 默认值，以及必要的单线路 override；丢弃 Clash 分组和规则。NekoRay 自身仍保留本项目数据库里的分流和路由，不把 Clash 分流作为本项目运行时来源。
 4. 本项目当前已支持多选复制普通协议链接和 Neko 链接，也支持复制当前组全部链接，但没有“MultiMapper 精简 JSON 包”，也没有“整个订阅以精简包导出到剪贴板”的语义。
 5. 本项目当前运行模型是单主线路：一个 `started_id`、一个 core 配置、一个主 `mixed-in`、可选一个 `tun-in`。多条线路同时启动需要新增运行模型，不能只复用现有“启动当前选中线路”。
 6. 系统代理和 TUN 的无偷跑要求需要拆开看：系统代理在普通线路重启时不会被 `neko_stop()` 清空，但程序重启/退出路径会调用 `ClearSystemProxy()`；内部 TUN 在 core Stop/Start 期间会被 sing-box 配置卸载，存在回落到系统默认路由的窗口。后续整改必须把“显式关闭代理模式”和“为了重载配置而重启核心”区分开。
+7. 一个订阅链接应默认视为一套来源。Clash 订阅无论内部线路协议是什么，都应有订阅级 Mihomo client 默认值；DoH、fallback、订阅信息也应优先在订阅层级统一管理，再允许少量线路覆盖。
 
 ## MultiMapper 当前需要什么
 
@@ -67,7 +68,7 @@ MultiMapper 的关键语义：
 - Clash YAML 导入时会提取 `dns.proxy-server-nameserver`，没有时回退到 `dns.nameserver`，只保留 HTTPS DoH，并按 `source_tag` 保存。
 - RouteFluent sing-box 配置生成时，会按 `source_tag` 为每组线路生成 runtime DoH resolver。
 - 若线路 server 是域名，生成 outbound 时会绑定 `domain_resolver`，使该线路 server 由本来源 DoH 解析。
-- AnyTLS client profile 默认是 `mihomo/1.19.28`，也允许 profile 级 custom。
+- AnyTLS client profile 默认是 `mihomo/1.19.28`，也允许 profile 级 custom。NekoRay 导出时应把 Clash 订阅的 Mihomo 默认作为订阅级元数据带过去；非 AnyTLS 线路不直接消费该字段，但仍属于同一套订阅默认。
 - MultiMapper 不需要 Clash 的分组、规则、负载均衡、url-test、select 运行态；它自己有路由 profile、bridge/outbound 选择、DNS 解析和部署语义。
 
 这说明本项目和 MultiMapper 对接时，最有价值的信息不是 Clash 原文，而是：
@@ -95,6 +96,32 @@ MultiMapper 的关键语义：
 - 当前没有“按订阅或分组导出精简 JSON 包”的功能。
 - 当前没有记录“这条线路来自哪个原始 Clash proxy group”的必要语义；从 MultiMapper 角度也不需要该语义。
 
+## 订阅层级管理建议
+
+一个订阅链接通常代表同一服务商、同一账号、同一套线路运行假设。后续本项目不应只把订阅拆成孤立线路，而应在分组/订阅层级保存统一默认值。
+
+建议订阅层级保存：
+
+- `source_type`：`clash`、`plain_links`、`base64_links`、`manual`。
+- `client`：Clash 订阅默认 `mihomo/1.19.28`。普通链接订阅不自动套 Mihomo，除非用户显式设置。
+- `server_resolver`：订阅 DoH、fallback 策略、是否允许本地 fallback。
+- `subscription_info`：流量、过期时间、更新时间。
+- `export_policy`：是否允许导出订阅 URL、是否导出单线路 override。
+
+建议线路层级保存：
+
+- `inherit_subscription_client`：默认 true。
+- `inherit_subscription_resolver`：默认 true。
+- `client_override`：只有用户明确单线路覆盖时才保存。
+- `resolver_override`：只有用户明确单线路覆盖或导入时发现 per-proxy resolver 且用户选择保留时才保存。
+
+UI 建议：
+
+- 分组/订阅编辑面板增加 `Client`、`Server Resolver`、`Fallback`。
+- 支持“应用到继承线路”“覆盖全部线路”“只作为新默认值”三种操作。
+- 单线路编辑面板明确显示“继承订阅”或“覆盖订阅”，避免用户不知道当前线路到底用哪个 DoH/client。
+- 导入 Clash 时，顶层 `dns.proxy-server-nameserver` 或 `dns.nameserver` 应成为订阅默认 DoH；单 proxy `server-resolver` 默认记录为高级差异，不应自动把一个订阅切碎成多个行为不同的小订阅。
+
 ## 推荐剪贴板导出格式
 
 建议新增 `nekoray-multimapper-export-v1` 精简 JSON 包。它不是原始 Clash，也不是完整 NekoRay 数据库，只承载 MultiMapper 需要的信息。
@@ -108,7 +135,21 @@ MultiMapper 的关键语义：
   "exported_at": "2026-07-16T00:00:00+08:00",
   "groups": {
     "NEX": {
+      "source_type": "clash",
       "source": "subscription name or url hash",
+      "defaults": {
+        "client": {
+          "mode": "mihomo",
+          "value": "mihomo/1.19.28"
+        },
+        "server_resolver": {
+          "mode": "doh",
+          "doh_nameservers": [
+            "https://example.com/dns-query"
+          ],
+          "fallback": "strict"
+        }
+      },
       "doh_nameservers": [
         "https://example.com/dns-query"
       ],
@@ -127,10 +168,12 @@ MultiMapper 的关键语义：
           "settings": {},
           "streamSettings": {},
           "anytlsSettings": {},
+          "inherit": {
+            "client": true,
+            "server_resolver": true
+          },
           "nekoray": {
-            "profile_id": 12,
-            "client_mode": "mihomo",
-            "client_value": "mihomo/1.19.28"
+            "profile_id": 12
           }
         }
       ]
@@ -143,10 +186,14 @@ MultiMapper 的关键语义：
 
 - `format`：固定值，用于 MultiMapper 识别剪贴板内容。
 - `groups`：按 NekoRay 分组或订阅来源组织。导出“选中线路”时，也应保留每条线路原来的来源分组。
+- `source_type`：导入来源类型。Clash 订阅必须写 `clash`，用于 MultiMapper 和后续诊断识别默认 client 语义。
 - `source`：订阅 URL 不建议明文强制导出；可以导出组名、订阅名、URL hash，是否导出 URL 由后续 UI 选项决定。
-- `doh_nameservers`：来自 Clash 顶层 DNS 或单线路 provider resolver 的 HTTPS DoH。MultiMapper 最需要这个字段。
+- `defaults.client`：订阅级 client。Clash 订阅默认 `mihomo/1.19.28`，不因线路协议不是 AnyTLS 而消失。
+- `defaults.server_resolver`：订阅级 server resolver。优先来自 Clash 顶层 `dns.proxy-server-nameserver`，否则回退 `dns.nameserver`。
+- `doh_nameservers`：为兼容 MultiMapper 当前 group metadata，保留与 `defaults.server_resolver.doh_nameservers` 相同的 DoH 列表。后续 MultiMapper 支持 `defaults` 后可逐步收敛。
 - `subscription_info`：如果本项目保存了订阅流量/过期信息，可带上；没有则省略。
 - `items`：尽量贴近 MultiMapper 当前 `bridges.json` / `outbounds.json` item schema，降低 MultiMapper 侧接入成本。
+- `inherit`：声明该线路是否继承订阅级 client 和 resolver。默认 true；只有用户明确单线路覆盖时才写 override 字段。
 - `nekoray`：仅放辅助元数据，不作为 MultiMapper 生产配置的强依赖。
 
 不建议导出：
@@ -193,9 +240,51 @@ MultiMapper 的关键语义：
 - 识别剪贴板 JSON 中 `format == "nekoray-multimapper-export"`。
 - 让用户选择导入到 `bridges` 还是 `outbounds`。
 - 按 `groups` 恢复 `source_tag`、`source`、`doh_nameservers`、`subscription_info`。
+- 读取 `defaults.client` 和 `defaults.server_resolver`。在 MultiMapper 还未支持 `defaults` 前，可继续把 `doh_nameservers` 作为兼容字段使用。
 - 对 `items` 逐条复用现有 `add_nodes_from_subscription()` 或等价逻辑。
-- 对 AnyTLS 若未显式给出 client，继续使用当前 `mihomo/1.19.28` 默认。
-- 对 Nekoray 导出的 per-line provider DoH，如果和 group DoH 不一致，应优先保留更具体的 per-line DoH，或者拆分为独立 `source_tag`，避免同一 source 下解析器语义冲突。
+- 对 Clash 来源的 AnyTLS，若线路没有显式 override，使用 group `defaults.client`；非 AnyTLS 线路保留来源默认但不写无效 outbound 字段。
+- 对 Nekoray 导出的 per-line provider DoH，如果和 group DoH 不一致，应默认保持订阅统一值，并把 per-line 差异作为高级 override 提示；只有用户明确选择时才拆分 `source_tag` 或启用 override。
+
+## 解析为 IP 与多线路关系
+
+右键“解析为 IP”应从单一动作升级为可诊断的解析任务。原因是同一个 server 域名通过不同解析服务和不同出站路径会得到不同结果：
+
+- Clash 订阅自带 DoH 可能返回 provider 期望的入口 IP。
+- 公共 DNS/公共 DoH 可能返回通用公网入口。
+- 本机系统 DNS 可能被 Windows、运营商、旧版 NekoRay TUN 或其它代理影响。
+- 通过某条代理线路访问 DoH 时，DoH endpoint 看到的是代理出口网络，而不是本机网络。
+
+建议 UI 拆成两个下拉维度。
+
+解析服务：
+
+- `订阅 DoH`：当前线路所属订阅默认 DoH。
+- `线路覆盖 DoH`：单线路 override DoH。
+- `路由 Remote DNS DoH`。
+- `路由 Direct DNS DoH`。
+- `公共 DoH`。
+- `系统 DNS`。
+- `自定义 DoH`。
+
+出站路径：
+
+- `不通过本项目代理`：解析请求不使用本项目 core 的主端口或辅助端口；但这不保证绕过系统级 TUN。
+- `通过主线路`：使用当前主线路端口发起 DoH 请求。
+- `通过辅助线路`：多线路运行后，列出每个已启动辅助端口。
+- `通过临时线路`：后续高级能力，为未运行线路临时启动 resolver-only 配置。
+
+约束：
+
+- `系统 DNS` 只能配合“不通过本项目代理”。系统 resolver 没有可靠的“指定某条代理线路”语义。
+- 通过代理解析时优先只支持 DoH，不做 UDP DNS over SOCKS 的隐式兼容。
+- 如果用户选择通过代理解析，必须明确选择具体线路，不能默认套主线路。
+- 解析结果必须显示解析服务、DoH URL、出站路径、代理线路名称、监听端口、全部 IP、首选 IP、耗时和错误信息。
+
+默认建议：
+
+- Clash 订阅线路默认使用“订阅 DoH + 不通过本项目代理”。
+- 如果用户正在诊断 provider DoH 在不同出口下的差异，应切换到“订阅 DoH + 通过指定主/辅助线路”。
+- 多线路辅助端口完成后，解析对话框必须实时读取主线路和辅助线路列表；所选线路停止时任务应失败，不应自动切换到其它线路。
 
 ## 多线路启动现状
 
@@ -310,10 +399,13 @@ TUN 整改建议：
 
 阶段 1：导出契约落地。
 
+- 新增订阅/分组层级默认值模型：`source_type`、`defaults.client`、`defaults.server_resolver`。
+- Clash 订阅导入时，无论内部线路协议是什么，订阅默认 client 都是 `mihomo/1.19.28`。
+- 订阅层级 UI 支持统一查看、修改和批量应用 client/DoH/fallback。
 - 新增 `nekoray-multimapper-export-v1` 构造函数。
 - 支持选中线路导出到剪贴板。
 - 支持当前组/订阅导出到剪贴板。
-- 导出 provider DoH、AnyTLS client、source_tag/source，默认不导出订阅 URL。
+- 导出订阅级 provider DoH、订阅级 client、source_type、source_tag/source、单线路 override，默认不导出订阅 URL。
 - 保留现有普通链接和 Neko 链接导出入口。
 
 阶段 2：给 MultiMapper 出接口文档。
@@ -328,6 +420,7 @@ TUN 整改建议：
 - 配置生成器支持主线路加多辅助线路。
 - UI 支持启动/停止辅助端口和复制代理地址。
 - Clash API 和流量统计识别辅助出站。
+- 右键“解析为 IP”支持选择主线路或具体辅助线路作为 DoH 请求出站路径。
 
 阶段 4：无偷跑重启。
 
@@ -340,17 +433,25 @@ TUN 整改建议：
 
 导出验收：
 
-- 从 Clash AnyTLS 订阅导入后，选中多条线路导出到剪贴板，JSON 中包含 `format`、`version`、`groups`、`items`。
-- AnyTLS 项包含协议字段、TLS 字段、idle-session 字段和 `mihomo/1.19.28` 或自定义 client。
-- 来自 Clash 的 DoH 出现在 `doh_nameservers`。
+- 从 Clash 订阅导入后，选中多条线路导出到剪贴板，JSON 中包含 `format`、`version`、`groups`、`defaults`、`items`。
+- group 中 `source_type` 为 `clash`，`defaults.client.value` 为 `mihomo/1.19.28`，即使导出的线路并非 AnyTLS。
+- AnyTLS 项包含协议字段、TLS 字段、idle-session 字段，并默认 `inherit.client=true`。
+- 来自 Clash 的订阅 DoH 出现在 `defaults.server_resolver.doh_nameservers` 和兼容字段 `doh_nameservers`。
 - 导出的精简包不包含 Clash `proxy-groups`、`rules`、dashboard、health-check。
 
 MultiMapper 配合验收：
 
 - MultiMapper 能从剪贴板识别精简包。
-- 导入后 `doh_nameservers` 按 `source_tag` 落入 group metadata。
+- 导入后 `doh_nameservers` 按 `source_tag` 落入 group metadata；后续支持 `defaults` 后，应优先读取 `defaults.server_resolver`。
 - RouteFluent sing-box 生成配置时，域名 server 的 outbound 带 `domain_resolver`。
-- AnyTLS outbound 的 `client` 为 `mihomo/1.19.28` 或用户指定 custom。
+- Clash 来源 AnyTLS outbound 的 `client` 为 group 默认 `mihomo/1.19.28` 或用户指定 custom；非 AnyTLS 不写无效 client 字段。
+
+解析验收：
+
+- 同一线路可分别使用订阅 DoH、公共 DoH、系统 DNS 解析，并并列显示结果差异。
+- 通过代理解析时，必须能选择主线路或某个辅助线路，结果中显示线路名称和端口。
+- 没有运行线路时，选择“通过代理”会明确报错或提示先启动线路，不会静默回退。
+- 解析完成后仍只允许用户显式选择替换、复制新增或复制结果。
 
 多线路验收：
 
