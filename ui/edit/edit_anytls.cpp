@@ -21,6 +21,11 @@ EditAnyTLS::EditAnyTLS(QWidget *parent) : QWidget(parent), ui(new Ui::EditAnyTLS
     ui->setupUi(this);
     ui->utlsFingerprint->addItems(Preset::SingBox::UtlsFingerPrint);
     ui->anytlsClientMode->addItems({"native", "mihomo", "custom"});
+    const auto clientHelp = tr("native omits sing-box AnyTLS client field. mihomo sends mihomo/1.19.28. custom sends the value below.");
+    ui->anytlsClientMode_l->setToolTip(clientHelp);
+    ui->anytlsClientMode->setToolTip(clientHelp);
+    ui->anytlsClientValue_l->setToolTip(tr("Used only when Client Identity is custom."));
+    ui->anytlsClientValue->setToolTip(tr("1..128 visible ASCII characters without spaces."));
     connect(ui->anytlsClientMode, &QComboBox::currentTextChanged, this, [this](const QString &) {
         ui->anytlsClientValue->setEnabled(ui->anytlsClientMode->currentText() == "custom");
     });

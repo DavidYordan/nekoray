@@ -62,6 +62,12 @@ DialogEditProfile::DialogEditProfile(const QString &_type, int profileOrGroupId,
     ui->setupUi(this);
     ui->dialog_layout->setAlignment(ui->left, Qt::AlignTop);
     ui->serverResolverMode->addItems({"local", "doh"});
+    const auto resolverHelp = tr("Controls how sing-box resolves this profile's server address. Clash subscription DoH is imported here.");
+    ui->serverResolverMode_l->setToolTip(resolverHelp);
+    ui->serverResolverMode->setToolTip(resolverHelp);
+    ui->serverResolverDohUpstreams_l->setToolTip(tr("HTTPS DoH upstreams, one per line. Used for this profile's server address only."));
+    ui->serverResolverDohUpstreams->setToolTip(tr("HTTPS DoH upstreams, one per line. Imported Clash provider resolvers are visible here."));
+    ui->serverResolverAllowLocalFallback->setToolTip(tr("Allow local system resolver if provider DoH is unavailable at runtime."));
     connect(ui->serverResolverMode, &QComboBox::currentTextChanged, this, [=](const QString &txt) {
         const auto enableDoh = txt == "doh";
         ui->serverResolverDohUpstreams->setEnabled(enableDoh);

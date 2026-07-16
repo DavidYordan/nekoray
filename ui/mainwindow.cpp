@@ -1,6 +1,7 @@
 #include "./ui_mainwindow.h"
 #include "mainwindow.h"
 
+#include "fmt/includes.h"
 #include "fmt/Preset.hpp"
 #include "db/ProfileFilter.hpp"
 #include "db/ConfigBuilder.hpp"
@@ -47,6 +48,331 @@
 #include <QMessageBox>
 #include <QDir>
 #include <QFileInfo>
+#include <QSet>
+#include <QEventLoop>
+#include <QHostAddress>
+#include <QHostInfo>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
+
+#include <cstring>
+
+namespace {
+    enum class ResolveServerMode {
+        Auto,
+        ProviderDoh,
+        RemoteDoh,
+        DirectDoh,
+        System,
+    };
+
+    struct ServerResolveResult {
+        std::shared_ptr<NekoGui::ProxyEntity> profile;
+        QString originalAddress;
+        QString resolvedAddress;
+        QStringList allAddresses;
+        QString method;
+        QString error;
+        bool skipped = false;
+
+        bool ok() const {
+            return !resolvedAddress.isEmpty() && error.isEmpty() && !skipped;
+        }
+    };
+
+    QStringList splitResolverLines(const QString &raw) {
+        auto normalized = raw;
+        normalized.replace(",", "\n");
+        QStringList out;
+        QSet<QString> seen;
+        for (const auto &line: SplitLinesSkipSharp(normalized)) {
+            const auto value = line.trimmed();
+            if (value.isEmpty() || seen.contains(value)) continue;
+            seen.insert(value);
+            out << value;
+        }
+        return out;
+    }
+
+    QStringList httpsDohOnly(const QStringList &items) {
+        QStringList out;
+        for (const auto &item: items) {
+            const QUrl url(item.trimmed());
+            if (url.isValid() && url.scheme().toLower() == "https" && !url.host().isEmpty()) out << item.trimmed();
+        }
+        return out;
+    }
+
+    void append16(QByteArray &out, quint16 value) {
+        out.append(char((value >> 8) & 0xff));
+        out.append(char(value & 0xff));
+    }
+
+    quint16 read16(const QByteArray &data, int offset) {
+        return (quint8(data[offset]) << 8) | quint8(data[offset + 1]);
+    }
+
+    QByteArray buildDnsQuery(const QString &domain, quint16 qtype) {
+        QByteArray out;
+        append16(out, 0x4e4b);
+        append16(out, 0x0100);
+        append16(out, 1);
+        append16(out, 0);
+        append16(out, 0);
+        append16(out, 0);
+
+        for (const auto &label: domain.split(".", Qt::SkipEmptyParts)) {
+            auto bytes = label.toUtf8();
+            if (bytes.size() > 63) return {};
+            out.append(char(bytes.size()));
+            out.append(bytes);
+        }
+        out.append(char(0));
+        append16(out, qtype);
+        append16(out, 1);
+        return out;
+    }
+
+    bool skipDnsName(const QByteArray &data, int &offset) {
+        while (offset < data.size()) {
+            const auto len = quint8(data[offset++]);
+            if (len == 0) return true;
+            if ((len & 0xc0) == 0xc0) {
+                if (offset >= data.size()) return false;
+                offset++;
+                return true;
+            }
+            if ((len & 0xc0) != 0) return false;
+            offset += len;
+            if (offset > data.size()) return false;
+        }
+        return false;
+    }
+
+    QStringList parseDnsAddresses(const QByteArray &data, quint16 qtype) {
+        QStringList out;
+        if (data.size() < 12) return out;
+        const auto qdCount = read16(data, 4);
+        const auto anCount = read16(data, 6);
+        int offset = 12;
+        for (int i = 0; i < qdCount; i++) {
+            if (!skipDnsName(data, offset)) return {};
+            offset += 4;
+            if (offset > data.size()) return {};
+        }
+        for (int i = 0; i < anCount; i++) {
+            if (!skipDnsName(data, offset)) return out;
+            if (offset + 10 > data.size()) return out;
+            const auto type = read16(data, offset);
+            const auto klass = read16(data, offset + 2);
+            const auto rdLength = read16(data, offset + 8);
+            offset += 10;
+            if (offset + rdLength > data.size()) return out;
+            if (klass == 1 && type == qtype) {
+                if (type == 1 && rdLength == 4) {
+                    out << QStringLiteral("%1.%2.%3.%4")
+                               .arg(quint8(data[offset]))
+                               .arg(quint8(data[offset + 1]))
+                               .arg(quint8(data[offset + 2]))
+                               .arg(quint8(data[offset + 3]));
+                } else if (type == 28 && rdLength == 16) {
+                    Q_IPV6ADDR addr{};
+                    memcpy(addr.c, data.constData() + offset, 16);
+                    out << QHostAddress(addr).toString();
+                }
+            }
+            offset += rdLength;
+        }
+        return out;
+    }
+
+    QStringList queryDoh(const QUrl &url, const QString &domain, quint16 qtype, QString *error) {
+        const auto query = buildDnsQuery(domain, qtype);
+        if (query.isEmpty()) {
+            if (error != nullptr) *error = "invalid domain name";
+            return {};
+        }
+
+        QNetworkAccessManager manager;
+        QNetworkRequest request(url);
+        request.setHeader(QNetworkRequest::ContentTypeHeader, "application/dns-message");
+        request.setRawHeader("Accept", "application/dns-message");
+        auto reply = manager.post(request, query);
+
+        QTimer timer;
+        timer.setSingleShot(true);
+        timer.setInterval(10000);
+        QObject::connect(&timer, &QTimer::timeout, reply, &QNetworkReply::abort);
+        QEventLoop loop;
+        QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+        timer.start();
+        loop.exec();
+        timer.stop();
+
+        if (reply->error() != QNetworkReply::NoError) {
+            if (error != nullptr) *error = reply->errorString();
+            reply->deleteLater();
+            return {};
+        }
+        const auto body = reply->readAll();
+        reply->deleteLater();
+        return parseDnsAddresses(body, qtype);
+    }
+
+    QStringList resolveViaDoh(const QString &domain, const QStringList &upstreams, QString *method, QString *error) {
+        const auto dohUpstreams = httpsDohOnly(upstreams);
+        if (dohUpstreams.isEmpty()) {
+            if (error != nullptr) *error = "no HTTPS DoH upstream";
+            return {};
+        }
+
+        QString lastError;
+        for (const auto &upstream: dohUpstreams) {
+            const QUrl url(upstream);
+            QString err;
+            auto addresses = queryDoh(url, domain, 1, &err);
+            if (addresses.isEmpty()) addresses = queryDoh(url, domain, 28, &err);
+            if (!addresses.isEmpty()) {
+                if (method != nullptr) *method = "DoH " + upstream;
+                return addresses;
+            }
+            if (!err.isEmpty()) lastError = upstream + ": " + err;
+        }
+        if (error != nullptr) *error = lastError.isEmpty() ? "no DNS answers" : lastError;
+        return {};
+    }
+
+    QStringList resolveViaSystem(const QString &domain, QString *method, QString *error) {
+        const auto host = QHostInfo::fromName(domain);
+        if (host.error() != QHostInfo::NoError) {
+            if (error != nullptr) *error = host.errorString();
+            return {};
+        }
+        QStringList v4;
+        QStringList other;
+        for (const auto &address: host.addresses()) {
+            if (address.protocol() == QAbstractSocket::IPv4Protocol) {
+                v4 << address.toString();
+            } else if (address.protocol() == QAbstractSocket::IPv6Protocol) {
+                other << address.toString();
+            }
+        }
+        if (method != nullptr) *method = "System";
+        return !v4.isEmpty() ? v4 : other;
+    }
+
+    bool profileCanResolve(const std::shared_ptr<NekoGui::ProxyEntity> &profile, QString *reason = nullptr) {
+        if (profile == nullptr || profile->bean == nullptr) {
+            if (reason != nullptr) *reason = "empty profile";
+            return false;
+        }
+        if (profile->type == "chain" || profile->type == "custom" || profile->type == "naive") {
+            if (reason != nullptr) *reason = "unsupported profile type";
+            return false;
+        }
+        if (profile->bean->serverAddress.trimmed().isEmpty()) {
+            if (reason != nullptr) *reason = "empty server address";
+            return false;
+        }
+        if (IsIpAddress(profile->bean->serverAddress)) {
+            if (reason != nullptr) *reason = "already an IP address";
+            return false;
+        }
+        return true;
+    }
+
+    QStringList resolverUpstreamsForMode(const std::shared_ptr<NekoGui::ProxyEntity> &profile, ResolveServerMode mode) {
+        if (mode == ResolveServerMode::ProviderDoh) return splitResolverLines(profile->bean->serverResolverDohUpstreams);
+        if (mode == ResolveServerMode::RemoteDoh) return splitResolverLines(NekoGui::dataStore->routing->remote_dns);
+        if (mode == ResolveServerMode::DirectDoh) return splitResolverLines(NekoGui::dataStore->routing->direct_dns);
+        return {};
+    }
+
+    ServerResolveResult resolveProfileServer(const std::shared_ptr<NekoGui::ProxyEntity> &profile, ResolveServerMode mode) {
+        ServerResolveResult result;
+        result.profile = profile;
+        if (profile != nullptr && profile->bean != nullptr) result.originalAddress = profile->bean->serverAddress;
+
+        QString skipReason;
+        if (!profileCanResolve(profile, &skipReason)) {
+            result.skipped = true;
+            result.error = skipReason;
+            return result;
+        }
+
+        QString method;
+        QString error;
+        QStringList addresses;
+        if (mode == ResolveServerMode::Auto) {
+            const auto providerUpstreams = splitResolverLines(profile->bean->serverResolverDohUpstreams);
+            if (!providerUpstreams.isEmpty()) addresses = resolveViaDoh(result.originalAddress, providerUpstreams, &method, &error);
+            if (addresses.isEmpty()) addresses = resolveViaSystem(result.originalAddress, &method, &error);
+        } else if (mode == ResolveServerMode::System) {
+            addresses = resolveViaSystem(result.originalAddress, &method, &error);
+        } else {
+            addresses = resolveViaDoh(result.originalAddress, resolverUpstreamsForMode(profile, mode), &method, &error);
+        }
+
+        result.method = method;
+        result.allAddresses = addresses;
+        if (!addresses.isEmpty()) {
+            result.resolvedAddress = addresses.first();
+        } else {
+            result.error = error.isEmpty() ? "no address resolved" : error;
+        }
+        return result;
+    }
+
+    void applyResolvedServerAddress(const std::shared_ptr<NekoGui::ProxyEntity> &profile, const QString &address) {
+        if (profile == nullptr || profile->bean == nullptr || address.isEmpty()) return;
+        const auto domain = profile->bean->serverAddress;
+        profile->bean->serverAddress = address;
+
+        if (auto stream = NekoGui_fmt::GetStreamSettings(profile->bean.get()); stream != nullptr) {
+            if (stream->security == "tls" && stream->sni.isEmpty()) stream->sni = domain;
+            if (stream->network == "ws" && stream->host.isEmpty()) stream->host = domain;
+        }
+        if (profile->type == "anytls") {
+            auto bean = profile->AnyTLSBean();
+            if (bean->sni.isEmpty()) bean->sni = domain;
+        } else if (profile->type == "hysteria2" || profile->type == "tuic") {
+            auto bean = profile->QUICBean();
+            if (bean->sni.isEmpty()) bean->sni = domain;
+        }
+    }
+
+    std::shared_ptr<NekoGui::ProxyEntity> cloneProfileForResolvedAddress(const std::shared_ptr<NekoGui::ProxyEntity> &profile, const QString &address) {
+        if (profile == nullptr || profile->bean == nullptr) return nullptr;
+        auto clone = NekoGui::ProfileManager::NewProxyEntity(profile->type);
+        clone->FromJson(profile->ToJson({"id", "yc", "report", "traffic"}));
+        clone->id = -1;
+        clone->latency = 0;
+        clone->full_test_report = "";
+        if (!clone->bean->name.isEmpty()) clone->bean->name += " [IP]";
+        applyResolvedServerAddress(clone, address);
+        return clone;
+    }
+
+    QString formatResolveResults(const QList<ServerResolveResult> &results) {
+        QStringList lines;
+        for (const auto &result: results) {
+            const auto name = result.profile != nullptr && result.profile->bean != nullptr
+                                  ? result.profile->bean->DisplayTypeAndName()
+                                  : QStringLiteral("<unknown>");
+            if (result.ok()) {
+                lines << QStringLiteral("[OK] #%1 %2\n  %3 -> %4\n  method: %5\n  all: %6")
+                             .arg(result.profile->id)
+                             .arg(name)
+                             .arg(result.originalAddress, result.resolvedAddress, result.method, result.allAddresses.join(", "));
+            } else {
+                lines << QStringLiteral("[%1] %2\n  %3\n  reason: %4")
+                             .arg(result.skipped ? "SKIP" : "FAIL", name, result.originalAddress, result.error);
+            }
+        }
+        return lines.join("\n\n");
+    }
+} // namespace
 
 void UI_InitMainWindow() {
     mainwindow = new MainWindow;
@@ -1426,23 +1752,85 @@ void MainWindow::on_menu_resolve_domain_triggered() {
     auto profiles = get_selected_or_group();
     if (profiles.isEmpty()) return;
 
-    if (QMessageBox::question(this,
-                              tr("Confirmation"),
-                              tr("Resolving domain to IP, if support.")) != QMessageBox::StandardButton::Yes) {
-        return;
-    }
+    QStringList choices{
+        tr("Auto: profile DoH, then system"),
+        tr("Profile DoH only"),
+        tr("Routing Remote DNS DoH"),
+        tr("Routing Direct DNS DoH"),
+        tr("System resolver"),
+    };
+    bool ok = false;
+    auto choice = QInputDialog::getItem(this,
+                                        tr("Resolve domain"),
+                                        tr("Resolver"),
+                                        choices,
+                                        0,
+                                        false,
+                                        &ok);
+    if (!ok) return;
+
+    ResolveServerMode mode = ResolveServerMode::Auto;
+    if (choice == choices[1]) mode = ResolveServerMode::ProviderDoh;
+    if (choice == choices[2]) mode = ResolveServerMode::RemoteDoh;
+    if (choice == choices[3]) mode = ResolveServerMode::DirectDoh;
+    if (choice == choices[4]) mode = ResolveServerMode::System;
+
     if (mw_sub_updating) return;
     mw_sub_updating = true;
-    NekoGui::dataStore->resolve_count = profiles.count();
+    QApplication::setOverrideCursor(Qt::WaitCursor);
 
+    QList<ServerResolveResult> results;
     for (const auto &profile: profiles) {
-        profile->bean->ResolveDomainToIP([=] {
-            profile->Save();
-            if (--NekoGui::dataStore->resolve_count != 0) return;
-            refresh_proxy_list();
-            mw_sub_updating = false;
-        });
+        results << resolveProfileServer(profile, mode);
     }
+
+    QApplication::restoreOverrideCursor();
+    mw_sub_updating = false;
+
+    int resolvedCount = 0;
+    for (const auto &result: results) {
+        if (result.ok()) resolvedCount++;
+    }
+
+    QMessageBox msg(this);
+    msg.setIcon(resolvedCount > 0 ? QMessageBox::Information : QMessageBox::Warning);
+    msg.setWindowTitle(tr("Resolve domain"));
+    msg.setText(tr("Resolved %1 of %2 profile(s).").arg(resolvedCount).arg(results.count()));
+    msg.setDetailedText(formatResolveResults(results));
+    auto replaceButton = msg.addButton(tr("Replace"), QMessageBox::AcceptRole);
+    auto copyNewButton = msg.addButton(tr("Copy as new"), QMessageBox::ActionRole);
+    auto copyTextButton = msg.addButton(tr("Copy results"), QMessageBox::ActionRole);
+    msg.addButton(QMessageBox::Cancel);
+    replaceButton->setEnabled(resolvedCount > 0);
+    copyNewButton->setEnabled(resolvedCount > 0);
+    msg.exec();
+
+    const auto clicked = msg.clickedButton();
+    if (clicked == copyTextButton) {
+        QApplication::clipboard()->setText(formatResolveResults(results));
+        return;
+    }
+    if (clicked != replaceButton && clicked != copyNewButton) {
+        return;
+    }
+
+    int changedCount = 0;
+    for (const auto &result: results) {
+        if (!result.ok()) continue;
+        if (clicked == replaceButton) {
+            applyResolvedServerAddress(result.profile, result.resolvedAddress);
+            result.profile->Save();
+            changedCount++;
+        } else if (clicked == copyNewButton) {
+            auto clone = cloneProfileForResolvedAddress(result.profile, result.resolvedAddress);
+            if (clone != nullptr && NekoGui::profileManager->AddProfile(clone, result.profile->gid)) changedCount++;
+        }
+    }
+
+    refresh_proxy_list();
+    show_log_impl(clicked == replaceButton
+                      ? tr("Resolved and replaced %1 profile(s).").arg(changedCount)
+                      : tr("Resolved and copied %1 profile(s).").arg(changedCount));
 }
 
 void MainWindow::on_proxyListTable_customContextMenuRequested(const QPoint &pos) {
