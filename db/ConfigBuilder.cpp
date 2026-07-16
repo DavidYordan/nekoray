@@ -415,7 +415,7 @@ namespace NekoGui {
         }
 
         // BuildChain
-        QString chainTagOut = BuildChainInternal(0, ents, status);
+        QString chainTagOut = BuildChainInternal(chainId, ents, status);
 
         // Chain ent traffic stat
         if (ents.length() > 1) {
