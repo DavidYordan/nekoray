@@ -16,6 +16,8 @@
 #include <QDialogButtonBox>
 #include <QSet>
 
+#include <algorithm>
+
 // ext core
 
 std::list<std::shared_ptr<NekoGui_sys::ExternalProcess>> CreateExtCFromExtR(const std::list<std::shared_ptr<NekoGui_fmt::ExternalBuildResult>> &extRs, bool start) {
@@ -122,7 +124,7 @@ void MainWindow::speedtest_current_group(int mode, bool test_group) {
     runOnNewThread([this, profiles, mode, full_test_flags]() {
         QMutex lock_write;
         QMutex lock_return;
-        int threadN = NekoGui::dataStore->test_concurrent;
+        int threadN = std::max(1, NekoGui::dataStore->test_concurrent);
         int threadN_finished = 0;
         auto profiles_test = profiles; // copy
 
@@ -213,7 +215,16 @@ void MainWindow::speedtest_current_group(int mode, bool test_group) {
                         extSem.acquire();
                     }
                     //
-                    if (!rpcOK) return;
+                    if (!rpcOK) {
+                        profile->latency = -1;
+                        profile->full_test_report = QObject::tr("gRPC test failed.");
+                        profile->Save();
+                        auto profileId = profile->id;
+                        runOnUiThread([this, profileId] {
+                            refresh_proxy_list(profileId);
+                        });
+                        continue;
+                    }
 
                     if (result.error().empty()) {
                         profile->latency = result.ms();

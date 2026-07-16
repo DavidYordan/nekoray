@@ -1,64 +1,57 @@
-在 Windows 下编译 Nekoray
+# Windows 构建
 
-### git clone 源码
+本项目的 Windows 正式构建入口是仓库根目录的：
 
-```
-git clone https://github.com/MatsuriDayo/nekoray.git --recursive
-```
-
-### 安装 Visual Studio
-
-从微软官网安装，可以使用 2019 和 2022 版本，安装 Win32 C++ 开发环境。
-
-安装好后可以在「开始」菜单找到 `x64 Native Tools Command Prompt`
-
-本文之后的命令均在该 cmd 内执行。`cmake` `ninja` 等工具使用 VS 自带的即可。
-
-### 下载 Qt SDK
-
-目前 Windows Release 使用的版本是 Qt 6.5.x
-
-下载解压后，将 bin 目录添加到环境变量。
-
-#### Release 编译用到的 Qt 包下载 (MSVC2019 x86_64)
-
-https://github.com/MatsuriDayo/nekoray_qt_runtime/releases/download/20220503/Qt6.5.0-Windows-x86_64-VS2022-17.5.5-20230507.7z
-
-#### 官方签名版 Qt 5.15.2 （可选，已知有内存泄漏的BUG）
-
-在此下载 `qtbase` `qtsvg` `qttools` 的包并解压到同一个目录。
-
-https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt5_5152/qt.qt5.5152.win64_msvc2019_64/
-
-### C++ 部分编译
-
-#### 编译安装 C/C++ 依赖
-
-（这一步可能要挂梯）
-
-```shell
-bash ./libs/build_deps_all.sh
+```powershell
+.\build_windows_package.ps1
 ```
 
-目前只有 bash 脚本，没有批处理或 powershell，如果 Windows 没有带 bash 建议自行安装。
+不要再使用上游旧文档中的手工流程，例如手工把 Qt/MinGW bin 加入 PATH、手工运行 `windeployqt`、手工复制核心文件。这些动作必须由脚本统一完成。
 
-CMake 参数等细节与 Linux 大同小异，有问题可以参照 Build_Linux 文档。
+## 构建产物
 
-#### 编译本体
+脚本完成后会生成：
 
-请根据你的 QT Sdk 的位置替换命令
+- 部署目录：`deployment/windows64`
+- 正式 zip：`deployment/nekoray-<version>-windows64.zip`
 
-```shell
-mkdir build
-cd build
-cmake -GNinja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=D:/path/to/qt/5.15.2/msvc2019_64 ..
-ninja
+`deployment/windows64` 用于本机测试，会在构建后恢复本机用户配置。
+
+正式 zip 默认不携带本机 `config` 目录，避免把测试订阅、账号、分组等私人数据放入发布包。
+
+## 配置保留规则
+
+脚本会自动执行以下步骤：
+
+1. 只查找并关闭 `deployment/windows64` 下正在运行的本项目进程。
+2. 不触碰 `D:\Program Files\nekoray` 等生产安装目录。
+3. 备份 `deployment/windows64/config`。
+4. 删除并重建 `deployment/windows64`。
+5. 构建 GUI、RouteFluent patched sing-box、`nekobox_core.exe`、`updater.exe`。
+6. 生成 zip。
+7. 把备份的 `config` 恢复回 `deployment/windows64/config`。
+
+如果构建中途失败，脚本也会尽量恢复已备份的配置。
+
+## 本地依赖
+
+依赖应尽量保持在项目目录内：
+
+- Qt：`qtsdk/qt/...`
+- MinGW：`qtsdk/tools/Tools/...`
+- C/C++ 依赖：`libs/deps/built`
+- RouteFluent patched sing-box：`third_party/routefluent-sing-box`
+- 临时工具：`tools`
+
+缺少依赖时可以下载到本项目目录，不应污染全局环境。
+
+## 常用参数
+
+```powershell
+.\build_windows_package.ps1
+.\build_windows_package.ps1 -SkipGoBuild
+.\build_windows_package.ps1 -SkipGuiBuild
+.\build_windows_package.ps1 -RefreshGeodata
 ```
 
-编译完成后得到 `nekobox.exe`
-
-最后运行 `windeployqt nekobox.exe` 自动复制所需 DLL 等文件到当前目录
-
-### Go 部分编译
-
-请看 [Build_Core.md](./Build_Core.md)
+通常使用无参数构建即可。

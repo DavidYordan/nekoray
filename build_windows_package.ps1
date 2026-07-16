@@ -94,6 +94,96 @@ function Remove-SafeDirectory([string] $Path, [string] $AllowedRoot) {
     }
 }
 
+function Get-PackageProcessInfos([string] $PackageDir) {
+    $packageRoot = [System.IO.Path]::GetFullPath($PackageDir).TrimEnd('\')
+    $knownProcessNames = @(
+        "nekobox.exe",
+        "nekobox_core.exe",
+        "nekoray.exe",
+        "nekoray_core.exe",
+        "launcher.exe",
+        "updater.exe"
+    )
+
+    @(Get-CimInstance Win32_Process |
+        Where-Object {
+            $_.ExecutablePath -and
+            $knownProcessNames -contains [System.IO.Path]::GetFileName($_.ExecutablePath).ToLowerInvariant() -and
+            [System.IO.Path]::GetFullPath($_.ExecutablePath).StartsWith($packageRoot + '\', [System.StringComparison]::OrdinalIgnoreCase)
+        })
+}
+
+function Stop-PackageProcesses([string] $PackageDir) {
+    $processInfos = @(Get-PackageProcessInfos $PackageDir)
+    if ($processInfos.Count -eq 0) {
+        return
+    }
+
+    Write-Step "Close running package instance"
+    $processInfos |
+        Select-Object @{Name = "ProcessName"; Expression = { $_.Name } }, ProcessId, ExecutablePath |
+        Format-Table -AutoSize
+
+    foreach ($info in $processInfos) {
+        try {
+            $p = Get-Process -Id $info.ProcessId -ErrorAction Stop
+            if ($p.MainWindowHandle -ne 0) {
+                [void] $p.CloseMainWindow()
+            }
+        } catch {
+            Write-Warning "Could not request graceful close for process $($info.ProcessId): $($_.Exception.Message)"
+        }
+    }
+
+    $deadline = (Get-Date).AddSeconds(5)
+    do {
+        Start-Sleep -Milliseconds 250
+        $remaining = @(Get-PackageProcessInfos $PackageDir)
+    } while ($remaining.Count -gt 0 -and (Get-Date) -lt $deadline)
+
+    if ($remaining.Count -gt 0) {
+        Write-Warning "Package instance did not exit after close request; forcing only processes under $PackageDir."
+        foreach ($info in $remaining) {
+            Stop-Process -Id $info.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    $deadline = (Get-Date).AddSeconds(10)
+    do {
+        Start-Sleep -Milliseconds 250
+        $remaining = @(Get-PackageProcessInfos $PackageDir)
+    } while ($remaining.Count -gt 0 -and (Get-Date) -lt $deadline)
+
+    if ($remaining.Count -gt 0) {
+        Fail "Could not stop package process(es): $($remaining.ProcessId -join ', ')"
+    }
+}
+
+function Backup-PackageConfig([string] $PackageConfigDir, [string] $PackageConfigBackupDir, [string] $DeployRoot) {
+    Remove-SafeDirectory $PackageConfigBackupDir $DeployRoot
+    if (!(Test-Path -LiteralPath $PackageConfigDir -PathType Container)) {
+        Write-Host "No existing package config to preserve."
+        return
+    }
+
+    Copy-Item -LiteralPath $PackageConfigDir -Destination $PackageConfigBackupDir -Recurse -Force
+    $fileCount = (Get-ChildItem -LiteralPath $PackageConfigBackupDir -Recurse -File -Force | Measure-Object).Count
+    Write-Host "Preserved package config: $PackageConfigBackupDir ($fileCount file(s))"
+}
+
+function Restore-PackageConfig([string] $PackageConfigDir, [string] $PackageConfigBackupDir, [string] $PackageDir, [string] $DeployRoot) {
+    if (!(Test-Path -LiteralPath $PackageConfigBackupDir -PathType Container)) {
+        return
+    }
+
+    New-Item -ItemType Directory -Force -Path $PackageDir | Out-Null
+    Remove-SafeDirectory $PackageConfigDir $PackageDir
+    Copy-Item -LiteralPath $PackageConfigBackupDir -Destination $PackageConfigDir -Recurse -Force
+    $fileCount = (Get-ChildItem -LiteralPath $PackageConfigDir -Recurse -File -Force | Measure-Object).Count
+    Write-Host "Restored package config: $PackageConfigDir ($fileCount file(s))"
+    Remove-SafeDirectory $PackageConfigBackupDir $DeployRoot
+}
+
 function Find-QtDir {
     param([string] $Requested)
     if (![string]::IsNullOrWhiteSpace($Requested)) {
@@ -307,10 +397,8 @@ try {
     $env:CGO_ENABLED = "0"
 
     New-Item -ItemType Directory -Force -Path $DeployRoot | Out-Null
-    Remove-SafeDirectory $PackageConfigBackupDir $DeployRoot
-    if (Test-Path -LiteralPath $PackageConfigDir -PathType Container) {
-        Copy-Item -LiteralPath $PackageConfigDir -Destination $PackageConfigBackupDir -Recurse -Force
-    }
+    Stop-PackageProcesses $PackageDir
+    Backup-PackageConfig $PackageConfigDir $PackageConfigBackupDir $DeployRoot
     Remove-SafeDirectory $PackageDir $DeployRoot
     Remove-SafeDirectory $ZipStageRoot $DeployRoot
     New-Item -ItemType Directory -Force -Path $PackageDir | Out-Null
@@ -558,15 +646,22 @@ try {
     }
 
     Remove-SafeDirectory $ZipStageRoot $DeployRoot
-    if (Test-Path -LiteralPath $PackageConfigBackupDir -PathType Container) {
-        Copy-Item -LiteralPath $PackageConfigBackupDir -Destination $PackageConfigDir -Recurse -Force
-    }
-    Remove-SafeDirectory $PackageConfigBackupDir $DeployRoot
+    Restore-PackageConfig $PackageConfigDir $PackageConfigBackupDir $PackageDir $DeployRoot
 
     Write-Step "Done"
     Write-Host "Folder: $PackageDir"
     Write-Host "Zip:    $ZipPath"
 } finally {
+    if ((Get-Variable -Name PackageConfigBackupDir -Scope Local -ErrorAction SilentlyContinue) -and
+        (Get-Variable -Name PackageConfigDir -Scope Local -ErrorAction SilentlyContinue) -and
+        (Get-Variable -Name PackageDir -Scope Local -ErrorAction SilentlyContinue) -and
+        (Get-Variable -Name DeployRoot -Scope Local -ErrorAction SilentlyContinue)) {
+        try {
+            Restore-PackageConfig $PackageConfigDir $PackageConfigBackupDir $PackageDir $DeployRoot
+        } catch {
+            Write-Warning "Could not restore preserved package config: $($_.Exception.Message)"
+        }
+    }
     if (Get-Variable -Name oldPath -Scope Local -ErrorAction SilentlyContinue) { $env:PATH = $oldPath }
     if (Get-Variable -Name oldGoos -Scope Local -ErrorAction SilentlyContinue) { $env:GOOS = $oldGoos }
     if (Get-Variable -Name oldGoarch -Scope Local -ErrorAction SilentlyContinue) { $env:GOARCH = $oldGoarch }
