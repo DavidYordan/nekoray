@@ -20,8 +20,8 @@ namespace {
 EditAnyTLS::EditAnyTLS(QWidget *parent) : QWidget(parent), ui(new Ui::EditAnyTLS) {
     ui->setupUi(this);
     ui->utlsFingerprint->addItems(Preset::SingBox::UtlsFingerPrint);
-    ui->anytlsClientMode->addItems({"native", "mihomo", "custom"});
-    const auto clientHelp = tr("native omits sing-box AnyTLS client field. mihomo sends mihomo/1.19.28. custom sends the value below.");
+    ui->anytlsClientMode->addItems({"subscription", "native", "mihomo", "custom"});
+    const auto clientHelp = tr("subscription inherits the group default. native omits sing-box AnyTLS client field. mihomo sends mihomo/1.19.28. custom sends the value below.");
     ui->anytlsClientMode_l->setToolTip(clientHelp);
     ui->anytlsClientMode->setToolTip(clientHelp);
     ui->anytlsClientValue_l->setToolTip(tr("Used only when Client Identity is custom."));
@@ -43,7 +43,12 @@ void EditAnyTLS::onStart(std::shared_ptr<NekoGui::ProxyEntity> _ent) {
     P_LOAD_STRING(idleSessionCheckInterval);
     P_LOAD_STRING(idleSessionTimeout);
     P_LOAD_INT(minIdleSession);
-    P_LOAD_COMBO_STRING(anytlsClientMode);
+    const auto currentClientMode = bean->anytlsClientMode.trimmed().toLower();
+    if (bean->inheritSubscriptionClient && (currentClientMode.isEmpty() || currentClientMode == "native")) {
+        ui->anytlsClientMode->setCurrentText("subscription");
+    } else {
+        P_LOAD_COMBO_STRING(anytlsClientMode);
+    }
     P_LOAD_STRING(anytlsClientValue);
     ui->anytlsClientValue->setEnabled(ui->anytlsClientMode->currentText() == "custom");
 
@@ -65,6 +70,8 @@ bool EditAnyTLS::onEnd() {
     P_SAVE_STRING(idleSessionTimeout);
     P_SAVE_INT(minIdleSession);
     bean->anytlsClientMode = ui->anytlsClientMode->currentText().trimmed().toLower();
+    bean->inheritSubscriptionClient = bean->anytlsClientMode == "subscription";
+    if (bean->inheritSubscriptionClient) bean->anytlsClientMode = "native";
     if (bean->anytlsClientMode.isEmpty()) bean->anytlsClientMode = "native";
     auto clientValue = ui->anytlsClientValue->text().trimmed();
     if (bean->anytlsClientMode == "custom") {

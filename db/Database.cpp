@@ -315,6 +315,11 @@ namespace NekoGui {
         _add(new configItem("url", &url, itemType::string));
         _add(new configItem("info", &info, itemType::string));
         _add(new configItem("lastup", &sub_last_update, itemType::integer64));
+        _add(new configItem("source_type", &source_type, itemType::string));
+        _add(new configItem("default_client_mode", &default_client_mode, itemType::string));
+        _add(new configItem("default_client_value", &default_client_value, itemType::string));
+        _add(new configItem("default_server_resolver_doh", &default_server_resolver_doh, itemType::string));
+        _add(new configItem("default_server_resolver_fallback", &default_server_resolver_allow_local_fallback, itemType::boolean));
         _add(new configItem("manually_column_width", &manually_column_width, itemType::boolean));
         _add(new configItem("column_width", &column_width, itemType::integerList));
     }

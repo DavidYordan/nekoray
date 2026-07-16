@@ -61,12 +61,12 @@ DialogEditProfile::DialogEditProfile(const QString &_type, int profileOrGroupId,
     // setup UI
     ui->setupUi(this);
     ui->dialog_layout->setAlignment(ui->left, Qt::AlignTop);
-    ui->serverResolverMode->addItems({"local", "doh"});
-    const auto resolverHelp = tr("Controls how sing-box resolves this profile's server address. Clash subscription DoH is imported here.");
+    ui->serverResolverMode->addItems({"subscription", "local", "doh"});
+    const auto resolverHelp = tr("Controls how sing-box resolves this profile's server address. subscription inherits the group DoH default.");
     ui->serverResolverMode_l->setToolTip(resolverHelp);
     ui->serverResolverMode->setToolTip(resolverHelp);
     ui->serverResolverDohUpstreams_l->setToolTip(tr("HTTPS DoH upstreams, one per line. Used for this profile's server address only."));
-    ui->serverResolverDohUpstreams->setToolTip(tr("HTTPS DoH upstreams, one per line. Imported Clash provider resolvers are visible here."));
+    ui->serverResolverDohUpstreams->setToolTip(tr("HTTPS DoH upstreams, one per line. Used only when this profile overrides with doh mode."));
     ui->serverResolverAllowLocalFallback->setToolTip(tr("Allow local system resolver if provider DoH is unavailable at runtime."));
     connect(ui->serverResolverMode, &QComboBox::currentTextChanged, this, [=](const QString &txt) {
         const auto enableDoh = txt == "doh";
@@ -328,7 +328,11 @@ void DialogEditProfile::typeSelected(const QString &newType) {
     ui->address->setText(ent->bean->serverAddress);
     ui->port->setText(Int2String(ent->bean->serverPort));
     ui->port->setValidator(QRegExpValidator_Number);
-    ui->serverResolverMode->setCurrentText(ent->bean->serverResolverDohUpstreams.trimmed().isEmpty() ? "local" : "doh");
+    if (ent->bean->inheritSubscriptionResolver && ent->bean->serverResolverDohUpstreams.trimmed().isEmpty()) {
+        ui->serverResolverMode->setCurrentText("subscription");
+    } else {
+        ui->serverResolverMode->setCurrentText(ent->bean->serverResolverDohUpstreams.trimmed().isEmpty() ? "local" : "doh");
+    }
     ui->serverResolverDohUpstreams->setPlainText(ent->bean->serverResolverDohUpstreams);
     ui->serverResolverAllowLocalFallback->setChecked(ent->bean->serverResolverAllowLocalFallback);
     const auto enableResolverDoh = ui->serverResolverMode->currentText() == "doh";
@@ -404,8 +408,10 @@ bool DialogEditProfile::onEnd() {
     ent->bean->serverAddress = ui->address->text().remove(' ');
     ent->bean->serverPort = ui->port->text().toInt();
     ent->bean->serverResolverDohUpstreams = "";
+    ent->bean->inheritSubscriptionResolver = ui->serverResolverMode->currentText() == "subscription";
     ent->bean->serverResolverAllowLocalFallback = ui->serverResolverAllowLocalFallback->isChecked();
     if (ui->serverResolverMode->currentText() == "doh" && !IsIpAddress(ent->bean->serverAddress)) {
+        ent->bean->inheritSubscriptionResolver = false;
         auto upstreams = parseResolverDohUpstreamsForUi(ui->serverResolverDohUpstreams->toPlainText());
         if (upstreams.isEmpty()) {
             MessageBoxWarning(tr("Server resolver"), tr("Provider DoH mode requires at least one HTTPS DoH upstream."));
@@ -419,6 +425,8 @@ bool DialogEditProfile::onEnd() {
             }
         }
         ent->bean->serverResolverDohUpstreams = upstreams.join("\n");
+    } else if (ui->serverResolverMode->currentText() == "local") {
+        ent->bean->inheritSubscriptionResolver = false;
     }
 
     // 右边 stream
@@ -584,6 +592,16 @@ void DialogEditProfile::do_apply_to_group(const std::shared_ptr<NekoGui::Group> 
         }
     };
 
+    auto copyServerResolver = [=] {
+        for (const auto &profile: group->Profiles()) {
+            if (profile == ent) continue;
+            profile->bean->inheritSubscriptionResolver = ent->bean->inheritSubscriptionResolver;
+            profile->bean->serverResolverDohUpstreams = ent->bean->serverResolverDohUpstreams;
+            profile->bean->serverResolverAllowLocalFallback = ent->bean->serverResolverAllowLocalFallback;
+            profile->Save();
+        }
+    };
+
     if (key == ui->multiplex) {
         copyStream(&stream->multiplex_status);
     } else if (key == ui->sni) {
@@ -601,7 +619,7 @@ void DialogEditProfile::do_apply_to_group(const std::shared_ptr<NekoGui::Group> 
     } else if (key == ui->certificate_edit) {
         copyStream(&stream->certificate);
     } else if (key == ui->serverResolverMode || key == ui->serverResolverDohUpstreams) {
-        copyBean(&ent->bean->serverResolverDohUpstreams);
+        copyServerResolver();
     } else if (key == ui->serverResolverAllowLocalFallback) {
         copyBean(&ent->bean->serverResolverAllowLocalFallback);
     } else if (key == ui->custom_config_edit) {

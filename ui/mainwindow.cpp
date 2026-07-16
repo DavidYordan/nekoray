@@ -6,6 +6,7 @@
 #include "db/ProfileFilter.hpp"
 #include "db/ConfigBuilder.hpp"
 #include "sub/GroupUpdater.hpp"
+#include "sub/MultiMapperExport.hpp"
 #include "sys/ExternalProcess.hpp"
 #include "sys/AutoRun.hpp"
 
@@ -53,6 +54,7 @@
 #include <QHostAddress>
 #include <QHostInfo>
 #include <QNetworkAccessManager>
+#include <QNetworkProxy>
 #include <QNetworkReply>
 #include <QNetworkRequest>
 
@@ -60,11 +62,25 @@
 
 namespace {
     enum class ResolveServerMode {
-        Auto,
+        SubscriptionDoh,
         ProviderDoh,
         RemoteDoh,
         DirectDoh,
+        PublicDoh,
+        CustomDoh,
         System,
+    };
+
+    enum class ResolveOutboundMode {
+        Direct,
+        MainProxy,
+    };
+
+    struct ResolveOptions {
+        ResolveServerMode serverMode = ResolveServerMode::SubscriptionDoh;
+        ResolveOutboundMode outboundMode = ResolveOutboundMode::Direct;
+        QStringList customDohUpstreams;
+        QString outboundName = "Direct";
     };
 
     struct ServerResolveResult {
@@ -187,7 +203,23 @@ namespace {
         return out;
     }
 
-    QStringList queryDoh(const QUrl &url, const QString &domain, quint16 qtype, QString *error) {
+    QStringList publicDohUpstreams() {
+        return {
+            "https://cloudflare-dns.com/dns-query",
+            "https://dns.google/dns-query",
+            "https://dns.alidns.com/dns-query",
+            "https://doh.pub/dns-query",
+        };
+    }
+
+    QStringList groupResolverUpstreams(const std::shared_ptr<NekoGui::ProxyEntity> &profile) {
+        if (profile == nullptr) return {};
+        auto group = NekoGui::profileManager->GetGroup(profile->gid);
+        if (group == nullptr) return {};
+        return splitResolverLines(group->default_server_resolver_doh);
+    }
+
+    QStringList queryDoh(const QUrl &url, const QString &domain, quint16 qtype, ResolveOutboundMode outboundMode, QString *error) {
         const auto query = buildDnsQuery(domain, qtype);
         if (query.isEmpty()) {
             if (error != nullptr) *error = "invalid domain name";
@@ -195,6 +227,18 @@ namespace {
         }
 
         QNetworkAccessManager manager;
+        if (outboundMode == ResolveOutboundMode::MainProxy) {
+            if (NekoGui::dataStore->started_id < 0) {
+                if (error != nullptr) *error = "main profile is not running";
+                return {};
+            }
+            QNetworkProxy proxy;
+            proxy.setType(QNetworkProxy::Socks5Proxy);
+            proxy.setHostName("127.0.0.1");
+            proxy.setPort(NekoGui::dataStore->inbound_socks_port);
+            proxy.setCapabilities(proxy.capabilities() | QNetworkProxy::HostNameLookupCapability);
+            manager.setProxy(proxy);
+        }
         QNetworkRequest request(url);
         request.setHeader(QNetworkRequest::ContentTypeHeader, "application/dns-message");
         request.setRawHeader("Accept", "application/dns-message");
@@ -220,7 +264,7 @@ namespace {
         return parseDnsAddresses(body, qtype);
     }
 
-    QStringList resolveViaDoh(const QString &domain, const QStringList &upstreams, QString *method, QString *error) {
+    QStringList resolveViaDoh(const QString &domain, const QStringList &upstreams, ResolveOutboundMode outboundMode, const QString &outboundName, QString *method, QString *error) {
         const auto dohUpstreams = httpsDohOnly(upstreams);
         if (dohUpstreams.isEmpty()) {
             if (error != nullptr) *error = "no HTTPS DoH upstream";
@@ -231,10 +275,10 @@ namespace {
         for (const auto &upstream: dohUpstreams) {
             const QUrl url(upstream);
             QString err;
-            auto addresses = queryDoh(url, domain, 1, &err);
-            if (addresses.isEmpty()) addresses = queryDoh(url, domain, 28, &err);
+            auto addresses = queryDoh(url, domain, 1, outboundMode, &err);
+            if (addresses.isEmpty()) addresses = queryDoh(url, domain, 28, outboundMode, &err);
             if (!addresses.isEmpty()) {
-                if (method != nullptr) *method = "DoH " + upstream;
+                if (method != nullptr) *method = "DoH " + upstream + " via " + outboundName;
                 return addresses;
             }
             if (!err.isEmpty()) lastError = upstream + ": " + err;
@@ -282,14 +326,17 @@ namespace {
         return true;
     }
 
-    QStringList resolverUpstreamsForMode(const std::shared_ptr<NekoGui::ProxyEntity> &profile, ResolveServerMode mode) {
+    QStringList resolverUpstreamsForMode(const std::shared_ptr<NekoGui::ProxyEntity> &profile, ResolveServerMode mode, const QStringList &customDohUpstreams) {
+        if (mode == ResolveServerMode::SubscriptionDoh) return groupResolverUpstreams(profile);
         if (mode == ResolveServerMode::ProviderDoh) return splitResolverLines(profile->bean->serverResolverDohUpstreams);
         if (mode == ResolveServerMode::RemoteDoh) return splitResolverLines(NekoGui::dataStore->routing->remote_dns);
         if (mode == ResolveServerMode::DirectDoh) return splitResolverLines(NekoGui::dataStore->routing->direct_dns);
+        if (mode == ResolveServerMode::PublicDoh) return publicDohUpstreams();
+        if (mode == ResolveServerMode::CustomDoh) return customDohUpstreams;
         return {};
     }
 
-    ServerResolveResult resolveProfileServer(const std::shared_ptr<NekoGui::ProxyEntity> &profile, ResolveServerMode mode) {
+    ServerResolveResult resolveProfileServer(const std::shared_ptr<NekoGui::ProxyEntity> &profile, const ResolveOptions &options) {
         ServerResolveResult result;
         result.profile = profile;
         if (profile != nullptr && profile->bean != nullptr) result.originalAddress = profile->bean->serverAddress;
@@ -304,14 +351,19 @@ namespace {
         QString method;
         QString error;
         QStringList addresses;
-        if (mode == ResolveServerMode::Auto) {
-            const auto providerUpstreams = splitResolverLines(profile->bean->serverResolverDohUpstreams);
-            if (!providerUpstreams.isEmpty()) addresses = resolveViaDoh(result.originalAddress, providerUpstreams, &method, &error);
-            if (addresses.isEmpty()) addresses = resolveViaSystem(result.originalAddress, &method, &error);
-        } else if (mode == ResolveServerMode::System) {
+        if (options.serverMode == ResolveServerMode::System) {
+            if (options.outboundMode != ResolveOutboundMode::Direct) {
+                result.error = "system resolver cannot use a selected proxy path";
+                return result;
+            }
             addresses = resolveViaSystem(result.originalAddress, &method, &error);
         } else {
-            addresses = resolveViaDoh(result.originalAddress, resolverUpstreamsForMode(profile, mode), &method, &error);
+            addresses = resolveViaDoh(result.originalAddress,
+                                      resolverUpstreamsForMode(profile, options.serverMode, options.customDohUpstreams),
+                                      options.outboundMode,
+                                      options.outboundName,
+                                      &method,
+                                      &error);
         }
 
         result.method = method;
@@ -1527,6 +1579,13 @@ void MainWindow::on_menu_copy_links_nkr_triggered() {
     show_log_impl(tr("Copied %1 item(s)").arg(links.length()));
 }
 
+void MainWindow::on_menu_copy_links_multimapper_triggered() {
+    auto ents = get_now_selected_list();
+    if (ents.isEmpty()) return;
+    QApplication::clipboard()->setText(NekoGui_sub::BuildMultiMapperExportJson(ents));
+    show_log_impl(tr("Copied %1 item(s)").arg(ents.length()));
+}
+
 void MainWindow::on_menu_export_config_triggered() {
     auto ents = get_now_selected_list();
     if (ents.count() != 1) return;
@@ -1752,28 +1811,71 @@ void MainWindow::on_menu_resolve_domain_triggered() {
     auto profiles = get_selected_or_group();
     if (profiles.isEmpty()) return;
 
-    QStringList choices{
-        tr("Auto: profile DoH, then system"),
-        tr("Profile DoH only"),
+    QStringList serviceChoices{
+        tr("Subscription DoH"),
+        tr("Profile DoH override"),
         tr("Routing Remote DNS DoH"),
         tr("Routing Direct DNS DoH"),
+        tr("Public DoH"),
+        tr("Custom DoH"),
         tr("System resolver"),
     };
     bool ok = false;
-    auto choice = QInputDialog::getItem(this,
-                                        tr("Resolve domain"),
-                                        tr("Resolver"),
-                                        choices,
-                                        0,
-                                        false,
-                                        &ok);
+    auto serviceChoice = QInputDialog::getItem(this,
+                                               tr("Resolve domain"),
+                                               tr("Resolver"),
+                                               serviceChoices,
+                                               0,
+                                               false,
+                                               &ok);
     if (!ok) return;
 
-    ResolveServerMode mode = ResolveServerMode::Auto;
-    if (choice == choices[1]) mode = ResolveServerMode::ProviderDoh;
-    if (choice == choices[2]) mode = ResolveServerMode::RemoteDoh;
-    if (choice == choices[3]) mode = ResolveServerMode::DirectDoh;
-    if (choice == choices[4]) mode = ResolveServerMode::System;
+    ResolveOptions options;
+    if (serviceChoice == serviceChoices[0]) options.serverMode = ResolveServerMode::SubscriptionDoh;
+    if (serviceChoice == serviceChoices[1]) options.serverMode = ResolveServerMode::ProviderDoh;
+    if (serviceChoice == serviceChoices[2]) options.serverMode = ResolveServerMode::RemoteDoh;
+    if (serviceChoice == serviceChoices[3]) options.serverMode = ResolveServerMode::DirectDoh;
+    if (serviceChoice == serviceChoices[4]) options.serverMode = ResolveServerMode::PublicDoh;
+    if (serviceChoice == serviceChoices[5]) options.serverMode = ResolveServerMode::CustomDoh;
+    if (serviceChoice == serviceChoices[6]) options.serverMode = ResolveServerMode::System;
+
+    if (options.serverMode == ResolveServerMode::CustomDoh) {
+        auto text = QInputDialog::getMultiLineText(this,
+                                                   tr("Resolve domain"),
+                                                   tr("HTTPS DoH upstreams, one per line"),
+                                                   "",
+                                                   &ok);
+        if (!ok) return;
+        options.customDohUpstreams = splitResolverLines(text);
+    }
+
+    if (options.serverMode != ResolveServerMode::System) {
+        QStringList outboundChoices{tr("No NekoRay proxy")};
+        if (NekoGui::dataStore->started_id >= 0) {
+            auto running = NekoGui::profileManager->GetProfile(NekoGui::dataStore->started_id);
+            outboundChoices << tr("Main profile: %1")
+                                   .arg(running == nullptr ? QStringLiteral("127.0.0.1:%1").arg(NekoGui::dataStore->inbound_socks_port)
+                                                           : running->bean->DisplayTypeAndName());
+        }
+        auto outboundChoice = QInputDialog::getItem(this,
+                                                    tr("Resolve domain"),
+                                                    tr("Outbound path"),
+                                                    outboundChoices,
+                                                    0,
+                                                    false,
+                                                    &ok);
+        if (!ok) return;
+        if (outboundChoices.indexOf(outboundChoice) == 1) {
+            options.outboundMode = ResolveOutboundMode::MainProxy;
+            options.outboundName = outboundChoice;
+        } else {
+            options.outboundMode = ResolveOutboundMode::Direct;
+            options.outboundName = tr("No NekoRay proxy");
+        }
+    } else {
+        options.outboundMode = ResolveOutboundMode::Direct;
+        options.outboundName = tr("System resolver");
+    }
 
     if (mw_sub_updating) return;
     mw_sub_updating = true;
@@ -1781,7 +1883,7 @@ void MainWindow::on_menu_resolve_domain_triggered() {
 
     QList<ServerResolveResult> results;
     for (const auto &profile: profiles) {
-        results << resolveProfileServer(profile, mode);
+        results << resolveProfileServer(profile, options);
     }
 
     QApplication::restoreOverrideCursor();

@@ -12,6 +12,9 @@ namespace NekoGui_sub {
         int gid_add_to = -1; // 导入到指定组 -1 为当前选中组
 
         QList<std::shared_ptr<NekoGui::ProxyEntity>> updated_order; // 新增的配置，按照导入时处理的先后排序
+
+        QString detected_source_type;
+        QStringList detected_doh_upstreams;
     };
 
     class GroupUpdater : public QObject {

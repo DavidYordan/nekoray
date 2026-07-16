@@ -15,6 +15,12 @@ namespace NekoGui {
         qint64 sub_last_update = 0;
         int front_proxy_id = -1;
 
+        QString source_type = "";
+        QString default_client_mode = "";
+        QString default_client_value = "";
+        QString default_server_resolver_doh = "";
+        bool default_server_resolver_allow_local_fallback = false;
+
         // list ui
         bool manually_column_width = false;
         QList<int> column_width;

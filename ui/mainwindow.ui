@@ -540,6 +540,7 @@
      <addaction name="separator"/>
      <addaction name="menu_copy_links"/>
      <addaction name="menu_copy_links_nkr"/>
+     <addaction name="menu_copy_links_multimapper"/>
     </widget>
     <widget class="QMenu" name="menuCurrent_Group">
      <property name="title">
@@ -817,6 +818,11 @@
    </property>
    <property name="shortcut">
     <string notr="true">Ctrl+N</string>
+   </property>
+  </action>
+  <action name="menu_copy_links_multimapper">
+   <property name="text">
+    <string>Copy selected to MultiMapper</string>
    </property>
   </action>
   <action name="actionfake_2">

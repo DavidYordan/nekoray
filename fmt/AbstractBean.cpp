@@ -15,6 +15,8 @@ namespace NekoGui_fmt {
         _add(new configItem("c_out", &custom_outbound, itemType::string));
         _add(new configItem("server_resolver_doh", &serverResolverDohUpstreams, itemType::string));
         _add(new configItem("server_resolver_fallback", &serverResolverAllowLocalFallback, itemType::boolean));
+        _add(new configItem("inherit_subscription_client", &inheritSubscriptionClient, itemType::boolean));
+        _add(new configItem("inherit_subscription_resolver", &inheritSubscriptionResolver, itemType::boolean));
     }
 
     QString AbstractBean::ToNekorayShareLink(const QString &type) {

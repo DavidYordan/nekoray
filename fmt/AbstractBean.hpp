@@ -37,6 +37,8 @@ namespace NekoGui_fmt {
 
         QString serverResolverDohUpstreams = "";
         bool serverResolverAllowLocalFallback = true;
+        bool inheritSubscriptionClient = true;
+        bool inheritSubscriptionResolver = true;
 
         explicit AbstractBean(int version);
 

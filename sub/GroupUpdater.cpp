@@ -291,6 +291,8 @@ namespace NekoGui_sub {
         try {
             auto root = YAML::Load(str.toStdString());
             const auto clashDohUpstreams = ExtractClashProxyServerDohUpstreams(root);
+            detected_source_type = "clash";
+            detected_doh_upstreams = clashDohUpstreams;
             auto proxies = root["proxies"];
             for (auto proxy: proxies) {
                 auto type = Node2QString(proxy["type"]).toLower();
@@ -311,14 +313,16 @@ namespace NekoGui_sub {
                 bool hasExplicitServerResolver = false;
                 if (serverResolver.IsMap()) {
                     hasExplicitServerResolver = true;
+                    ent->bean->inheritSubscriptionResolver = false;
                     ent->bean->serverResolverDohUpstreams = Node2QStringList(NodeChild(serverResolver, {"doh-upstreams", "doh_upstreams"})).join("\n");
                     auto fallback = NodeChild(serverResolver, {"allow-local-fallback", "allow_local_fallback"});
                     ent->bean->serverResolverAllowLocalFallback = fallback.IsDefined() ? Node2Bool(fallback, true) : true;
                 }
                 if (!hasExplicitServerResolver && !clashDohUpstreams.isEmpty() &&
                     !ent->bean->serverAddress.isEmpty() && !IsIpAddress(ent->bean->serverAddress)) {
-                    ent->bean->serverResolverDohUpstreams = clashDohUpstreams.join("\n");
-                    ent->bean->serverResolverAllowLocalFallback = true;
+                    ent->bean->inheritSubscriptionResolver = true;
+                    ent->bean->serverResolverDohUpstreams = "";
+                    ent->bean->serverResolverAllowLocalFallback = false;
                 }
 
                 if (type_clash == "ss") {
@@ -551,6 +555,7 @@ namespace NekoGui_sub {
                     bean->anytlsClientValue = FIRST_OR_SECOND(Node2QString(proxy["anytls-client-value"]),
                                                               Node2QString(proxy["anytls_client_value"])).trimmed();
                     const auto clashAnyTLSClient = Node2QString(proxy["client"]).trimmed();
+                    auto hasExplicitAnyTLSClient = !bean->anytlsClientMode.isEmpty() || !clashAnyTLSClient.isEmpty();
                     if (bean->anytlsClientMode.isEmpty() && !clashAnyTLSClient.isEmpty()) {
                         if (clashAnyTLSClient == "mihomo/1.19.28") {
                             bean->anytlsClientMode = "mihomo";
@@ -560,9 +565,10 @@ namespace NekoGui_sub {
                         }
                     }
                     if (bean->anytlsClientMode.isEmpty()) {
-                        // Clash AnyTLS nodes are authored for Mihomo's client identity unless explicitly overridden.
-                        bean->anytlsClientMode = "mihomo";
+                        // Clash subscriptions use the group-level Mihomo client default unless a node overrides it.
+                        bean->anytlsClientMode = "native";
                     }
+                    ent->bean->inheritSubscriptionClient = !hasExplicitAnyTLSClient;
                     if (bean->anytlsClientMode == "custom" && bean->anytlsClientValue.isEmpty() &&
                         IsVisibleAsciiAnyTLSClientValue(clashAnyTLSClient)) {
                         bean->anytlsClientValue = clashAnyTLSClient;
@@ -688,6 +694,19 @@ namespace NekoGui_sub {
         rawUpdater->update(content);
 
         if (group != nullptr) {
+            if (rawUpdater->detected_source_type == "clash") {
+                group->source_type = "clash";
+                group->default_client_mode = "mihomo";
+                group->default_client_value = "mihomo/1.19.28";
+                if (!rawUpdater->detected_doh_upstreams.isEmpty()) {
+                    group->default_server_resolver_doh = rawUpdater->detected_doh_upstreams.join("\n");
+                    group->default_server_resolver_allow_local_fallback = false;
+                }
+            } else if (group->source_type.isEmpty() && asURL) {
+                group->source_type = "subscription";
+            }
+            group->Save();
+
             out_all = group->Profiles();
 
             QString change_text;

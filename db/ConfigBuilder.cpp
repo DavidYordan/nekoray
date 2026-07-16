@@ -427,6 +427,41 @@ namespace NekoGui {
         return chainTagOut;
     }
 
+    QString EffectiveResolverDohUpstreams(const std::shared_ptr<ProxyEntity> &ent) {
+        if (ent == nullptr || ent->bean == nullptr) return {};
+        const auto profileResolver = ent->bean->serverResolverDohUpstreams.trimmed();
+        if (!profileResolver.isEmpty() || !ent->bean->inheritSubscriptionResolver) return profileResolver;
+
+        auto group = profileManager->GetGroup(ent->gid);
+        if (group == nullptr) return {};
+        return group->default_server_resolver_doh.trimmed();
+    }
+
+    bool EffectiveResolverAllowLocalFallback(const std::shared_ptr<ProxyEntity> &ent) {
+        if (ent == nullptr || ent->bean == nullptr) return true;
+        if (!ent->bean->serverResolverDohUpstreams.trimmed().isEmpty() || !ent->bean->inheritSubscriptionResolver) {
+            return ent->bean->serverResolverAllowLocalFallback;
+        }
+        auto group = profileManager->GetGroup(ent->gid);
+        if (group == nullptr || group->default_server_resolver_doh.trimmed().isEmpty()) return ent->bean->serverResolverAllowLocalFallback;
+        return group->default_server_resolver_allow_local_fallback;
+    }
+
+    void ApplySubscriptionAnyTLSClientDefault(const std::shared_ptr<ProxyEntity> &ent, QJsonObject &outbound) {
+        if (ent == nullptr || ent->bean == nullptr || ent->type != "anytls" || !ent->bean->inheritSubscriptionClient) return;
+        if (outbound.contains("client")) return;
+
+        auto group = profileManager->GetGroup(ent->gid);
+        if (group == nullptr) return;
+
+        const auto mode = group->default_client_mode.trimmed().toLower();
+        if (mode == "mihomo") {
+            outbound["client"] = group->default_client_value.trimmed().isEmpty() ? "mihomo/1.19.28" : group->default_client_value.trimmed();
+        } else if (mode == "custom" && !group->default_client_value.trimmed().isEmpty()) {
+            outbound["client"] = group->default_client_value.trimmed();
+        }
+    }
+
 #define DOMAIN_USER_RULE                                                             \
     for (const auto &line: SplitLinesSkipSharp(dataStore->routing->proxy_domain)) {  \
         if (dataStore->routing->dns_routing) status->domainListDNSRemote += line;    \
@@ -598,6 +633,8 @@ namespace NekoGui {
                 outbound = coreR.outbound;
             }
 
+            ApplySubscriptionAnyTLSClientDefault(ent, outbound);
+
             // outbound misc
             outbound["tag"] = tagOut;
             ent->traffic_data->id = ent->id;
@@ -648,8 +685,8 @@ namespace NekoGui {
                     static_cast<int>(status->outbounds.size()),
                     tagOut,
                     outboundServer,
-                    ParseResolverDohUpstreams(ent->bean->serverResolverDohUpstreams),
-                    ent->bean->serverResolverAllowLocalFallback,
+                    ParseResolverDohUpstreams(EffectiveResolverDohUpstreams(ent)),
+                    EffectiveResolverAllowLocalFallback(ent),
                 };
             }
 

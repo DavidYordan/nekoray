@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>400</width>
-    <height>468</height>
+    <width>460</width>
+    <height>640</height>
    </rect>
   </property>
   <property name="minimumSize">
@@ -138,6 +138,101 @@
         </property>
        </widget>
       </item>
+      <item row="2" column="0">
+       <widget class="QLabel" name="source_type_l">
+        <property name="text">
+         <string>Source Type</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="1">
+       <widget class="QComboBox" name="source_type">
+        <item>
+         <property name="text">
+          <string>auto</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>clash</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>subscription</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>manual</string>
+         </property>
+        </item>
+       </widget>
+      </item>
+      <item row="3" column="0">
+       <widget class="QLabel" name="default_client_mode_l">
+        <property name="text">
+         <string>Default Client</string>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="1">
+       <layout class="QHBoxLayout" name="defaultClientLayout">
+        <item>
+         <widget class="QComboBox" name="default_client_mode">
+          <item>
+           <property name="text">
+            <string>native</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>mihomo</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>custom</string>
+           </property>
+          </item>
+         </widget>
+        </item>
+        <item>
+         <widget class="MyLineEdit" name="default_client_value">
+          <property name="placeholderText">
+           <string>mihomo/1.19.28</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item row="4" column="0">
+       <widget class="QLabel" name="default_server_resolver_doh_l">
+        <property name="text">
+         <string>Default DoH</string>
+        </property>
+       </widget>
+      </item>
+      <item row="4" column="1">
+       <widget class="QPlainTextEdit" name="default_server_resolver_doh">
+        <property name="maximumSize">
+         <size>
+          <width>16777215</width>
+          <height>82</height>
+         </size>
+        </property>
+        <property name="placeholderText">
+         <string>HTTPS DoH upstreams, one per line</string>
+        </property>
+       </widget>
+      </item>
+      <item row="5" column="1">
+       <widget class="QCheckBox" name="default_server_resolver_fallback">
+        <property name="text">
+         <string>Allow local fallback for default DoH</string>
+        </property>
+       </widget>
+      </item>
      </layout>
     </widget>
    </item>
@@ -158,6 +253,13 @@
        <widget class="QPushButton" name="copy_links_nkr">
         <property name="text">
          <string>Copy profile share links (Neko Links)</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="copy_links_multimapper">
+        <property name="text">
+         <string>Copy to MultiMapper</string>
         </property>
        </widget>
       </item>
@@ -189,8 +291,14 @@
   <tabstop>archive</tabstop>
   <tabstop>url</tabstop>
   <tabstop>skip_auto_update</tabstop>
+  <tabstop>source_type</tabstop>
+  <tabstop>default_client_mode</tabstop>
+  <tabstop>default_client_value</tabstop>
+  <tabstop>default_server_resolver_doh</tabstop>
+  <tabstop>default_server_resolver_fallback</tabstop>
   <tabstop>copy_links</tabstop>
   <tabstop>copy_links_nkr</tabstop>
+  <tabstop>copy_links_multimapper</tabstop>
  </tabstops>
  <resources/>
  <connections>
