@@ -17,14 +17,16 @@
 - `fmt/Link2Bean.cpp` 负责普通分享链接导入；普通 AnyTLS 链接默认 `native`。
 - `ui/edit/edit_anytls.ui` 已暴露 `Client Identity` 和 `Custom Client`。
 - `ui/edit/dialog_edit_profile.ui` 已暴露单线路 `Server Resolver`、`DoH Upstreams` 和 `Allow Local Fallback`。
-- `ui/mainwindow.cpp::on_menu_resolve_domain_triggered` 已改为先选择解析器、再展示结果，并提供 `Replace`、`Copy as new`、`Copy results`。
-- `fmt/AbstractBean::ResolveDomainToIP` 这个旧函数仍保留在源码中，内部仍使用 `QHostInfo` 并会直接替换 `serverAddress`。当前主 UI 路径已不再依赖它，后续清理废弃代码时应删除或改造成统一解析服务，避免未来误用。
+- `ui/mainwindow.cpp::on_menu_resolve_domain_triggered` 已改为先选择解析服务和出站路径，再展示结果，并提供 `Replace`、`Copy as new`、`Copy results`。
+- 解析服务已支持订阅 DoH、单线路 DoH override、路由 Remote/Direct DoH、公共 DoH、自定义 DoH 和系统 DNS。
+- 出站路径已支持不通过本项目代理、通过主线路端口、通过已启动辅助线路端口。
+- `fmt/AbstractBean::ResolveDomainToIP` 旧直接替换函数已不在源码中，当前只剩本文档历史记录。
 
 当前缺口：
 
 - Clash 默认 client 现在主要落在 AnyTLS 导入路径，尚未提升为“订阅来源级默认值”。
 - DoH 和 client 主要在单线路编辑里暴露，缺少订阅层级统一查看、统一修改、统一下发能力。
-- 解析为 IP 的选项仍偏“选择 DNS 源”，还缺少“出站路径”维度；未来多线路运行后，必须能选择具体哪条运行线路作为解析代理。
+- 解析为 IP 当前仍在 UI 线程同步执行。少量线路可接受，但整组/大批量对比解析时可能短暂阻塞，后续应迁移到后台任务并支持进度/取消。
 
 ## 订阅应作为一套来源管理
 
@@ -165,6 +167,9 @@
 - [x] AnyTLS client 模式 UI 已存在。
 - [x] 单线路 provider DoH UI 已存在。
 - [x] 右键解析域名已改为预览结果，再选择 `Replace` 或 `Copy as new`。
+- [x] 解析为 IP 对话框已拆分“解析服务”和“出站路径”，支持不通过代理、通过主线路、通过辅助线路。
+- [x] 解析结果已展示 DoH/公共 DNS/系统 DNS 的差异，并记录代理线路和端口。
+- [x] `fmt/AbstractBean::ResolveDomainToIP` 遗留直接替换函数已从源码移除。
 
 待整改：
 
@@ -173,9 +178,7 @@
 - [ ] AnyTLS 线路默认继承订阅 client；非 AnyTLS 线路保留来源默认元数据但不向 core 写无效字段。
 - [ ] 新增订阅层级 client/DoH/fallback 管理 UI，并支持批量应用到继承线路或全部线路。
 - [ ] 单线路编辑 UI 增加“继承订阅 / 覆盖订阅”状态。
-- [ ] 解析为 IP 对话框拆分“解析服务”和“出站路径”，支持不通过代理、通过主线路、通过辅助线路。
-- [ ] 解析结果展示 DoH/公共 DNS/系统 DNS 的差异，并记录代理线路。
-- [ ] 删除或改造 `fmt/AbstractBean::ResolveDomainToIP` 遗留直接替换函数。
+- [ ] 大批量“解析为 IP”迁移到后台任务，避免 UI 阻塞，并支持进度/取消。
 
 ## 后续注意
 

@@ -240,6 +240,12 @@ namespace {
         };
     }
 
+    void appendUniqueAddresses(QStringList &target, const QStringList &addresses) {
+        for (const auto &address: addresses) {
+            if (!target.contains(address)) target << address;
+        }
+    }
+
     bool canListenLocalPort(int port) {
         if (!IsValidPort(port)) return false;
         QTcpServer server;
@@ -336,14 +342,19 @@ namespace {
         QString lastError;
         for (const auto &upstream: dohUpstreams) {
             const QUrl url(upstream);
-            QString err;
-            auto addresses = queryDoh(url, domain, 1, options, &err);
-            if (addresses.isEmpty()) addresses = queryDoh(url, domain, 28, options, &err);
+            QString errA;
+            QString errAAAA;
+            QStringList addresses;
+            appendUniqueAddresses(addresses, queryDoh(url, domain, 1, options, &errA));
+            appendUniqueAddresses(addresses, queryDoh(url, domain, 28, options, &errAAAA));
             if (!addresses.isEmpty()) {
                 if (method != nullptr) *method = "DoH " + upstream + " via " + options.outboundName;
                 return addresses;
             }
-            if (!err.isEmpty()) lastError = upstream + ": " + err;
+            QStringList upstreamErrors;
+            if (!errA.isEmpty()) upstreamErrors << "A: " + errA;
+            if (!errAAAA.isEmpty()) upstreamErrors << "AAAA: " + errAAAA;
+            if (!upstreamErrors.isEmpty()) lastError = upstream + ": " + upstreamErrors.join("; ");
         }
         if (error != nullptr) *error = lastError.isEmpty() ? "no DNS answers" : lastError;
         return {};
@@ -365,7 +376,8 @@ namespace {
             }
         }
         if (method != nullptr) *method = "System";
-        return !v4.isEmpty() ? v4 : other;
+        appendUniqueAddresses(v4, other);
+        return v4;
     }
 
     bool profileCanResolve(const std::shared_ptr<NekoGui::ProxyEntity> &profile, QString *reason = nullptr) {
