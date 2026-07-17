@@ -357,7 +357,8 @@ UI 建议：
 当前代码路径：
 
 - 普通线路重启：`neko_start()` 会先 `neko_stop(false, true)`，此路径不会调用 `ClearSystemProxy()`。因此系统代理设置通常仍指向本机端口，应用不会因为系统代理被清空而直接回落；但 core stop/start 期间本机端口不可用，可能表现为连接失败。
-- 程序退出/重启：`on_menu_exit_triggered()` 会调用 `neko_set_spmode_system_proxy(false, false)` 和 `neko_set_spmode_vpn(false, false)`。这会清空 Windows 系统代理，并停止外部 TUN。若这是软件重启、管理员重启或更新重启，就存在系统流量回落默认出口的风险。
+- 程序退出/重启：当前已改为记录退出前的系统代理/TUN 意图，退出流程不再把 `neko_set_spmode_system_proxy(false, false)` 当作通用清理动作，因此不会因程序自重启清空 Windows 系统代理。自重启会携带 `-flag_restart_system_proxy_on` / `-flag_restart_tun_on` 恢复本次会话意图。
+- 外部 TUN 进程：退出流程如需停止外部 TUN，只使用 `save=false`，避免把用户的 `remember_spmode` 写成关闭。外部进程自然结束的回调同样不再删除 TUN 记忆。
 - 内部 TUN：TUN 是 sing-box 配置中的 `tun-in`。当 `neko_stop()` 通过 gRPC Stop 停止当前配置时，TUN 入站会随配置卸载，系统路由可能回落默认出口。此风险不能仅靠“不清空系统代理”解决。
 - 内部 TUN 设置变化：`neko_set_spmode_vpn()` 在 `vpn_internal_tun && started_id >= 0` 时会调用 `neko_start(started_id)`，实际也会触发 stop/start。
 
@@ -383,8 +384,10 @@ enum class ProxyModeTransitionReason {
 
 系统代理整改建议：
 
-- `neko_set_spmode_system_proxy(false)` 只在 `UserDisable` 下调用 `ClearSystemProxy()`。
-- `AppRestart`、`AdminElevationRestart`、`ProfileReload` 不清空系统代理，只保持 OS 代理指向稳定的本机主端口。
+- 已落地：`on_menu_exit_triggered()` 不再主动调用 `ClearSystemProxy()`。
+- 已落地：`AppRestart`、`AdminElevationRestart`、`ProfileReload` 不清空系统代理，只保持 OS 代理指向稳定的本机主端口。
+- 已落地：程序自重启使用 `-flag_restart_system_proxy_on` 恢复本次会话的系统代理模式。
+- 待补强：`neko_set_spmode_system_proxy(false)` 当前仍是用户 UI 关闭入口；后续若出现后台调用关闭，需要补充显式 reason 枚举阻断误用。
 - 如果软件退出但用户没有显式关闭系统代理，系统代理宁可保持指向本机端口，形成 fail-closed，也不要恢复直连。
 - 软件启动时，如果发现记忆状态要求系统代理开启，应先设置系统代理到主端口，再启动/恢复 profile。
 
@@ -424,8 +427,8 @@ TUN 整改建议：
 
 阶段 4：无偷跑重启。
 
-- 区分用户显式关闭和配置重载/软件重启。
-- 系统代理重启期间保持 fail-closed。
+- 已部分完成：软件自重启已区分“退出清理”和“用户显式关闭”，系统代理重启期间保持 fail-closed。
+- 已部分完成：自重启参数可在未开启“记住上次代理”时恢复本次会话的系统代理/TUN 意图。
 - 内部 TUN 重启路径设计 kill-switch 或热更新策略。
 - 增加 Windows 本机验证脚本，检查重启期间系统代理注册表和 TUN 路由没有被错误撤销。
 
