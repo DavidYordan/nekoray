@@ -834,6 +834,15 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWi
         }
         ui->menu_export_config->setVisible(name == software_core_name);
         ui->menu_export_config->setText(tr("Export %1 config").arg(name));
+        ui->menu_copy_links->setEnabled(!selected.isEmpty());
+        ui->menu_copy_links_nkr->setEnabled(!selected.isEmpty());
+
+        auto currentGroup = NekoGui::profileManager->CurrentGroup();
+        const auto groupCount = currentGroup == nullptr ? 0 : currentGroup->ProfilesWithOrder().count();
+        ui->menu_copy_links_multimapper->setEnabled(!selected.isEmpty() || groupCount > 0);
+        ui->menu_copy_links_multimapper->setText(selected.isEmpty()
+                                                    ? tr("Copy current group to MultiMapper")
+                                                    : tr("Copy selected to MultiMapper"));
     });
     connect(ui->menu_server, &QMenu::aboutToShow, this, [=] {
         const auto selected = get_now_selected_list();

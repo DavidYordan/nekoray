@@ -105,7 +105,6 @@ namespace {
             {"address", profile->bean->serverAddress},
             {"port", profile->bean->serverPort},
             {"tag", profile->bean->name},
-            {"share_link", profile->bean->ToShareLink()},
         };
 
         const auto groupDoh = group == nullptr ? QString{} : group->default_server_resolver_doh.trimmed();
