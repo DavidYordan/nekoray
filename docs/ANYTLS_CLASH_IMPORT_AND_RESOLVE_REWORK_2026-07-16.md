@@ -24,9 +24,10 @@
 
 当前缺口：
 
-- Clash 默认 client 现在主要落在 AnyTLS 导入路径，尚未提升为“订阅来源级默认值”。
-- DoH 和 client 主要在单线路编辑里暴露，缺少订阅层级统一查看、统一修改、统一下发能力。
+- 订阅/分组层级已能保存 `source_type`、默认 client、默认 DoH 和 fallback，并在 Clash 导入、分组编辑和 MultiMapper 导出中使用。
+- AnyTLS 单线路已能选择 `subscription/native/mihomo/custom`，其中 `subscription` 继承分组默认 client。
 - 解析为 IP 已迁移到后台任务，整组/大批量对比解析不会阻塞主界面；后续仍应增加进度展示和取消能力。
+- 尚缺的是后台解析进度/取消、以及更彻底的内部 TUN 重启 fail-closed 方案。
 
 ## 订阅应作为一套来源管理
 
@@ -171,15 +172,16 @@
 - [x] 解析结果已展示 DoH/公共 DNS/系统 DNS 的差异，并记录代理线路和端口。
 - [x] `fmt/AbstractBean::ResolveDomainToIP` 遗留直接替换函数已从源码移除。
 - [x] 大批量“解析为 IP”已迁移到后台任务，避免 UI 阻塞。
+- [x] Clash 订阅导入后，在订阅/分组层级保存 `source_type=clash`。
+- [x] Clash 订阅无论协议类型，订阅默认 client 都设为 `mihomo/1.19.28`。
+- [x] AnyTLS 线路默认继承订阅 client；非 AnyTLS 线路保留来源默认元数据但不向 core 写无效字段。
+- [x] 订阅层级 client/DoH/fallback 管理 UI 已在分组编辑面板提供，并支持重置线路为继承默认值。
+- [x] 单线路编辑 UI 已增加“继承订阅 / 覆盖订阅”状态。
 
 待整改：
 
-- [ ] Clash 订阅导入后，在订阅/分组层级保存 `source_type=clash`。
-- [ ] Clash 订阅无论协议类型，订阅默认 client 都设为 `mihomo/1.19.28`。
-- [ ] AnyTLS 线路默认继承订阅 client；非 AnyTLS 线路保留来源默认元数据但不向 core 写无效字段。
-- [ ] 新增订阅层级 client/DoH/fallback 管理 UI，并支持批量应用到继承线路或全部线路。
-- [ ] 单线路编辑 UI 增加“继承订阅 / 覆盖订阅”状态。
 - [ ] 后台“解析为 IP”增加进度展示和取消能力。
+- [ ] 内部 TUN 重启路径设计 kill-switch 或热更新策略，避免 stop/start 窗口默认直连。
 
 ## 后续注意
 
