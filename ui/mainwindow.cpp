@@ -1969,6 +1969,7 @@ void MainWindow::on_menu_delete_repeat_triggered() {
 }
 
 bool mw_sub_updating = false;
+bool mw_domain_resolving = false;
 
 void MainWindow::on_menu_update_subscription_triggered() {
     auto group = NekoGui::profileManager->CurrentGroup();
@@ -2139,71 +2140,82 @@ void MainWindow::on_menu_resolve_domain_triggered() {
         resolveTasks << options;
     }
 
-    if (mw_sub_updating) return;
-    mw_sub_updating = true;
-    QApplication::setOverrideCursor(Qt::WaitCursor);
-
-    QList<ServerResolveResult> results;
-    for (const auto &task: resolveTasks) {
-        for (const auto &profile: profiles) {
-            results << resolveProfileServer(profile, task);
-        }
-    }
-
-    QApplication::restoreOverrideCursor();
-    mw_sub_updating = false;
-
-    int resolvedCount = 0;
-    for (const auto &result: results) {
-        if (result.ok()) resolvedCount++;
-    }
-
-    QMessageBox msg(this);
-    msg.setIcon(resolvedCount > 0 ? QMessageBox::Information : QMessageBox::Warning);
-    msg.setWindowTitle(tr("Resolve domain"));
-    msg.setText(compareMode
-                    ? tr("Resolved %1 of %2 resolver task(s).").arg(resolvedCount).arg(results.count())
-                    : tr("Resolved %1 of %2 profile(s).").arg(resolvedCount).arg(results.count()));
-    msg.setDetailedText(formatResolveResults(results));
-    QPushButton *replaceButton = nullptr;
-    QPushButton *copyNewButton = nullptr;
-    if (!compareMode) {
-        replaceButton = msg.addButton(tr("Replace"), QMessageBox::AcceptRole);
-        copyNewButton = msg.addButton(tr("Copy as new"), QMessageBox::ActionRole);
-        replaceButton->setEnabled(resolvedCount > 0);
-        copyNewButton->setEnabled(resolvedCount > 0);
-    }
-    auto copyTextButton = msg.addButton(tr("Copy results"), QMessageBox::ActionRole);
-    msg.addButton(compareMode ? QMessageBox::Ok : QMessageBox::Cancel);
-    msg.exec();
-
-    const auto clicked = msg.clickedButton();
-    if (clicked == copyTextButton) {
-        QApplication::clipboard()->setText(formatResolveResults(results));
-        return;
-    }
-    if (compareMode) return;
-    if (clicked != replaceButton && clicked != copyNewButton) {
+    if (mw_sub_updating || mw_domain_resolving) {
+        MessageBoxWarning(tr("Resolve domain"), tr("A subscription update or domain resolve task is still running."));
         return;
     }
 
-    int changedCount = 0;
-    for (const auto &result: results) {
-        if (!result.ok()) continue;
-        if (clicked == replaceButton) {
-            applyResolvedServerAddress(result.profile, result.resolvedAddress);
-            result.profile->Save();
-            changedCount++;
-        } else if (clicked == copyNewButton) {
-            auto clone = cloneProfileForResolvedAddress(result.profile, result.resolvedAddress);
-            if (clone != nullptr && NekoGui::profileManager->AddProfile(clone, result.profile->gid)) changedCount++;
+    auto showResolveResults = [=](QList<ServerResolveResult> results) {
+        int resolvedCount = 0;
+        for (const auto &result: results) {
+            if (result.ok()) resolvedCount++;
         }
-    }
 
-    refresh_proxy_list();
-    show_log_impl(clicked == replaceButton
-                      ? tr("Resolved and replaced %1 profile(s).").arg(changedCount)
-                      : tr("Resolved and copied %1 profile(s).").arg(changedCount));
+        QMessageBox msg(this);
+        msg.setIcon(resolvedCount > 0 ? QMessageBox::Information : QMessageBox::Warning);
+        msg.setWindowTitle(tr("Resolve domain"));
+        msg.setText(compareMode
+                        ? tr("Resolved %1 of %2 resolver task(s).").arg(resolvedCount).arg(results.count())
+                        : tr("Resolved %1 of %2 profile(s).").arg(resolvedCount).arg(results.count()));
+        msg.setDetailedText(formatResolveResults(results));
+        QPushButton *replaceButton = nullptr;
+        QPushButton *copyNewButton = nullptr;
+        if (!compareMode) {
+            replaceButton = msg.addButton(tr("Replace"), QMessageBox::AcceptRole);
+            copyNewButton = msg.addButton(tr("Copy as new"), QMessageBox::ActionRole);
+            replaceButton->setEnabled(resolvedCount > 0);
+            copyNewButton->setEnabled(resolvedCount > 0);
+        }
+        auto copyTextButton = msg.addButton(tr("Copy results"), QMessageBox::ActionRole);
+        msg.addButton(compareMode ? QMessageBox::Ok : QMessageBox::Cancel);
+        msg.exec();
+
+        const auto clicked = msg.clickedButton();
+        if (clicked == copyTextButton) {
+            QApplication::clipboard()->setText(formatResolveResults(results));
+            return;
+        }
+        if (compareMode) return;
+        if (clicked != replaceButton && clicked != copyNewButton) {
+            return;
+        }
+
+        int changedCount = 0;
+        for (const auto &result: results) {
+            if (!result.ok()) continue;
+            if (clicked == replaceButton) {
+                applyResolvedServerAddress(result.profile, result.resolvedAddress);
+                result.profile->Save();
+                changedCount++;
+            } else if (clicked == copyNewButton) {
+                auto clone = cloneProfileForResolvedAddress(result.profile, result.resolvedAddress);
+                if (clone != nullptr && NekoGui::profileManager->AddProfile(clone, result.profile->gid)) changedCount++;
+            }
+        }
+
+        refresh_proxy_list();
+        show_log_impl(clicked == replaceButton
+                          ? tr("Resolved and replaced %1 profile(s).").arg(changedCount)
+                          : tr("Resolved and copied %1 profile(s).").arg(changedCount));
+    };
+
+    mw_domain_resolving = true;
+    show_log_impl(tr("Resolving %1 domain task(s) in background.").arg(resolveTasks.count() * profiles.count()));
+
+    runOnNewThread([=] {
+        QList<ServerResolveResult> results;
+        for (const auto &task: resolveTasks) {
+            for (const auto &profile: profiles) {
+                results << resolveProfileServer(profile, task);
+            }
+        }
+
+        runOnUiThread([=] {
+            mw_domain_resolving = false;
+            if (NekoGui::dataStore->prepare_exit) return;
+            showResolveResults(results);
+        }, this);
+    });
 }
 
 void MainWindow::on_proxyListTable_customContextMenuRequested(const QPoint &pos) {
