@@ -2,7 +2,6 @@
 #define DIALOG_BASIC_SETTINGS_H
 
 #include <QDialog>
-#include <QJsonObject>
 
 namespace Ui {
     class DialogBasicSettings;
@@ -24,7 +23,6 @@ private:
     Ui::DialogBasicSettings *ui;
 
     struct {
-        QJsonObject extraCore;
         QString custom_inbound;
         bool needRestart = false;
     } CACHE;

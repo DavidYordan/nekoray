@@ -327,6 +327,8 @@ namespace NekoGui_fmt {
 
         if (core == "internal") {
             result.outbound = QString2QJsonObject(config_simple);
+        } else if (!core.isEmpty() && core != "internal-full") {
+            result.error = "External custom cores are not supported by the RouteFluent sing-box mainline.";
         }
 
         return result;

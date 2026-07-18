@@ -9,12 +9,10 @@
 namespace NekoGui_sys {
 
     ExternalProcess::ExternalProcess() : QProcess() {
-        // qDebug() << "[Debug] ExternalProcess()" << this << running_ext;
         this->env = QProcessEnvironment::systemEnvironment().toStringList();
     }
 
     ExternalProcess::~ExternalProcess() {
-        // qDebug() << "[Debug] ~ExternalProcess()" << this << running_ext;
     }
 
     void ExternalProcess::Start() {

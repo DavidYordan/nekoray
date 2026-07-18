@@ -37,19 +37,6 @@ namespace NekoGui {
         static bool SetToActive(const QString &name);
     };
 
-    class ExtraCore : public JsonStore {
-    public:
-        QString core_map;
-
-        explicit ExtraCore();
-
-        [[nodiscard]] QString Get(const QString &id) const;
-
-        void Set(const QString &id, const QString &path);
-
-        void Delete(const QString &id);
-    };
-
     class InboundAuthorization : public JsonStore {
     public:
         QString username;
@@ -169,9 +156,6 @@ namespace NekoGui {
         int core_box_clash_api = -19090;
         QString core_box_clash_api_secret = "";
         QString core_box_underlying_dns = "";
-
-        // Other Core
-        ExtraCore *extraCore = new ExtraCore;
 
         // Methods
 

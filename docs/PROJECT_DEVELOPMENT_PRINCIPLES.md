@@ -12,7 +12,7 @@
 4. 缺失依赖优先放入项目目录，例如 `qtsdk/`、`libs/deps/`、`tools/`、`third_party/`，避免污染全局环境。
 5. Hysteria2/TUIC 必须优先并默认使用 sing-box 原生 outbound。旧版 `forceExternal` 标记不得再出现在新配置中，历史 JSON 字段只能被忽略。
 6. Naive 依赖外部核心，当前 RouteFluent/sing-box 主线不支持。新建、订阅导入和默认 UI 不得继续生成 Naive；历史配置只允许加载并给出明确不支持错误。
-7. `extraCore` 只能作为显式用户扩展项保留，不得默认注入 `naive`、`hysteria2`、`tuic` 等旧预设，避免误导用户以为正式构建仍需要这些外部核心。
+7. 不再保留任意第三方外部核心扩展入口。`extraCore`、`BuildExternal()`、外部 core 进程启动和 `Custom (Extra Core)` 均不得恢复；自定义能力只允许 `Custom (sing-box outbound)` 与 `Custom (sing-box config)` 两类 sing-box JSON。
 
 ## Windows 构建规则
 

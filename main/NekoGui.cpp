@@ -230,7 +230,6 @@ namespace NekoGui {
     // datastore
 
     DataStore::DataStore() : JsonStore() {
-        _add(new configItem("extraCore", dynamic_cast<JsonStore *>(extraCore), itemType::jsonStore));
         _add(new configItem("inbound_auth", dynamic_cast<JsonStore *>(inbound_auth), itemType::jsonStore));
 
         _add(new configItem("user_agent2", &user_agent, itemType::string));
@@ -417,32 +416,6 @@ namespace NekoGui {
             NekoGui::dataStore->Save();
         }
         return ok;
-    }
-
-    // NO default extra core
-
-    ExtraCore::ExtraCore() : JsonStore() {
-        _add(new configItem("core_map", &this->core_map, itemType::string));
-    }
-
-    QString ExtraCore::Get(const QString &id) const {
-        auto obj = QString2QJsonObject(core_map);
-        for (const auto &c: obj.keys()) {
-            if (c == id) return obj[id].toString();
-        }
-        return "";
-    }
-
-    void ExtraCore::Set(const QString &id, const QString &path) {
-        auto obj = QString2QJsonObject(core_map);
-        obj[id] = path;
-        core_map = QJsonObject2QString(obj, true);
-    }
-
-    void ExtraCore::Delete(const QString &id) {
-        auto obj = QString2QJsonObject(core_map);
-        obj.remove(id);
-        core_map = QJsonObject2QString(obj, true);
     }
 
     InboundAuthorization::InboundAuthorization() : JsonStore() {

@@ -44,8 +44,5 @@ namespace NekoGui_sys {
         bool restarting = false;
     };
 
-    // 手动管理
-    inline std::list<std::shared_ptr<ExternalProcess>> running_ext;
-
     inline QAtomicInt logCounter;
 } // namespace NekoGui_sys

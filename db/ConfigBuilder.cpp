@@ -15,16 +15,6 @@
 
 namespace NekoGui {
 
-    QStringList getAutoBypassExternalProcessPaths(const std::shared_ptr<BuildConfigResult> &result) {
-        QStringList paths;
-        for (const auto &extR: result->extRs) {
-            auto path = extR->program;
-            if (path.trimmed().isEmpty()) continue;
-            paths << path.replace("\\", "/");
-        }
-        return paths;
-    }
-
     QString genTunName() {
         auto tun_name = "neko-tun";
 #ifdef Q_OS_MACOS
@@ -496,8 +486,6 @@ namespace NekoGui {
         QString chainTagOut;
         bool muxApplied = false;
 
-        QString pastTag;
-        int pastExternalStat = 0;
         int index = 0;
 
         for (const auto &ent: ents) {
@@ -532,17 +520,10 @@ namespace NekoGui {
 
             if (index > 0) {
                 // chain rules: past
-                if (pastExternalStat == 0) {
-                    auto replaced = status->outbounds.last().toObject();
-                    replaced["detour"] = tagOut;
-                    status->outbounds.removeLast();
-                    status->outbounds += replaced;
-                } else {
-                    status->routingRules += QJsonObject{
-                        {"inbound", QJsonArray{pastTag + "-mapping"}},
-                        {"outbound", tagOut},
-                    };
-                }
+                auto replaced = status->outbounds.last().toObject();
+                replaced["detour"] = tagOut;
+                status->outbounds.removeLast();
+                status->outbounds += replaced;
             } else {
                 // index == 0 means last profile in chain / not chain
                 chainTagOut = tagOut;
@@ -550,8 +531,6 @@ namespace NekoGui {
             }
 
             if (globalAlreadyBuilt) {
-                pastTag = tagOut;
-                pastExternalStat = 0;
                 index++;
                 continue;
             }
@@ -560,88 +539,21 @@ namespace NekoGui {
                 status->globalProfiles += ent->id;
             }
 
-            // chain rules: this
-            auto ext_mapping_port = 0;
-            auto ext_socks_port = 0;
-            auto thisExternalStat = ent->bean->NeedExternal(isFirstProfile);
-            if (thisExternalStat < 0) {
-                status->result->error = "This configuration cannot be set automatically, please try another.";
-                return {};
-            }
-
-            // determine port
-            if (thisExternalStat > 0) {
-                if (ent->type == "custom") {
-                    auto bean = ent->CustomBean();
-                    if (IsValidPort(bean->mapping_port)) {
-                        ext_mapping_port = bean->mapping_port;
-                    } else {
-                        ext_mapping_port = MkPort();
-                    }
-                    if (IsValidPort(bean->socks_port)) {
-                        ext_socks_port = bean->socks_port;
-                    } else {
-                        ext_socks_port = MkPort();
-                    }
-                } else {
-                    ext_mapping_port = MkPort();
-                    ext_socks_port = MkPort();
-                }
-            }
-            if (thisExternalStat == 2) dataStore->need_keep_vpn_off = true;
-            if (thisExternalStat == 1) {
-                // mapping
-                status->inbounds += QJsonObject{
-                    {"type", "direct"},
-                    {"tag", tagOut + "-mapping"},
-                    {"listen", "127.0.0.1"},
-                    {"listen_port", ext_mapping_port},
-                    {"override_address", ent->bean->serverAddress},
-                    {"override_port", ent->bean->serverPort},
-                };
-                // no chain rule and not outbound, so need to set to direct
-                if (isFirstProfile) {
-                    status->routingRules += QJsonObject{
-                        {"inbound", QJsonArray{tagOut + "-mapping"}},
-                        {"outbound", "direct"},
-                    };
-                }
-            }
-
             // Outbound
 
             QJsonObject outbound;
             auto stream = GetStreamSettings(ent->bean.get());
 
-            if (thisExternalStat > 0) {
-                auto extR = ent->bean->BuildExternal(ext_mapping_port, ext_socks_port, thisExternalStat);
-                if (extR.program.isEmpty()) {
-                    status->result->error = QObject::tr("Core not found: %1").arg(ent->bean->DisplayCoreType());
-                    return {};
-                }
-                if (!extR.error.isEmpty()) { // rejected
-                    status->result->error = extR.error;
-                    return {};
-                }
-                extR.tag = ent->bean->DisplayType();
-                status->result->extRs.emplace_back(std::make_shared<NekoGui_fmt::ExternalBuildResult>(extR));
-
-                // SOCKS OUTBOUND
-                outbound["type"] = "socks";
-                outbound["server"] = "127.0.0.1";
-                outbound["server_port"] = ext_socks_port;
-            } else {
-                const auto coreR = ent->bean->BuildCoreObjSingBox();
-                if (!coreR.error.isEmpty()) { // rejected
-                    status->result->error = coreR.error;
-                    return {};
-                }
-                if (coreR.outbound.isEmpty()) {
-                    status->result->error = "unsupported outbound";
-                    return {};
-                }
-                outbound = coreR.outbound;
+            const auto coreR = ent->bean->BuildCoreObjSingBox();
+            if (!coreR.error.isEmpty()) { // rejected
+                status->result->error = coreR.error;
+                return {};
             }
+            if (coreR.outbound.isEmpty()) {
+                status->result->error = "unsupported outbound";
+                return {};
+            }
+            outbound = coreR.outbound;
 
             ApplySubscriptionAnyTLSClientDefault(ent, outbound);
 
@@ -701,8 +613,6 @@ namespace NekoGui {
             }
 
             status->outbounds += outbound;
-            pastTag = tagOut;
-            pastExternalStat = thisExternalStat;
             index++;
         }
 
@@ -1005,12 +915,6 @@ namespace NekoGui {
                 status->routingRules += rule;
             }
 
-            auto autoBypassExternalProcessPaths = getAutoBypassExternalProcessPaths(status->result);
-            if (!autoBypassExternalProcessPaths.isEmpty()) {
-                QJsonObject rule{{"outbound", "bypass"},
-                                 {"process_name", QList2QJsonArray(autoBypassExternalProcessPaths)}};
-                status->routingRules += rule;
-            }
         }
 
         // geopath

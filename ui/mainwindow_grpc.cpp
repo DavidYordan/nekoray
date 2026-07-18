@@ -5,6 +5,7 @@
 #include "db/ConfigBuilder.hpp"
 #include "db/traffic/TrafficLooper.hpp"
 #include "rpc/gRPC.h"
+#include "sys/ExternalProcess.hpp"
 #include "ui/widget/MessageBoxTimer.h"
 
 #include <QTimer>
@@ -18,24 +19,6 @@
 
 #include <algorithm>
 #include <atomic>
-
-// ext core
-
-std::list<std::shared_ptr<NekoGui_sys::ExternalProcess>> CreateExtCFromExtR(const std::list<std::shared_ptr<NekoGui_fmt::ExternalBuildResult>> &extRs, bool start) {
-    // plz run and start in same thread
-    std::list<std::shared_ptr<NekoGui_sys::ExternalProcess>> l;
-    for (const auto &extR: extRs) {
-        std::shared_ptr<NekoGui_sys::ExternalProcess> extC(new NekoGui_sys::ExternalProcess());
-        extC->tag = extR->tag;
-        extC->program = extR->program;
-        extC->arguments = extR->arguments;
-        extC->env = extR->env;
-        l.emplace_back(extC);
-        //
-        if (start) extC->Start();
-    }
-    return l;
-}
 
 // grpc
 
@@ -255,10 +238,6 @@ void MainWindow::speedtest_current_group(int mode, bool test_group) {
                     req.set_timeout(10 * 1000);
                     req.set_url(NekoGui::dataStore->test_latency_url.toStdString());
 
-                    //
-                    std::list<std::shared_ptr<NekoGui_sys::ExternalProcess>> extCs;
-                    QSemaphore extSem;
-
                     if (mode == libcore::TestMode::UrlTest || mode == libcore::FullTest) {
                         auto c = BuildConfig(profile, true, false);
                         if (!c->error.isEmpty()) {
@@ -269,17 +248,6 @@ void MainWindow::speedtest_current_group(int mode, bool test_group) {
                                 refresh_proxy_list(profileId);
                             });
                             continue;
-                        }
-                        //
-                        if (!c->extRs.empty()) {
-                            runOnUiThread(
-                                [&] {
-                                    extCs = CreateExtCFromExtR(c->extRs, true);
-                                    QThread::msleep(500);
-                                    extSem.release();
-                                },
-                                DS_cores);
-                            extSem.acquire();
                         }
                         //
                         auto config = new libcore::LoadConfigReq;
@@ -300,18 +268,6 @@ void MainWindow::speedtest_current_group(int mode, bool test_group) {
 
                     bool rpcOK;
                     auto result = defaultClient->Test(&rpcOK, req);
-                    //
-                    if (!extCs.empty()) {
-                        runOnUiThread(
-                            [&] {
-                                for (const auto &extC: extCs) {
-                                    extC->Kill();
-                                }
-                                extSem.release();
-                            },
-                            DS_cores);
-                        extSem.acquire();
-                    }
                     //
                     if (!rpcOK) {
                         profile->latency = -1;
@@ -487,13 +443,6 @@ void MainWindow::neko_start(int _id, CoreStartReason reason) {
         NekoGui_traffic::trafficLooper->loop_enabled = true;
 #endif
 
-        runOnUiThread(
-            [=] {
-                auto extCs = CreateExtCFromExtR(result->extRs, true);
-                NekoGui_sys::running_ext.splice(NekoGui_sys::running_ext.end(), extCs);
-            },
-            DS_cores);
-
         NekoGui::dataStore->UpdateStartedId(ent->id);
         running_internal_tun = NekoGui::dataStore->vpn_internal_tun && NekoGui::dataStore->spmode_vpn;
         running = ent;
@@ -587,16 +536,6 @@ void MainWindow::neko_stop(bool crash, bool sem, CoreStopReason reason) {
     }
 
     auto neko_stop_stage2 = [=] {
-        runOnUiThread(
-            [=] {
-                while (!NekoGui_sys::running_ext.empty()) {
-                    auto extC = NekoGui_sys::running_ext.front();
-                    extC->Kill();
-                    NekoGui_sys::running_ext.pop_front();
-                }
-            },
-            DS_cores);
-
 #ifndef NKR_NO_GRPC
         NekoGui_traffic::trafficLooper->loop_enabled = false;
         NekoGui_traffic::trafficLooper->loop_mutex.lock();

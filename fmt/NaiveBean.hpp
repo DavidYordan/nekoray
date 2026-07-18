@@ -30,11 +30,7 @@ namespace NekoGui_fmt {
 
         QString DisplayType() override { return "Naive"; };
 
-        int NeedExternal(bool isFirstProfile) override;
-
         CoreObjOutboundBuildResult BuildCoreObjSingBox() override;
-
-        ExternalBuildResult BuildExternal(int mapping_port, int socks_port, int external_stat) override;
 
         bool TryParseLink(const QString &link);
 

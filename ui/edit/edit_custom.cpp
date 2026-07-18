@@ -3,54 +3,42 @@
 
 #include "3rdparty/qt_compat/ui/widgets/editors/w_JsonEditor.hpp"
 #include "fmt/CustomBean.hpp"
-#include "fmt/Preset.hpp"
-#include "db/ConfigBuilder.hpp"
-#include "db/Database.hpp"
 
 #include <QMessageBox>
-#include <QClipboard>
 
 EditCustom::EditCustom(QWidget *parent) : QWidget(parent), ui(new Ui::EditCustom) {
     ui->setupUi(this);
     ui->config_simple->setPlaceholderText(
         "example:\n"
-        "  server-address: \"127.0.0.1:%mapping_port%\"\n"
-        "  listen-address: \"127.0.0.1\"\n"
-        "  listen-port: %socks_port%\n"
-        "  host: your-domain.com\n"
-        "  sni: your-domain.com\n");
+        "{\n"
+        "    \"type\": \"socks\",\n"
+        "    \"server\": \"127.0.0.1\",\n"
+        "    \"server_port\": 1080\n"
+        "}\n");
 }
 
 EditCustom::~EditCustom() {
     delete ui;
 }
 
-#define SAVE_CUSTOM_BEAN                            \
-    P_SAVE_COMBO_STRING(core)                       \
-    bean->command = ui->command->text().split(" "); \
-    P_SAVE_STRING_PLAIN(config_simple)              \
-    P_SAVE_COMBO_STRING(config_suffix)              \
-    P_SAVE_INT(mapping_port)                        \
-    P_SAVE_INT(socks_port)
+#define SAVE_CUSTOM_BEAN               \
+    P_SAVE_COMBO_STRING(core)          \
+    P_SAVE_STRING_PLAIN(config_simple)
 
 void EditCustom::onStart(std::shared_ptr<NekoGui::ProxyEntity> _ent) {
     this->ent = _ent;
     auto bean = this->ent->CustomBean();
 
-    // load known core
-    auto core_map = QString2QJsonObject(NekoGui::dataStore->extraCore->core_map);
-    for (const auto &key: core_map.keys()) {
-        ui->core->addItem(key);
-    }
+    ui->core->addItems({"internal", "internal-full"});
     if (preset_core == "internal") {
-        preset_command = preset_config = "";
+        preset_config = "";
         ui->config_simple->setPlaceholderText(
             "{\n"
             "    \"type\": \"socks\",\n"
             "    // ...\n"
             "}");
     } else if (preset_core == "internal-full") {
-        preset_command = preset_config = "";
+        preset_config = "";
         ui->config_simple->setPlaceholderText(
             "{\n"
             "    \"inbounds\": [],\n"
@@ -60,71 +48,30 @@ void EditCustom::onStart(std::shared_ptr<NekoGui::ProxyEntity> _ent) {
 
     // load core ui
     P_LOAD_COMBO_STRING(core)
-    ui->command->setText(bean->command.join(" "));
     ui->config_simple->setPlainText(bean->config_simple);
-    P_LOAD_COMBO_STRING(config_suffix)
-    P_LOAD_INT(mapping_port)
-    P_LOAD_INT(socks_port)
 
-    // custom external
+    // custom mode
     if (!bean->core.isEmpty()) {
         ui->core->setDisabled(true);
     } else if (!preset_core.isEmpty()) {
         bean->core = preset_core;
         ui->core->setDisabled(true);
         ui->core->setCurrentText(preset_core);
-        ui->command->setText(preset_command);
         ui->config_simple->setPlainText(preset_config);
     }
 
-    // custom internal
-    if (preset_core == "internal" || preset_core == "internal-full") {
+    const auto isSingBoxCustom = bean->core == "internal" || bean->core == "internal-full";
+    const auto isPresetSingBoxCustom = preset_core == "internal" || preset_core == "internal-full";
+    if (isSingBoxCustom || isPresetSingBoxCustom) {
         ui->core->hide();
-        if (preset_core == "internal") {
+        if (bean->core == "internal" || preset_core == "internal") {
             ui->core_l->setText(tr("Outbound JSON, please read the documentation."));
         } else {
             ui->core_l->setText(tr("Please fill the complete config."));
         }
-        ui->w_ext1->hide();
-        ui->w_ext2->hide();
+    } else {
+        ui->core_l->setText(tr("External custom cores are not supported."));
     }
-
-    // Preview
-    connect(ui->preview, &QPushButton::clicked, this, [=] {
-        // CustomBean::BuildExternal
-        QStringList th;
-        auto mapping_port = ui->mapping_port->text().toInt();
-        auto socks_port = ui->socks_port->text().toInt();
-        th << "%mapping_port% => " + (mapping_port <= 0 ? "Random" : Int2String(mapping_port));
-        th << "%socks_port% => " + (socks_port <= 0 ? "Random" : Int2String(socks_port));
-        th << "%server_addr% => " + get_edit_text_serverAddress();
-        th << "%server_port% => " + get_edit_text_serverPort();
-        MessageBoxInfo(tr("Preview replace"), th.join("\n"));
-        // EditCustom::onEnd
-        auto tmpEnt = NekoGui::ProfileManager::NewProxyEntity("custom");
-        auto bean = tmpEnt->CustomBean();
-        SAVE_CUSTOM_BEAN
-        // 补充
-        bean->serverAddress = get_edit_text_serverAddress();
-        bean->serverPort = get_edit_text_serverPort().toInt();
-        if (bean->core.isEmpty()) return;
-        //
-        auto result = NekoGui::BuildConfig(tmpEnt, false, false);
-        if (!result->error.isEmpty()) {
-            MessageBoxInfo(software_name, result->error);
-            return;
-        }
-        for (const auto &extR: result->extRs) {
-            auto command = QStringList{extR->program};
-            command += extR->arguments;
-            auto btn = QMessageBox::information(this, tr("Preview config"),
-                                                QStringLiteral("Command: %1\n\n%2").arg(QStringList2Command(command), extR->config_export),
-                                                "OK", "Copy", "", 0, 0);
-            if (btn == 1) {
-                QApplication::clipboard()->setText(extR->config_export);
-            }
-        }
-    });
 }
 
 bool EditCustom::onEnd() {
@@ -134,6 +81,10 @@ bool EditCustom::onEnd() {
     }
     if (ui->core->currentText().isEmpty()) {
         MessageBoxWarning(software_name, tr("Please pick a core."));
+        return false;
+    }
+    if (ui->core->currentText() != "internal" && ui->core->currentText() != "internal-full") {
+        MessageBoxWarning(software_name, tr("External custom cores are not supported."));
         return false;
     }
 

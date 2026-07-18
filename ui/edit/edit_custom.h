@@ -14,7 +14,6 @@ class EditCustom : public QWidget, public ProfileEditor {
 
 public:
     QString preset_core;
-    QString preset_command;
     QString preset_config;
 
     explicit EditCustom(QWidget *parent = nullptr);
