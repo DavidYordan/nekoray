@@ -5,7 +5,7 @@
 #include "db/ConfigBuilder.hpp"
 #include "db/traffic/TrafficLooper.hpp"
 #include "rpc/gRPC.h"
-#include "sys/ExternalProcess.hpp"
+#include "sys/CoreProcess.hpp"
 #include "ui/widget/MessageBoxTimer.h"
 
 #include <QTimer>

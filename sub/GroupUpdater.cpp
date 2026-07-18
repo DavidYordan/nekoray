@@ -116,7 +116,7 @@ namespace NekoGui_sub {
             if (!ok) return;
         }
 
-        // Naive requires an external core and is intentionally not imported in the sing-box-only mainline.
+        // Naive is intentionally not imported in the sing-box-only mainline.
         if (str.startsWith("naive+")) {
             return;
         }

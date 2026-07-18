@@ -1004,8 +1004,6 @@ namespace NekoGui {
             cidr_rule = "," + QJsonObject2QString(rule, false);
         }
 
-        // TODO bypass ext core process path?
-
         // auth
         QString socks_user_pass;
         if (dataStore->inbound_auth->NeedAuth()) {

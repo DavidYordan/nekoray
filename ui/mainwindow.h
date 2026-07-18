@@ -73,7 +73,7 @@ public:
         UserAction,
         StartupRestore,
         AppRestart,
-        ExternalProcessExit,
+        VpnProcessExit,
     };
 
     void neko_start(int _id = -1, CoreStartReason reason = CoreStartReason::UserAction);

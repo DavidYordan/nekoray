@@ -154,7 +154,7 @@ set(PROJECT_SOURCES
         sub/GroupUpdater.cpp
         sub/MultiMapperExport.cpp
 
-        sys/ExternalProcess.cpp
+        sys/CoreProcess.cpp
         sys/AutoRun.cpp
 
         ui/ThemeManager.cpp

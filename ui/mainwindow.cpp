@@ -7,7 +7,7 @@
 #include "db/ConfigBuilder.hpp"
 #include "sub/GroupUpdater.hpp"
 #include "sub/MultiMapperExport.hpp"
-#include "sys/ExternalProcess.hpp"
+#include "sys/CoreProcess.hpp"
 #include "sys/AutoRun.hpp"
 
 #include "ui/ThemeManager.hpp"
@@ -1178,7 +1178,7 @@ void MainWindow::dialog_message_impl(const QString &sender, const QString &info)
         } else if (info == "NewGroup") {
             refresh_groups();
         }
-    } else if (sender == "ExternalProcess") {
+    } else if (sender == "CoreProcess") {
         if (info == "Crashed") {
             neko_stop();
         } else if (info == "CoreCrashed") {
@@ -1421,7 +1421,7 @@ void MainWindow::neko_set_spmode_vpn(bool enable, bool save, ProxyModeChangeReas
             if (activeInternalTun) {
                 // current core is sing-box
             } else {
-                if (reason == ProxyModeChangeReason::ExternalProcessExit) {
+                if (reason == ProxyModeChangeReason::VpnProcessExit) {
                     vpn_pid = 0;
                 } else if (reason != ProxyModeChangeReason::UserAction) {
                     show_log_impl(tr("Skip stopping Tun during automatic state transition."));
@@ -2798,7 +2798,7 @@ bool MainWindow::StartVPNProcess() {
                                          {"--disable-color", "run", "-c", configPath}, "",
                                          NekoGui::dataStore->vpn_hide_console ? WinCommander::SW_HIDE : WinCommander::SW_SHOWMINIMIZED); // blocking
         vpn_pid = 0;
-        runOnUiThread([=] { neko_set_spmode_vpn(false, false, ProxyModeChangeReason::ExternalProcessExit); });
+        runOnUiThread([=] { neko_set_spmode_vpn(false, false, ProxyModeChangeReason::VpnProcessExit); });
     });
 #else
     //
@@ -2807,7 +2807,7 @@ bool MainWindow::StartVPNProcess() {
         if (state == QProcess::NotRunning) {
             vpn_pid = 0;
             vpn_process->deleteLater();
-            GetMainWindow()->neko_set_spmode_vpn(false, false, ProxyModeChangeReason::ExternalProcessExit);
+            GetMainWindow()->neko_set_spmode_vpn(false, false, ProxyModeChangeReason::VpnProcessExit);
         }
     });
     //

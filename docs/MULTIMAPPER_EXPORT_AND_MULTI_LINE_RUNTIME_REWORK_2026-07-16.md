@@ -393,7 +393,7 @@ enum class ProxyModeChangeReason {
     UserAction,
     StartupRestore,
     AppRestart,
-    ExternalProcessExit
+    VpnProcessExit
 };
 ```
 
