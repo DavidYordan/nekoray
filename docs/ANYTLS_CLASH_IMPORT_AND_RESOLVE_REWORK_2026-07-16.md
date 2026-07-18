@@ -26,8 +26,8 @@
 
 - 订阅/分组层级已能保存 `source_type`、默认 client、默认 DoH 和 fallback，并在 Clash 导入、分组编辑和 MultiMapper 导出中使用。
 - AnyTLS 单线路已能选择 `subscription/native/mihomo/custom`，其中 `subscription` 继承分组默认 client。
-- 解析为 IP 已迁移到后台任务，整组/大批量对比解析不会阻塞主界面；后续仍应增加进度展示和取消能力。
-- 尚缺的是后台解析进度/取消、以及更彻底的内部 TUN 重启 fail-closed 方案。
+- 解析为 IP 已迁移到后台任务，整组/大批量对比解析不会阻塞主界面；任务期间会显示进度，并允许取消。取消会中断等待中的 DoH 请求，系统 DNS 只能在当前系统解析调用返回后停止。
+- 尚缺的是更彻底的内部 TUN 重启 fail-closed 方案。
 
 ## 订阅应作为一套来源管理
 
@@ -172,6 +172,7 @@
 - [x] 解析结果已展示 DoH/公共 DNS/系统 DNS 的差异，并记录代理线路和端口。
 - [x] `fmt/AbstractBean::ResolveDomainToIP` 遗留直接替换函数已从源码移除。
 - [x] 大批量“解析为 IP”已迁移到后台任务，避免 UI 阻塞。
+- [x] 后台“解析为 IP”已增加进度展示和取消能力。
 - [x] Clash 订阅导入后，在订阅/分组层级保存 `source_type=clash`。
 - [x] Clash 订阅无论协议类型，订阅默认 client 都设为 `mihomo/1.19.28`。
 - [x] AnyTLS 线路默认继承订阅 client；非 AnyTLS 线路保留来源默认元数据但不向 core 写无效字段。
@@ -180,7 +181,6 @@
 
 待整改：
 
-- [ ] 后台“解析为 IP”增加进度展示和取消能力。
 - [ ] 内部 TUN 重启路径设计 kill-switch 或热更新策略，避免 stop/start 窗口默认直连。
 
 ## 后续注意

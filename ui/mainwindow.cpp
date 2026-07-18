@@ -58,8 +58,11 @@
 #include <QNetworkProxy>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QPointer>
+#include <QProgressDialog>
 #include <QTcpServer>
 
+#include <atomic>
 #include <cstring>
 
 namespace {
@@ -82,6 +85,7 @@ namespace {
     struct ResolveOptions {
         ResolveServerMode serverMode = ResolveServerMode::SubscriptionDoh;
         ResolveOutboundMode outboundMode = ResolveOutboundMode::Direct;
+        std::shared_ptr<std::atomic_bool> cancelToken;
         QStringList customDohUpstreams;
         QString resolverName;
         int outboundPort = 0;
@@ -246,6 +250,10 @@ namespace {
         }
     }
 
+    bool isResolveCanceled(const ResolveOptions &options) {
+        return options.cancelToken != nullptr && options.cancelToken->load();
+    }
+
     bool canListenLocalPort(int port) {
         if (!IsValidPort(port)) return false;
         QTcpServer server;
@@ -283,6 +291,10 @@ namespace {
     }
 
     QStringList queryDoh(const QUrl &url, const QString &domain, quint16 qtype, const ResolveOptions &options, QString *error) {
+        if (isResolveCanceled(options)) {
+            if (error != nullptr) *error = "canceled";
+            return {};
+        }
         const auto query = buildDnsQuery(domain, qtype);
         if (query.isEmpty()) {
             if (error != nullptr) *error = "invalid domain name";
@@ -312,18 +324,40 @@ namespace {
         request.setRawHeader("Accept", "application/dns-message");
         auto reply = manager.post(request, query);
 
-        QTimer timer;
-        timer.setSingleShot(true);
-        timer.setInterval(10000);
-        QObject::connect(&timer, &QTimer::timeout, reply, &QNetworkReply::abort);
+        bool timedOut = false;
+        bool canceled = false;
+        QTimer timeoutTimer;
+        timeoutTimer.setSingleShot(true);
+        timeoutTimer.setInterval(10000);
+        QObject::connect(&timeoutTimer, &QTimer::timeout, reply, [&] {
+            timedOut = true;
+            reply->abort();
+        });
+        QTimer cancelTimer;
+        cancelTimer.setInterval(100);
+        QObject::connect(&cancelTimer, &QTimer::timeout, reply, [&] {
+            if (!isResolveCanceled(options)) return;
+            canceled = true;
+            reply->abort();
+        });
         QEventLoop loop;
         QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
-        timer.start();
+        timeoutTimer.start();
+        cancelTimer.start();
         loop.exec();
-        timer.stop();
+        timeoutTimer.stop();
+        cancelTimer.stop();
 
         if (reply->error() != QNetworkReply::NoError) {
-            if (error != nullptr) *error = reply->errorString();
+            if (error != nullptr) {
+                if (canceled || isResolveCanceled(options)) {
+                    *error = "canceled";
+                } else if (timedOut) {
+                    *error = "timeout";
+                } else {
+                    *error = reply->errorString();
+                }
+            }
             reply->deleteLater();
             return {};
         }
@@ -333,6 +367,10 @@ namespace {
     }
 
     QStringList resolveViaDoh(const QString &domain, const QStringList &upstreams, const ResolveOptions &options, QString *method, QString *error) {
+        if (isResolveCanceled(options)) {
+            if (error != nullptr) *error = "canceled";
+            return {};
+        }
         const auto dohUpstreams = httpsDohOnly(upstreams);
         if (dohUpstreams.isEmpty()) {
             if (error != nullptr) *error = "no HTTPS DoH upstream";
@@ -341,12 +379,16 @@ namespace {
 
         QString lastError;
         for (const auto &upstream: dohUpstreams) {
+            if (isResolveCanceled(options)) {
+                if (error != nullptr) *error = "canceled";
+                return {};
+            }
             const QUrl url(upstream);
             QString errA;
             QString errAAAA;
             QStringList addresses;
             appendUniqueAddresses(addresses, queryDoh(url, domain, 1, options, &errA));
-            appendUniqueAddresses(addresses, queryDoh(url, domain, 28, options, &errAAAA));
+            if (!isResolveCanceled(options)) appendUniqueAddresses(addresses, queryDoh(url, domain, 28, options, &errAAAA));
             if (!addresses.isEmpty()) {
                 if (method != nullptr) *method = "DoH " + upstream + " via " + options.outboundName;
                 return addresses;
@@ -2145,6 +2187,12 @@ void MainWindow::on_menu_resolve_domain_triggered() {
         return;
     }
 
+    const auto totalTaskCount = resolveTasks.count() * profiles.count();
+    auto cancelToken = std::make_shared<std::atomic_bool>(false);
+    for (auto &task: resolveTasks) {
+        task.cancelToken = cancelToken;
+    }
+
     auto showResolveResults = [=](QList<ServerResolveResult> results) {
         int resolvedCount = 0;
         for (const auto &result: results) {
@@ -2200,19 +2248,47 @@ void MainWindow::on_menu_resolve_domain_triggered() {
     };
 
     mw_domain_resolving = true;
-    show_log_impl(tr("Resolving %1 domain task(s) in background.").arg(resolveTasks.count() * profiles.count()));
+    auto progress = new QProgressDialog(tr("Resolving domains..."), tr("Cancel"), 0, totalTaskCount, this);
+    QPointer<QProgressDialog> progressGuard(progress);
+    progress->setWindowTitle(tr("Resolve domain"));
+    progress->setWindowModality(Qt::WindowModal);
+    progress->setMinimumDuration(0);
+    progress->setAutoClose(false);
+    progress->setAutoReset(false);
+    connect(progress, &QProgressDialog::canceled, this, [=] {
+        cancelToken->store(true);
+        if (progressGuard != nullptr) progressGuard->setLabelText(tr("Canceling..."));
+    });
+    progress->show();
+    show_log_impl(tr("Resolving %1 domain task(s) in background.").arg(totalTaskCount));
 
     runOnNewThread([=] {
         QList<ServerResolveResult> results;
+        int completed = 0;
         for (const auto &task: resolveTasks) {
+            if (cancelToken->load()) break;
             for (const auto &profile: profiles) {
+                if (cancelToken->load()) break;
                 results << resolveProfileServer(profile, task);
+                completed++;
+                runOnUiThread([=] {
+                    if (progressGuard != nullptr) progressGuard->setValue(completed);
+                }, this);
             }
         }
 
         runOnUiThread([=] {
             mw_domain_resolving = false;
+            if (progressGuard != nullptr) {
+                progressGuard->setValue(completed);
+                progressGuard->close();
+                progressGuard->deleteLater();
+            }
             if (NekoGui::dataStore->prepare_exit) return;
+            if (cancelToken->load()) {
+                show_log_impl(tr("Domain resolve canceled after %1 of %2 task(s).").arg(completed).arg(totalTaskCount));
+                if (results.isEmpty()) return;
+            }
             showResolveResults(results);
         }, this);
     });
