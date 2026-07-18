@@ -2,7 +2,7 @@
 
 日期：2026-07-17
 
-本文定义 Nekoray 向 MultiMapper 交付线路的精简 JSON 格式。目标是让 MultiMapper 获取连接所需字段、订阅级 DoH 和 AnyTLS client 默认值，而不是复制完整 Clash YAML 或 Nekoray 本地数据库。
+本文定义 Nekoray 当前已实现的 MultiMapper 精简 JSON 导出格式。该格式可用，但 2026-07-18 已开始复评是否改为“精简 Clash-compatible YAML + `x-nekoray` 扩展”，详见 [MULTIMAPPER_COMPACT_YAML_EXPORT_EVALUATION_2026-07-18.md](./MULTIMAPPER_COMPACT_YAML_EXPORT_EVALUATION_2026-07-18.md)。待审核前，不应把 JSON 契约视为最终不可变方案。
 
 ## 入口
 
