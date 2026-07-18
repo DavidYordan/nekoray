@@ -184,6 +184,7 @@
 - [x] 系统代理自动重启路径已改为 fail-closed：程序重启、更新器重启、管理员提权重启不清空 Windows 系统代理。
 - [x] 外部 TUN 自动重启/退出路径已改为 fail-closed：不主动停止外部 TUN，只有用户明确关闭 TUN 时才停止。
 - [x] 内部 TUN 使用实际运行态标记，普通线路切换、重启代理、路由重载、辅助端口变更、程序重启/更新会被阻断，要求先明确关闭 TUN。
+- [x] Windows 无偷跑采样脚本已新增：`tools/verify_fail_closed_restart.ps1`，文档见 `docs/Windows_Fail_Closed_Verification.md`。
 
 待整改：
 

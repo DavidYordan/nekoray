@@ -453,7 +453,7 @@ TUN 整改建议：
 - [x] 辅助端口变更在内部 TUN 正运行时默认阻断，避免这类非显式 TUN 操作触发 stop/start 造成默认出口窗口。
 - [x] 外部 TUN 在程序退出/重启/更新过程中保持运行，用户明确关闭 TUN 时才停止。
 - [x] 内部 TUN 运行态使用实际加载成功的配置标记，而不是只看设置项。
-- [ ] 增加 Windows 本机验证脚本，检查重启期间系统代理注册表和 TUN 路由没有被错误撤销。
+- [x] 增加 Windows 本机验证脚本 `tools/verify_fail_closed_restart.ps1`，检查重启期间系统代理注册表、外部 TUN core、TUN 类网卡和默认路由没有被错误撤销；使用方法见 `docs/Windows_Fail_Closed_Verification.md`。
 - [ ] 如未来需要内部 TUN 下无中断切换主线路/路由，再设计并验证 Windows kill-switch；当前策略是阻断隐式 stop/start。
 
 ## 验收建议
