@@ -405,7 +405,7 @@ TUN 整改建议：
 - 新增订阅/分组层级默认值模型：`source_type`、`defaults.client`、`defaults.server_resolver`。
 - Clash 订阅导入时，无论内部线路协议是什么，订阅默认 client 都是 `mihomo/1.19.28`。
 - 订阅层级 UI 支持统一查看、修改和批量应用 client/DoH/fallback。
-- 新增 `nekoray-multimapper-export-v1` 构造函数。
+- `Copy to MultiMapper` 主输出已调整为精简 Clash-compatible YAML，并通过 `x-nekoray` 扩展携带订阅级 client、DoH、继承关系和来源标签；旧 `nekoray-multimapper-export` JSON 仅保留为历史兼容或无 YAML 构建 fallback。
 - 支持选中线路导出到剪贴板。
 - 支持当前组/订阅导出到剪贴板。
 - 导出订阅级 provider DoH、订阅级 client、source_type、source_tag/source、单线路 override，默认不导出订阅 URL。
@@ -416,19 +416,24 @@ TUN 整改建议：
 - 待本文审核后，在 `D:\python\MultiMapper\docs` 新增对接文档。
 - 明确 JSON schema、导入行为、DoH 冲突策略、AnyTLS client 默认策略。
 - 不直接改 MultiMapper 代码，除非后续明确授权。
+- 2026-07-18 用户已明确：MultiMapper 侧配合开发先暂停，等那边开发好后再实测配合；当前继续推进 Nekoray 侧其它未完成项。
 
 阶段 3：多线路辅助端口。
 
-- 新增辅助监听数据模型。
-- 配置生成器支持主线路加多辅助线路。
-- UI 支持启动/停止辅助端口和复制代理地址。
-- Clash API 和流量统计识别辅助出站。
-- 右键“解析为 IP”支持选择主线路或具体辅助线路作为 DoH 请求出站路径。
+- [x] 新增辅助监听运行时数据模型：`DataStore::aux_profile_ports` 记录 `profile_id -> listen_port`，停止主配置时清空，普通重载时保留。
+- [x] 配置生成器支持主线路加多辅助线路：每条辅助线路生成独立 `mixed` 入站和独立出站链，辅助入站转发规则进入 `frontRoutingRules`，优先于用户自定义规则，避免被分流规则截走。
+- [x] UI 支持启动/停止辅助端口和复制代理地址，并在线路表、状态栏展示 `Main` / `Aux:<port>`。
+- [x] Clash API 和流量统计识别辅助出站：辅助出站 tag 已加入 `stats_outbounds`，单跳辅助线路也会进入统计列表。
+- [x] 右键“解析为 IP”支持选择主线路或具体辅助线路作为 DoH 请求出站路径。
+- [x] 辅助端口分配已避开主 mixed 端口、gRPC 端口、Clash API 端口、自定义入站端口、已启用辅助端口和当前系统占用端口。
+- [x] 内部 TUN 正运行时，启动/停止辅助端口会被阻断，因为当前 gRPC 核心没有热更新能力，应用辅助端口需要 stop/start 整个 sing-box，可能造成 TUN 短暂卸载。
+- [ ] 后续如需要，可增加可配置端口池和持久化辅助监听模型；当前辅助端口仍按运行会话临时管理。
 
 阶段 4：无偷跑重启。
 
 - 已部分完成：软件自重启已区分“退出清理”和“用户显式关闭”，系统代理重启期间保持 fail-closed。
-- 已部分完成：自重启参数可在未开启“记住上次代理”时恢复本次会话的系统代理/TUN 意图。
+- 已部分完成：自重启参数可在未开启“记住上次代理”时恢复本次会话的系统代理/TUN 意图，并携带本次正在运行的主线路 ID，避免只恢复代理模式但不加载线路。
+- 已部分完成：辅助端口变更在内部 TUN 正运行时默认阻断，避免这类非显式 TUN 操作触发 stop/start 造成默认出口窗口。
 - 内部 TUN 重启路径设计 kill-switch 或热更新策略。
 - 增加 Windows 本机验证脚本，检查重启期间系统代理注册表和 TUN 路由没有被错误撤销。
 
@@ -436,10 +441,10 @@ TUN 整改建议：
 
 导出验收：
 
-- 从 Clash 订阅导入后，选中多条线路导出到剪贴板，JSON 中包含 `format`、`version`、`groups`、`defaults`、`items`。
-- group 中 `source_type` 为 `clash`，`defaults.client.value` 为 `mihomo/1.19.28`，即使导出的线路并非 AnyTLS。
-- AnyTLS 项包含协议字段、TLS 字段、idle-session 字段，并默认 `inherit.client=true`。
-- 来自 Clash 的订阅 DoH 出现在 `defaults.server_resolver.doh_nameservers` 和兼容字段 `doh_nameservers`。
+- 从 Clash 订阅导入后，选中多条线路导出到剪贴板，YAML 中包含 `proxies`、`dns.proxy-server-nameserver` 和 `x-nekoray.groups`。
+- `x-nekoray.groups.<source>.source_type` 为 `clash`，`default_client.value` 为 `mihomo/1.19.28`，即使导出的线路并非 AnyTLS。
+- AnyTLS proxy 包含协议字段、TLS 字段、idle-session 字段；过渡期内联 `client`，同时在 `x-nekoray` 中保留继承来源。
+- 来自 Clash 的订阅 DoH 出现在 `dns.proxy-server-nameserver` 和 `x-nekoray.groups.<source>.server_resolver.doh_upstreams`。
 - 导出的精简包不包含 Clash `proxy-groups`、`rules`、dashboard、health-check。
 
 MultiMapper 配合验收：

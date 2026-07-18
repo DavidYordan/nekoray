@@ -49,11 +49,14 @@
 #include <QMessageBox>
 #include <QDir>
 #include <QFileInfo>
+#include <QMap>
 #include <QSet>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QHostAddress>
 #include <QHostInfo>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QNetworkAccessManager>
 #include <QNetworkProxy>
 #include <QNetworkReply>
@@ -262,12 +265,45 @@ namespace {
         return true;
     }
 
+    bool internalTunRunning() {
+        return NekoGui::dataStore->vpn_internal_tun &&
+               NekoGui::dataStore->spmode_vpn &&
+               NekoGui::dataStore->started_id >= 0;
+    }
+
+    void pruneAuxiliaryProfilePorts() {
+        QMap<int, int> normalized;
+        QSet<int> seenPorts;
+        for (auto it = NekoGui::dataStore->aux_profile_ports.constBegin(); it != NekoGui::dataStore->aux_profile_ports.constEnd(); ++it) {
+            auto profile = NekoGui::profileManager->GetProfile(it.key());
+            auto group = profile == nullptr ? nullptr : NekoGui::profileManager->GetGroup(profile->gid);
+            if (profile == nullptr || profile->bean == nullptr || group == nullptr || group->archive) continue;
+            if (!IsValidPort(it.value()) || seenPorts.contains(it.value())) continue;
+            normalized.insert(it.key(), it.value());
+            seenPorts.insert(it.value());
+        }
+        if (normalized != NekoGui::dataStore->aux_profile_ports) {
+            NekoGui::dataStore->aux_profile_ports = normalized;
+        }
+    }
+
+    void collectCustomInboundPorts(QSet<int> &used) {
+        const auto inbounds = QString2QJsonObject(NekoGui::dataStore->custom_inbound)["inbounds"].toArray();
+        for (const auto &value: inbounds) {
+            if (!value.isObject()) continue;
+            const auto port = value.toObject()["listen_port"].toInt(-1);
+            if (IsValidPort(port)) used.insert(port);
+        }
+    }
+
     int allocateAuxiliaryPort() {
+        pruneAuxiliaryProfilePorts();
         QSet<int> used{
             NekoGui::dataStore->inbound_socks_port,
             NekoGui::dataStore->core_port,
         };
         if (NekoGui::dataStore->core_box_clash_api > 0) used.insert(NekoGui::dataStore->core_box_clash_api);
+        collectCustomInboundPorts(used);
         for (auto it = NekoGui::dataStore->aux_profile_ports.constBegin(); it != NekoGui::dataStore->aux_profile_ports.constEnd(); ++it) {
             used.insert(it.value());
         }
@@ -275,8 +311,12 @@ namespace {
             if (used.contains(port)) continue;
             if (canListenLocalPort(port)) return port;
         }
-        const auto randomPort = MkPort();
-        return used.contains(randomPort) ? -1 : randomPort;
+        for (int i = 0; i < 32; ++i) {
+            const auto randomPort = MkPort();
+            if (used.contains(randomPort)) continue;
+            if (canListenLocalPort(randomPort)) return randomPort;
+        }
+        return -1;
     }
 
     QString auxiliaryProxyText(int port) {
@@ -899,11 +939,20 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWi
                                                     : tr("Copy selected to MultiMapper"));
     });
     connect(ui->menu_server, &QMenu::aboutToShow, this, [=] {
+        pruneAuxiliaryProfilePorts();
         const auto selected = get_now_selected_list();
         const auto oneSelected = selected.count() == 1;
         const auto hasAux = oneSelected && NekoGui::dataStore->aux_profile_ports.contains(selected.first()->id);
-        ui->menu_start_auxiliary->setEnabled(oneSelected && NekoGui::dataStore->started_id >= 0 && !hasAux);
-        ui->menu_stop_auxiliary->setEnabled(hasAux);
+        const auto selectedIsMain = oneSelected && selected.first()->id == NekoGui::dataStore->started_id;
+        const auto tunBlocksReload = internalTunRunning();
+        ui->menu_start_auxiliary->setEnabled(oneSelected && NekoGui::dataStore->started_id >= 0 && !hasAux && !selectedIsMain && !tunBlocksReload);
+        ui->menu_start_auxiliary->setToolTip(tunBlocksReload
+                                                 ? tr("Internal Tun is running; auxiliary port changes are blocked until hot reload or kill-switch is implemented.")
+                                                 : QString{});
+        ui->menu_stop_auxiliary->setEnabled(hasAux && !tunBlocksReload);
+        ui->menu_stop_auxiliary->setToolTip(tunBlocksReload && hasAux
+                                                ? tr("Internal Tun is running; auxiliary port changes are blocked until hot reload or kill-switch is implemented.")
+                                                : QString{});
         ui->menu_copy_auxiliary_proxy->setEnabled(hasAux);
     });
     refresh_status();
@@ -927,7 +976,10 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWi
         [=] {
             core_process = new NekoGui_sys::CoreProcess(core_path, args);
             // Remember last started
-            if (NekoGui::dataStore->remember_enable && NekoGui::dataStore->remember_id >= 0) {
+            const auto restartProfileId = NekoGui::dataStore->flag_restart_profile_id;
+            if (restartProfileId >= 0) {
+                core_process->start_profile_when_core_is_up = restartProfileId;
+            } else if (NekoGui::dataStore->remember_enable && NekoGui::dataStore->remember_id >= 0) {
                 core_process->start_profile_when_core_is_up = NekoGui::dataStore->remember_id;
             }
             // Setup
@@ -1179,6 +1231,7 @@ void MainWindow::on_menu_exit_triggered() {
         NekoGui::dataStore->prepare_exit = true;
         exit_had_system_proxy = NekoGui::dataStore->spmode_system_proxy;
         exit_had_vpn = NekoGui::dataStore->spmode_vpn;
+        exit_had_profile_id = NekoGui::dataStore->started_id;
         // Do not clear Windows system proxy as a side effect of restart/exit.
         // Keeping it pointed at the local port is fail-closed and avoids
         // direct traffic fallback while a new process is starting.
@@ -1217,11 +1270,21 @@ void MainWindow::on_menu_exit_triggered() {
             arguments.removeAll("-flag_restart_tun_on");
             arguments.removeAll("-flag_restart_system_proxy_on");
             arguments.removeAll("-flag_reorder");
+            int restartProfileIndex = -1;
+            while ((restartProfileIndex = arguments.indexOf("-flag_restart_profile_id")) >= 0) {
+                arguments.removeAt(restartProfileIndex);
+                if (restartProfileIndex < arguments.size() && !arguments.at(restartProfileIndex).startsWith("-")) {
+                    arguments.removeAt(restartProfileIndex);
+                }
+            }
         }
         auto isLauncher = qEnvironmentVariable("NKR_FROM_LAUNCHER") == "1";
         if (isLauncher) arguments.prepend("--");
         auto program = isLauncher ? "./launcher" : QApplication::applicationFilePath();
 
+        if (exit_had_profile_id >= 0) {
+            arguments << "-flag_restart_profile_id" << Int2String(exit_had_profile_id);
+        }
         if (exit_had_system_proxy) {
             arguments << "-flag_restart_system_proxy_on";
         }
@@ -1337,6 +1400,7 @@ void MainWindow::neko_set_spmode_vpn(bool enable, bool save) {
 }
 
 void MainWindow::refresh_status(const QString &traffic_update) {
+    pruneAuxiliaryProfilePorts();
     auto refresh_speed_label = [=] {
         if (traffic_update_cache == "") {
             ui->label_speed->setText(QObject::tr("Proxy: %1\nDirect: %2").arg("", ""));
@@ -1701,6 +1765,7 @@ void MainWindow::on_menu_delete_triggered() {
 }
 
 void MainWindow::on_menu_start_auxiliary_triggered() {
+    pruneAuxiliaryProfilePorts();
     auto ents = get_now_selected_list();
     if (ents.count() != 1) {
         MessageBoxWarning(software_name, tr("Please select one profile."));
@@ -1712,6 +1777,15 @@ void MainWindow::on_menu_start_auxiliary_triggered() {
     }
 
     auto ent = ents.first();
+    if (ent->id == NekoGui::dataStore->started_id) {
+        MessageBoxWarning(software_name, tr("The main profile is already running on the primary inbound."));
+        return;
+    }
+    if (internalTunRunning()) {
+        MessageBoxWarning(software_name,
+                          tr("Internal Tun is running. Auxiliary port changes would reload sing-box and temporarily tear down Tun, so this is blocked until hot reload or kill-switch support is implemented."));
+        return;
+    }
     if (NekoGui::dataStore->aux_profile_ports.contains(ent->id)) {
         const auto port = NekoGui::dataStore->aux_profile_ports.value(ent->id);
         QApplication::clipboard()->setText(auxiliaryProxyText(port));
@@ -1742,11 +1816,17 @@ void MainWindow::on_menu_start_auxiliary_triggered() {
 }
 
 void MainWindow::on_menu_stop_auxiliary_triggered() {
+    pruneAuxiliaryProfilePorts();
     auto ents = get_now_selected_list();
     if (ents.count() != 1) return;
 
     auto ent = ents.first();
     if (!NekoGui::dataStore->aux_profile_ports.contains(ent->id)) return;
+    if (internalTunRunning()) {
+        MessageBoxWarning(software_name,
+                          tr("Internal Tun is running. Auxiliary port changes would reload sing-box and temporarily tear down Tun, so this is blocked until hot reload or kill-switch support is implemented."));
+        return;
+    }
     const auto port = NekoGui::dataStore->aux_profile_ports.take(ent->id);
     show_log_impl(tr("Stopping auxiliary port %1 for %2").arg(port).arg(ent->bean->DisplayTypeAndName()));
     if (NekoGui::dataStore->started_id >= 0) {
@@ -1757,6 +1837,7 @@ void MainWindow::on_menu_stop_auxiliary_triggered() {
 }
 
 void MainWindow::on_menu_copy_auxiliary_proxy_triggered() {
+    pruneAuxiliaryProfilePorts();
     auto ents = get_now_selected_list();
     if (ents.count() != 1) return;
 
@@ -2073,6 +2154,7 @@ void MainWindow::on_menu_resolve_domain_triggered() {
     if (!ok) return;
 
     auto chooseOutboundPath = [&](ResolveOptions &options) {
+        pruneAuxiliaryProfilePorts();
         if (options.serverMode == ResolveServerMode::System) {
             options.outboundMode = ResolveOutboundMode::Direct;
             options.outboundName = tr("System resolver");

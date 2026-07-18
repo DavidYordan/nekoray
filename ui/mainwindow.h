@@ -170,6 +170,7 @@ private:
     int exit_reason = 0;
     bool exit_had_system_proxy = false;
     bool exit_had_vpn = false;
+    int exit_had_profile_id = -1919;
 
     QList<std::shared_ptr<NekoGui::ProxyEntity>> get_now_selected_list();
 

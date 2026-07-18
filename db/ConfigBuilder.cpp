@@ -306,21 +306,25 @@ namespace NekoGui {
         }
     }
 
-    void AppendInboundRouteActions(const std::shared_ptr<BuildConfigStatus> &status, const QString &inboundTag) {
+    void AppendInboundRouteActions(QJsonArray &rules, const QString &inboundTag) {
         const auto inboundDomainStrategy = NormalizeDnsStrategy(dataStore->routing->domain_strategy);
         if (!inboundDomainStrategy.isEmpty()) {
-            status->routingRules += QJsonObject{
+            rules += QJsonObject{
                 {"inbound", inboundTag},
                 {"action", "resolve"},
                 {"strategy", inboundDomainStrategy},
             };
         }
         if (dataStore->routing->sniffing_mode != SniffingMode::DISABLE) {
-            status->routingRules += QJsonObject{
+            rules += QJsonObject{
                 {"inbound", inboundTag},
                 {"action", "sniff"},
             };
         }
+    }
+
+    void AppendInboundRouteActions(const std::shared_ptr<BuildConfigStatus> &status, const QString &inboundTag) {
+        AppendInboundRouteActions(status->routingRules, inboundTag);
     }
 
     QJsonObject NormalizeRouteRuleActions(QJsonObject rule);
@@ -417,8 +421,8 @@ namespace NekoGui {
         // BuildChain
         QString chainTagOut = BuildChainInternal(chainId, ents, status);
 
-        // Chain ent traffic stat
-        if (ents.length() > 1) {
+        // Chain and auxiliary ent traffic stat
+        if (ents.length() > 1 || chainId != 0) {
             status->ent->traffic_data->id = status->ent->id;
             status->ent->traffic_data->tag = chainTagOut.toStdString();
             status->result->outboundStats += status->ent->traffic_data;
@@ -771,7 +775,7 @@ namespace NekoGui {
                     {"listen", "127.0.0.1"},
                     {"listen_port", it.value()},
                 };
-                AppendInboundRouteActions(status, inboundTag);
+                AppendInboundRouteActions(status->frontRoutingRules, inboundTag);
 
                 status->ent = auxProfile;
                 const auto auxOutboundTag = BuildChain(auxChainId++, status);
@@ -779,7 +783,7 @@ namespace NekoGui {
                 if (!status->result->error.isEmpty()) return;
                 if (auxOutboundTag.isEmpty()) continue;
 
-                status->routingRules += QJsonObject{
+                status->frontRoutingRules += QJsonObject{
                     {"inbound", QJsonArray{inboundTag}},
                     {"outbound", auxOutboundTag},
                 };
@@ -1015,8 +1019,14 @@ namespace NekoGui {
         if (geosite.isEmpty()) status->result->error = +"geosite.db not found";
 
         // final add routing rule
-        auto routingRules = NormalizeRouteRuleActions(QString2QJsonObject(dataStore->routing->custom)["rules"].toArray());
-        if (status->forTest) routingRules = {};
+        auto routingRules = status->frontRoutingRules;
+        auto profileRoutingRules = NormalizeRouteRuleActions(QString2QJsonObject(dataStore->routing->custom)["rules"].toArray());
+        if (status->forTest) {
+            routingRules = {};
+            profileRoutingRules = {};
+        } else {
+            QJSONARRAY_ADD(routingRules, profileRoutingRules)
+        }
         auto globalRoutingRules = NormalizeRouteRuleActions(QString2QJsonObject(dataStore->custom_route_global)["rules"].toArray());
         if (!status->forTest) QJSONARRAY_ADD(routingRules, globalRoutingRules)
         QJSONARRAY_ADD(routingRules, status->routingRules)

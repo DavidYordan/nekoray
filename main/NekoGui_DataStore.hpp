@@ -90,6 +90,7 @@ namespace NekoGui {
         bool flag_debug = false;
         bool flag_restart_tun_on = false;
         bool flag_restart_system_proxy_on = false;
+        int flag_restart_profile_id = -1919;
         bool flag_reorder = false;
 
         // Saved

@@ -48,6 +48,7 @@ namespace NekoGui {
         // config format
 
         QJsonArray routingRules;
+        QJsonArray frontRoutingRules;
         QJsonArray inbounds;
         QJsonArray outbounds;
         QList<ResolverBindingRequest> resolverBindingRequests;

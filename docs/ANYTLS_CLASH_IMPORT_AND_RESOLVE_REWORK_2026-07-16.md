@@ -178,6 +178,9 @@
 - [x] AnyTLS 线路默认继承订阅 client；非 AnyTLS 线路保留来源默认元数据但不向 core 写无效字段。
 - [x] 订阅层级 client/DoH/fallback 管理 UI 已在分组编辑面板提供，并支持重置线路为继承默认值。
 - [x] 单线路编辑 UI 已增加“继承订阅 / 覆盖订阅”状态。
+- [x] 辅助线路端口已接入右键解析出站选择，并在配置生成时作为独立出站加入统计列表。
+- [x] 内部 TUN 正运行时，辅助端口启动/停止会被阻断，避免为了添加/删除辅助线路而隐式重载 sing-box 造成 TUN 短暂卸载。
+- [x] 程序自重启已携带本次正在运行的主线路 ID；即使未开启“记住上次代理”，也能在恢复系统代理/TUN 意图时同步恢复主线路。
 
 待整改：
 
@@ -187,4 +190,4 @@
 
 - `anytls://` 标准分享链接能携带 AnyTLS client mode/value，但不会携带本项目的订阅级默认值和 `server_resolver_doh` 等 provider DoH 元数据。
 - `nekoray://` 链接能保存 bean JSON，信息更完整，但 MultiMapper 当前不直接消费 `nekoray://`。
-- 如果要和 MultiMapper 形成可靠配合，应新增“精简线路包”导出格式，显式携带订阅级 `source_type`、client 默认值、DoH 默认值、线路字段和必要 override，而不是复制原始 Clash YAML。
+- 与 MultiMapper 配合的主格式已改为精简 Clash-compatible YAML，并通过 `x-nekoray` 扩展显式携带订阅级 `source_type`、client 默认值、DoH 默认值、线路字段和必要 override；不复制原始 Clash 全量 YAML。
