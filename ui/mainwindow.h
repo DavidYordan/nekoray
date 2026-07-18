@@ -49,13 +49,40 @@ public:
 
     void refresh_status(const QString &traffic_update = "");
 
-    void neko_start(int _id = -1);
+    bool isInternalTunActive() const;
 
-    void neko_stop(bool crash = false, bool sem = false);
+    enum class CoreStartReason {
+        UserAction,
+        ProfileReload,
+        StartupRestore,
+        EnableInternalTun,
+        DisableInternalTun,
+        CoreCrashRecovery,
+    };
 
-    void neko_set_spmode_system_proxy(bool enable, bool save = true);
+    enum class CoreStopReason {
+        UserAction,
+        ProfileReload,
+        AppExit,
+        EnableInternalTun,
+        CoreCrashCleanup,
+        DisableInternalTun,
+    };
 
-    void neko_set_spmode_vpn(bool enable, bool save = true);
+    enum class ProxyModeChangeReason {
+        UserAction,
+        StartupRestore,
+        AppRestart,
+        ExternalProcessExit,
+    };
+
+    void neko_start(int _id = -1, CoreStartReason reason = CoreStartReason::UserAction);
+
+    void neko_stop(bool crash = false, bool sem = false, CoreStopReason reason = CoreStopReason::UserAction);
+
+    void neko_set_spmode_system_proxy(bool enable, bool save = true, ProxyModeChangeReason reason = ProxyModeChangeReason::UserAction);
+
+    void neko_set_spmode_vpn(bool enable, bool save = true, ProxyModeChangeReason reason = ProxyModeChangeReason::UserAction);
 
     void show_log_impl(const QString &log);
 
@@ -171,6 +198,7 @@ private:
     bool exit_had_system_proxy = false;
     bool exit_had_vpn = false;
     int exit_had_profile_id = -1919;
+    bool running_internal_tun = false;
 
     QList<std::shared_ptr<NekoGui::ProxyEntity>> get_now_selected_list();
 

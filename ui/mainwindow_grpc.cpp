@@ -42,6 +42,27 @@ std::list<std::shared_ptr<NekoGui_sys::ExternalProcess>> CreateExtCFromExtR(cons
 using namespace NekoGui_rpc;
 #endif
 
+namespace {
+    bool internalTunWouldBeInterrupted() {
+        return GetMainWindow() != nullptr && GetMainWindow()->isInternalTunActive();
+    }
+
+    bool tunModeChangePendingWhileRunning() {
+        return NekoGui::dataStore->spmode_vpn &&
+               NekoGui::dataStore->started_id >= 0 &&
+               GetMainWindow() != nullptr &&
+               NekoGui::dataStore->vpn_internal_tun != GetMainWindow()->isInternalTunActive();
+    }
+
+    QString internalTunReloadBlockedMessage() {
+        return QObject::tr("Internal Tun is running. This operation would stop and restart sing-box and may restore direct traffic. Disable Tun explicitly first.");
+    }
+
+    QString tunModeChangeBlockedMessage() {
+        return QObject::tr("Tun implementation was changed while Tun is running. Disable Tun explicitly before restarting or reloading.");
+    }
+}
+
 void MainWindow::setup_grpc() {
 #ifndef NKR_NO_GRPC
     // Setup Connection
@@ -294,7 +315,7 @@ void MainWindow::stop_core_daemon() {
 #endif
 }
 
-void MainWindow::neko_start(int _id) {
+void MainWindow::neko_start(int _id, CoreStartReason reason) {
     if (NekoGui::dataStore->prepare_exit) return;
 
     auto ents = get_now_selected_list();
@@ -310,6 +331,21 @@ void MainWindow::neko_start(int _id) {
 
     auto group = NekoGui::profileManager->GetGroup(ent->gid);
     if (group == nullptr || group->archive) return;
+
+    if (internalTunWouldBeInterrupted() &&
+        reason != CoreStartReason::EnableInternalTun &&
+        reason != CoreStartReason::DisableInternalTun &&
+        reason != CoreStartReason::CoreCrashRecovery) {
+        MessageBoxWarning(software_name, internalTunReloadBlockedMessage());
+        return;
+    }
+    if (tunModeChangePendingWhileRunning() &&
+        reason != CoreStartReason::EnableInternalTun &&
+        reason != CoreStartReason::DisableInternalTun &&
+        reason != CoreStartReason::CoreCrashRecovery) {
+        MessageBoxWarning(software_name, tunModeChangeBlockedMessage());
+        return;
+    }
 
     auto result = BuildConfig(ent, false, false);
     if (!result->error.isEmpty()) {
@@ -358,6 +394,7 @@ void MainWindow::neko_start(int _id) {
             DS_cores);
 
         NekoGui::dataStore->UpdateStartedId(ent->id);
+        running_internal_tun = NekoGui::dataStore->vpn_internal_tun && NekoGui::dataStore->spmode_vpn;
         running = ent;
 
         runOnUiThread([=] {
@@ -401,7 +438,15 @@ void MainWindow::neko_start(int _id) {
     runOnNewThread([=] {
         // stop current running
         if (NekoGui::dataStore->started_id >= 0) {
-            runOnUiThread([=] { neko_stop(false, true); });
+            auto stopReason = CoreStopReason::ProfileReload;
+            auto stopCrash = false;
+            if (reason == CoreStartReason::EnableInternalTun) stopReason = CoreStopReason::EnableInternalTun;
+            if (reason == CoreStartReason::DisableInternalTun) stopReason = CoreStopReason::DisableInternalTun;
+            if (reason == CoreStartReason::CoreCrashRecovery) {
+                stopReason = CoreStopReason::CoreCrashCleanup;
+                stopCrash = true;
+            }
+            runOnUiThread([=] { neko_stop(stopCrash, true, stopReason); });
             sem_stopped.acquire();
         }
         // do start
@@ -425,10 +470,18 @@ void MainWindow::neko_start(int _id) {
     });
 }
 
-void MainWindow::neko_stop(bool crash, bool sem) {
+void MainWindow::neko_stop(bool crash, bool sem, CoreStopReason reason) {
     auto id = NekoGui::dataStore->started_id;
     if (id < 0) {
         if (sem) sem_stopped.release();
+        return;
+    }
+
+    if (!crash && internalTunWouldBeInterrupted() &&
+        reason != CoreStopReason::EnableInternalTun &&
+        reason != CoreStopReason::DisableInternalTun) {
+        if (sem) sem_stopped.release();
+        MessageBoxWarning(software_name, internalTunReloadBlockedMessage());
         return;
     }
 
@@ -471,6 +524,7 @@ void MainWindow::neko_stop(bool crash, bool sem) {
         NekoGui::dataStore->UpdateStartedId(-1919);
         if (clearedAuxProfiles) NekoGui::dataStore->aux_profile_ports.clear();
         NekoGui::dataStore->need_keep_vpn_off = false;
+        running_internal_tun = false;
         running = nullptr;
 
         runOnUiThread([=] {

@@ -266,9 +266,14 @@ namespace {
     }
 
     bool internalTunRunning() {
-        return NekoGui::dataStore->vpn_internal_tun &&
-               NekoGui::dataStore->spmode_vpn &&
-               NekoGui::dataStore->started_id >= 0;
+        return GetMainWindow() != nullptr && GetMainWindow()->isInternalTunActive();
+    }
+
+    bool tunModeChangePendingWhileRunning() {
+        return NekoGui::dataStore->spmode_vpn &&
+               NekoGui::dataStore->started_id >= 0 &&
+               GetMainWindow() != nullptr &&
+               NekoGui::dataStore->vpn_internal_tun != GetMainWindow()->isInternalTunActive();
     }
 
     void pruneAuxiliaryProfilePorts() {
@@ -795,7 +800,9 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWi
     connect(ui->menu_open_config_folder, &QAction::triggered, this, [=] { QDesktopServices::openUrl(QUrl::fromLocalFile(QDir::currentPath())); });
     ui->menu_program_preference->addActions(ui->menu_preferences->actions());
     connect(ui->menu_add_from_clipboard2, &QAction::triggered, ui->menu_add_from_clipboard, &QAction::trigger);
-    connect(ui->actionRestart_Proxy, &QAction::triggered, this, [=] { if (NekoGui::dataStore->started_id>=0) neko_start(NekoGui::dataStore->started_id); });
+    connect(ui->actionRestart_Proxy, &QAction::triggered, this, [=] {
+        if (NekoGui::dataStore->started_id >= 0) neko_start(NekoGui::dataStore->started_id, CoreStartReason::ProfileReload);
+    });
     connect(ui->actionRestart_Program, &QAction::triggered, this, [=] { MW_dialog_message("", "RestartProgram"); });
     connect(ui->actionShow_window, &QAction::triggered, this, [=] { tray->activated(QSystemTrayIcon::ActivationReason::Trigger); });
     //
@@ -836,7 +843,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWi
         if (NekoGui::dataStore->started_id == id) {
             neko_stop();
         } else {
-            neko_start(id);
+            neko_start(id, CoreStartReason::ProfileReload);
         }
     });
     connect(ui->menuActive_Routing, &QMenu::triggered, this, [=](QAction *a) {
@@ -849,7 +856,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWi
                 if (QMessageBox::question(GetMessageBoxParent(), software_name, tr("Load routing and apply: %1").arg(fn) + "\n" + r.DisplayRouting()) == QMessageBox::Yes) {
                     NekoGui::Routing::SetToActive(fn);
                     if (NekoGui::dataStore->started_id >= 0) {
-                        neko_start(NekoGui::dataStore->started_id);
+                        neko_start(NekoGui::dataStore->started_id, CoreStartReason::ProfileReload);
                     } else {
                         refresh_status();
                     }
@@ -947,11 +954,11 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWi
         const auto tunBlocksReload = internalTunRunning();
         ui->menu_start_auxiliary->setEnabled(oneSelected && NekoGui::dataStore->started_id >= 0 && !hasAux && !selectedIsMain && !tunBlocksReload);
         ui->menu_start_auxiliary->setToolTip(tunBlocksReload
-                                                 ? tr("Internal Tun is running; auxiliary port changes are blocked until hot reload or kill-switch is implemented.")
+                                                 ? tr("Internal Tun is running; disable Tun explicitly before changing auxiliary ports.")
                                                  : QString{});
         ui->menu_stop_auxiliary->setEnabled(hasAux && !tunBlocksReload);
         ui->menu_stop_auxiliary->setToolTip(tunBlocksReload && hasAux
-                                                ? tr("Internal Tun is running; auxiliary port changes are blocked until hot reload or kill-switch is implemented.")
+                                                ? tr("Internal Tun is running; disable Tun explicitly before changing auxiliary ports.")
                                                 : QString{});
         ui->menu_copy_auxiliary_proxy->setEnabled(hasAux);
     });
@@ -992,10 +999,10 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWi
     // "remember last proxy" is disabled.
     if (NekoGui::dataStore->remember_enable || NekoGui::dataStore->flag_restart_tun_on || NekoGui::dataStore->flag_restart_system_proxy_on) {
         if (NekoGui::dataStore->remember_spmode.contains("system_proxy") || NekoGui::dataStore->flag_restart_system_proxy_on) {
-            neko_set_spmode_system_proxy(true, false);
+            neko_set_spmode_system_proxy(true, false, ProxyModeChangeReason::StartupRestore);
         }
         if (NekoGui::dataStore->remember_spmode.contains("vpn") || NekoGui::dataStore->flag_restart_tun_on) {
-            neko_set_spmode_vpn(true, false);
+            neko_set_spmode_vpn(true, false, ProxyModeChangeReason::StartupRestore);
         }
     }
 
@@ -1029,6 +1036,10 @@ void MainWindow::closeEvent(QCloseEvent *event) {
 
 MainWindow::~MainWindow() {
     delete ui;
+}
+
+bool MainWindow::isInternalTunActive() const {
+    return running_internal_tun;
 }
 
 // Group tab manage
@@ -1114,7 +1125,7 @@ void MainWindow::dialog_message_impl(const QString &sender, const QString &info)
         }
         if (suggestRestartProxy && NekoGui::dataStore->started_id >= 0 &&
             QMessageBox::question(GetMessageBoxParent(), tr("Confirmation"), tr("Settings changed, restart proxy?")) == QMessageBox::StandardButton::Yes) {
-            neko_start(NekoGui::dataStore->started_id);
+            neko_start(NekoGui::dataStore->started_id, CoreStartReason::ProfileReload);
         }
         refresh_status();
     }
@@ -1141,7 +1152,7 @@ void MainWindow::dialog_message_impl(const QString &sender, const QString &info)
             refresh_proxy_list();
             if (msg.contains("restart")) {
                 if (QMessageBox::question(GetMessageBoxParent(), tr("Confirmation"), tr("Settings changed, restart proxy?")) == QMessageBox::StandardButton::Yes) {
-                    neko_start(NekoGui::dataStore->started_id);
+                    neko_start(NekoGui::dataStore->started_id, CoreStartReason::ProfileReload);
                 }
             }
         }
@@ -1162,9 +1173,9 @@ void MainWindow::dialog_message_impl(const QString &sender, const QString &info)
         if (info == "Crashed") {
             neko_stop();
         } else if (info == "CoreCrashed") {
-            neko_stop(true);
+            neko_stop(true, false, CoreStopReason::CoreCrashCleanup);
         } else if (info.startsWith("CoreStarted")) {
-            neko_start(info.split(",")[1].toInt());
+            neko_start(info.split(",")[1].toInt(), CoreStartReason::CoreCrashRecovery);
         }
     }
 }
@@ -1227,6 +1238,15 @@ void MainWindow::on_commitDataRequest() {
 }
 
 void MainWindow::on_menu_exit_triggered() {
+    if (internalTunRunning() && exit_reason != 3) {
+        MessageBoxWarning(software_name, tr("Internal Tun is running. Exiting, restarting, or updating would stop sing-box and may restore direct traffic. Disable Tun explicitly first."));
+        return;
+    }
+    if (tunModeChangePendingWhileRunning() && exit_reason != 3) {
+        MessageBoxWarning(software_name, tr("Tun implementation was changed while Tun is running. Disable Tun explicitly before restarting or updating."));
+        return;
+    }
+
     if (mu_exit.tryLock()) {
         NekoGui::dataStore->prepare_exit = true;
         exit_had_system_proxy = NekoGui::dataStore->spmode_system_proxy;
@@ -1235,15 +1255,12 @@ void MainWindow::on_menu_exit_triggered() {
         // Do not clear Windows system proxy as a side effect of restart/exit.
         // Keeping it pointed at the local port is fail-closed and avoids
         // direct traffic fallback while a new process is starting.
-        if (!NekoGui::dataStore->vpn_internal_tun && NekoGui::dataStore->spmode_vpn) {
-            neko_set_spmode_vpn(false, false);
-        }
         RegisterHotkey(true);
         //
         on_commitDataRequest();
         //
         NekoGui::dataStore->save_control_no_save = true; // don't change datastore after this line
-        neko_stop(false, true);
+        neko_stop(false, true, CoreStopReason::AppExit);
         //
         hide();
         runOnNewThread([=] {
@@ -1257,12 +1274,7 @@ void MainWindow::on_menu_exit_triggered() {
     }
     //
     MF_release_runguard();
-    if (exit_reason == 1) {
-        QDir::setCurrent(QApplication::applicationDirPath());
-        QProcess::startDetached("./updater", QStringList{});
-    } else if (exit_reason == 2 || exit_reason == 3) {
-        QDir::setCurrent(QApplication::applicationDirPath());
-
+    auto buildRestartArguments = [=]() {
         auto arguments = NekoGui::dataStore->argv;
         if (arguments.length() > 0) {
             arguments.removeFirst();
@@ -1278,9 +1290,6 @@ void MainWindow::on_menu_exit_triggered() {
                 }
             }
         }
-        auto isLauncher = qEnvironmentVariable("NKR_FROM_LAUNCHER") == "1";
-        if (isLauncher) arguments.prepend("--");
-        auto program = isLauncher ? "./launcher" : QApplication::applicationFilePath();
 
         if (exit_had_profile_id >= 0) {
             arguments << "-flag_restart_profile_id" << Int2String(exit_had_profile_id);
@@ -1291,6 +1300,21 @@ void MainWindow::on_menu_exit_triggered() {
         if (exit_had_vpn || exit_reason == 3) {
             arguments << "-flag_restart_tun_on";
         }
+        return arguments;
+    };
+
+    if (exit_reason == 1) {
+        QDir::setCurrent(QApplication::applicationDirPath());
+        auto arguments = buildRestartArguments();
+        arguments.prepend("--");
+        QProcess::startDetached("./updater", arguments);
+    } else if (exit_reason == 2 || exit_reason == 3) {
+        QDir::setCurrent(QApplication::applicationDirPath());
+
+        auto arguments = buildRestartArguments();
+        auto isLauncher = qEnvironmentVariable("NKR_FROM_LAUNCHER") == "1";
+        if (isLauncher) arguments.prepend("--");
+        auto program = isLauncher ? "./launcher" : QApplication::applicationFilePath();
 
         if (exit_reason == 3) {
             // Tun restart as admin
@@ -1311,13 +1335,18 @@ void MainWindow::on_menu_exit_triggered() {
     refresh_status();          \
     return;
 
-void MainWindow::neko_set_spmode_system_proxy(bool enable, bool save) {
+void MainWindow::neko_set_spmode_system_proxy(bool enable, bool save, ProxyModeChangeReason reason) {
     if (enable != NekoGui::dataStore->spmode_system_proxy) {
         if (enable) {
             auto socks_port = NekoGui::dataStore->inbound_socks_port;
             auto http_port = NekoGui::dataStore->inbound_socks_port;
             SetSystemProxy(http_port, socks_port);
         } else {
+            if (reason != ProxyModeChangeReason::UserAction) {
+                show_log_impl(tr("Skip clearing system proxy during automatic state transition."));
+                refresh_status();
+                return;
+            }
             ClearSystemProxy();
         }
     }
@@ -1334,8 +1363,13 @@ void MainWindow::neko_set_spmode_system_proxy(bool enable, bool save) {
     refresh_status();
 }
 
-void MainWindow::neko_set_spmode_vpn(bool enable, bool save) {
-    if (enable != NekoGui::dataStore->spmode_vpn) {
+void MainWindow::neko_set_spmode_vpn(bool enable, bool save, ProxyModeChangeReason reason) {
+    const auto wasEnabled = NekoGui::dataStore->spmode_vpn;
+    const auto activeInternalTun = isInternalTunActive();
+    const auto shouldReloadInternalTun = enable != wasEnabled &&
+                                         ((enable && NekoGui::dataStore->vpn_internal_tun) || (!enable && activeInternalTun));
+
+    if (enable != wasEnabled) {
         if (enable) {
             if (NekoGui::dataStore->vpn_internal_tun) {
                 bool requestPermission = !NekoGui::IsAdmin();
@@ -1375,9 +1409,16 @@ void MainWindow::neko_set_spmode_vpn(bool enable, bool save) {
                 }
             }
         } else {
-            if (NekoGui::dataStore->vpn_internal_tun) {
+            if (activeInternalTun) {
                 // current core is sing-box
             } else {
+                if (reason == ProxyModeChangeReason::ExternalProcessExit) {
+                    vpn_pid = 0;
+                } else if (reason != ProxyModeChangeReason::UserAction) {
+                    show_log_impl(tr("Skip stopping Tun during automatic state transition."));
+                    refresh_status();
+                    return;
+                }
                 if (!StopVPNProcess()) {
                     neko_set_spmode_FAILED
                 }
@@ -1396,7 +1437,9 @@ void MainWindow::neko_set_spmode_vpn(bool enable, bool save) {
     NekoGui::dataStore->spmode_vpn = enable;
     refresh_status();
 
-    if (NekoGui::dataStore->vpn_internal_tun && NekoGui::dataStore->started_id >= 0) neko_start(NekoGui::dataStore->started_id);
+    if (shouldReloadInternalTun && NekoGui::dataStore->started_id >= 0) {
+        neko_start(NekoGui::dataStore->started_id, enable ? CoreStartReason::EnableInternalTun : CoreStartReason::DisableInternalTun);
+    }
 }
 
 void MainWindow::refresh_status(const QString &traffic_update) {
@@ -1783,7 +1826,7 @@ void MainWindow::on_menu_start_auxiliary_triggered() {
     }
     if (internalTunRunning()) {
         MessageBoxWarning(software_name,
-                          tr("Internal Tun is running. Auxiliary port changes would reload sing-box and temporarily tear down Tun, so this is blocked until hot reload or kill-switch support is implemented."));
+                          tr("Internal Tun is running. Auxiliary port changes would reload sing-box and may restore direct traffic. Disable Tun explicitly first."));
         return;
     }
     if (NekoGui::dataStore->aux_profile_ports.contains(ent->id)) {
@@ -1810,7 +1853,7 @@ void MainWindow::on_menu_start_auxiliary_triggered() {
     }
 
     show_log_impl(tr("Starting auxiliary port %1 for %2").arg(port).arg(ent->bean->DisplayTypeAndName()));
-    neko_start(NekoGui::dataStore->started_id);
+    neko_start(NekoGui::dataStore->started_id, CoreStartReason::ProfileReload);
     refresh_status();
     refresh_proxy_list(ent->id);
 }
@@ -1824,13 +1867,13 @@ void MainWindow::on_menu_stop_auxiliary_triggered() {
     if (!NekoGui::dataStore->aux_profile_ports.contains(ent->id)) return;
     if (internalTunRunning()) {
         MessageBoxWarning(software_name,
-                          tr("Internal Tun is running. Auxiliary port changes would reload sing-box and temporarily tear down Tun, so this is blocked until hot reload or kill-switch support is implemented."));
+                          tr("Internal Tun is running. Auxiliary port changes would reload sing-box and may restore direct traffic. Disable Tun explicitly first."));
         return;
     }
     const auto port = NekoGui::dataStore->aux_profile_ports.take(ent->id);
     show_log_impl(tr("Stopping auxiliary port %1 for %2").arg(port).arg(ent->bean->DisplayTypeAndName()));
     if (NekoGui::dataStore->started_id >= 0) {
-        neko_start(NekoGui::dataStore->started_id);
+        neko_start(NekoGui::dataStore->started_id, CoreStartReason::ProfileReload);
     }
     refresh_status();
     refresh_proxy_list(ent->id);
@@ -2716,7 +2759,7 @@ bool MainWindow::StartVPNProcess() {
                                          {"--disable-color", "run", "-c", configPath}, "",
                                          NekoGui::dataStore->vpn_hide_console ? WinCommander::SW_HIDE : WinCommander::SW_SHOWMINIMIZED); // blocking
         vpn_pid = 0;
-        runOnUiThread([=] { neko_set_spmode_vpn(false, false); });
+        runOnUiThread([=] { neko_set_spmode_vpn(false, false, ProxyModeChangeReason::ExternalProcessExit); });
     });
 #else
     //
@@ -2725,7 +2768,7 @@ bool MainWindow::StartVPNProcess() {
         if (state == QProcess::NotRunning) {
             vpn_pid = 0;
             vpn_process->deleteLater();
-            GetMainWindow()->neko_set_spmode_vpn(false, false);
+            GetMainWindow()->neko_set_spmode_vpn(false, false, ProxyModeChangeReason::ExternalProcessExit);
         }
     });
     //

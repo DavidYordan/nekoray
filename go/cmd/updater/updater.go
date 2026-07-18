@@ -11,7 +11,7 @@ import (
 	"github.com/codeclysm/extract"
 )
 
-func Updater() {
+func Updater(args []string) {
 	pre_cleanup := func() {
 		if runtime.GOOS == "linux" {
 			os.RemoveAll("./usr")
@@ -21,8 +21,8 @@ func Updater() {
 
 	// find update package
 	var updatePackagePath string
-	if len(os.Args) == 2 && Exist(os.Args[1]) {
-		updatePackagePath = os.Args[1]
+	if len(args) == 1 && Exist(args[0]) {
+		updatePackagePath = args[0]
 	} else if Exist("./nekoray.zip") {
 		updatePackagePath = "./nekoray.zip"
 	} else if Exist("./nekoray.tar.gz") {

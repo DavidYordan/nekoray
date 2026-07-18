@@ -33,7 +33,7 @@
 3. 正确方向是新增一个“精简线路包”导出：保留单条线路连通所需字段、来源标识、订阅级 DoH、订阅级 client 默认值，以及必要的单线路 override；丢弃 Clash 分组和规则。NekoRay 自身仍保留本项目数据库里的分流和路由，不把 Clash 分流作为本项目运行时来源。
 4. 本项目当前已支持多选复制普通协议链接和 Neko 链接，也支持复制当前组全部链接，但没有“MultiMapper 精简 JSON 包”，也没有“整个订阅以精简包导出到剪贴板”的语义。
 5. 本项目当前运行模型是单主线路：一个 `started_id`、一个 core 配置、一个主 `mixed-in`、可选一个 `tun-in`。多条线路同时启动需要新增运行模型，不能只复用现有“启动当前选中线路”。
-6. 系统代理和 TUN 的无偷跑要求需要拆开看：系统代理在普通线路重启时不会被 `neko_stop()` 清空，但程序重启/退出路径会调用 `ClearSystemProxy()`；内部 TUN 在 core Stop/Start 期间会被 sing-box 配置卸载，存在回落到系统默认路由的窗口。后续整改必须把“显式关闭代理模式”和“为了重载配置而重启核心”区分开。
+6. 系统代理和 TUN 的无偷跑要求需要拆开看：系统代理在普通线路重启、程序重启、更新器重启时都不应被自动清空；外部 TUN 自动路径应保持 fail-closed；内部 TUN 在 core Stop/Start 期间会被 sing-box 配置卸载，存在回落到系统默认路由的窗口。后续整改必须继续把“显式关闭代理模式”和“为了重载配置而重启核心”区分开。
 7. 一个订阅链接应默认视为一套来源。Clash 订阅无论内部线路协议是什么，都应有订阅级 Mihomo client 默认值；DoH、fallback、订阅信息也应优先在订阅层级统一管理，再允许少量线路覆盖。
 
 ## MultiMapper 当前需要什么
@@ -356,11 +356,11 @@ UI 建议：
 
 当前代码路径：
 
-- 普通线路重启：`neko_start()` 会先 `neko_stop(false, true)`，此路径不会调用 `ClearSystemProxy()`。因此系统代理设置通常仍指向本机端口，应用不会因为系统代理被清空而直接回落；但 core stop/start 期间本机端口不可用，可能表现为连接失败。
-- 程序退出/重启：当前已改为记录退出前的系统代理/TUN 意图，退出流程不再把 `neko_set_spmode_system_proxy(false, false)` 当作通用清理动作，因此不会因程序自重启清空 Windows 系统代理。自重启会携带 `-flag_restart_system_proxy_on` / `-flag_restart_tun_on` 恢复本次会话意图。
-- 外部 TUN 进程：退出流程如需停止外部 TUN，只使用 `save=false`，避免把用户的 `remember_spmode` 写成关闭。外部进程自然结束的回调同样不再删除 TUN 记忆。
+- 普通线路重启：`neko_start()` 会先 `neko_stop(false, true)`，此路径不会调用 `ClearSystemProxy()`。因此系统代理设置仍指向本机端口，应用不会因为系统代理被清空而直接回落；但 core stop/start 期间本机端口不可用，可能表现为连接失败。
+- 程序退出/重启：当前已改为记录退出前的系统代理/TUN 意图，退出流程不再把 `neko_set_spmode_system_proxy(false, false)` 当作通用清理动作，因此不会因程序自重启清空 Windows 系统代理。普通自重启、管理员提权重启和更新器重启都会携带 `-flag_restart_profile_id`、`-flag_restart_system_proxy_on`、`-flag_restart_tun_on` 恢复本次会话意图。
+- 外部 TUN 进程：退出/重启/更新流程不再主动停止外部 TUN；外部 TUN 会继续把系统流量导向本机代理端口，形成 fail-closed。只有用户明确关闭 TUN 时才调用 `StopVPNProcess()`。外部进程自然结束时只同步 UI 状态，不再把它误判为用户关闭动作。
 - 内部 TUN：TUN 是 sing-box 配置中的 `tun-in`。当 `neko_stop()` 通过 gRPC Stop 停止当前配置时，TUN 入站会随配置卸载，系统路由可能回落默认出口。此风险不能仅靠“不清空系统代理”解决。
-- 内部 TUN 设置变化：`neko_set_spmode_vpn()` 在 `vpn_internal_tun && started_id >= 0` 时会调用 `neko_start(started_id)`，实际也会触发 stop/start。
+- 内部 TUN 设置变化：关闭内部 TUN 是用户显式动作，允许重载 core 移除 TUN；启用内部 TUN 也允许重载，因为此前运行配置尚未实际包含内部 TUN。其它普通配置重载、线路切换、辅助端口变更、程序重启/更新都会在内部 TUN 实际运行时被阻断。
 
 目标语义：
 
@@ -368,17 +368,32 @@ UI 建议：
 - 只有用户明确执行“关闭 TUN”时，才允许停止 TUN 或撤销 TUN 相关保护。
 - 配置重载、切换线路、软件自重启、管理员提权重启、核心更新重启，都不应把系统恢复成默认直连出口。
 
-建议新增操作原因枚举：
+已新增操作原因枚举：
 
 ```cpp
-enum class ProxyModeTransitionReason {
-    UserDisable,
+enum class CoreStartReason {
+    UserAction,
     ProfileReload,
-    ProfileSwitch,
-    AppRestart,
+    StartupRestore,
+    EnableInternalTun,
+    DisableInternalTun,
+    CoreCrashRecovery
+};
+
+enum class CoreStopReason {
+    UserAction,
+    ProfileReload,
     AppExit,
-    CoreCrashRecovery,
-    AdminElevationRestart
+    EnableInternalTun,
+    CoreCrashCleanup,
+    DisableInternalTun
+};
+
+enum class ProxyModeChangeReason {
+    UserAction,
+    StartupRestore,
+    AppRestart,
+    ExternalProcessExit
 };
 ```
 
@@ -386,17 +401,18 @@ enum class ProxyModeTransitionReason {
 
 - 已落地：`on_menu_exit_triggered()` 不再主动调用 `ClearSystemProxy()`。
 - 已落地：`AppRestart`、`AdminElevationRestart`、`ProfileReload` 不清空系统代理，只保持 OS 代理指向稳定的本机主端口。
-- 已落地：程序自重启使用 `-flag_restart_system_proxy_on` 恢复本次会话的系统代理模式。
-- 待补强：`neko_set_spmode_system_proxy(false)` 当前仍是用户 UI 关闭入口；后续若出现后台调用关闭，需要补充显式 reason 枚举阻断误用。
+- 已落地：程序自重启和更新器重启使用 `-flag_restart_system_proxy_on` 恢复本次会话的系统代理模式。
+- 已落地：`neko_set_spmode_system_proxy(false, ..., reason)` 会拒绝非 `UserAction` 的自动清理请求。
 - 如果软件退出但用户没有显式关闭系统代理，系统代理宁可保持指向本机端口，形成 fail-closed，也不要恢复直连。
 - 软件启动时，如果发现记忆状态要求系统代理开启，应先设置系统代理到主端口，再启动/恢复 profile。
 
 TUN 整改建议：
 
-- 短期：所有会重启内部 TUN core 的操作都标记为高风险，并在规划中改为 fail-closed 流程。
-- 中期：优先研究 sing-box/nekobox_core 是否能支持不停 TUN 的配置热更新。如果不能，必须承认 stop/start 会卸载 TUN。
+- 已落地：使用运行态标记记录当前加载成功的主配置是否实际包含内部 TUN，避免被 `vpn_internal_tun` 期望值误导。
+- 已落地：所有会重启内部 TUN core 的非显式 TUN 操作都标记为高风险并阻断，当前策略是 fail-closed，不追求热加载。
+- 已落地：外部 TUN 在程序自重启、更新器重启和普通退出流程中不再被主动停止。
 - Windows 上若必须重启 TUN，应设计临时 kill-switch：重启窗口内阻断非 core 进程默认出站，待新 TUN ready 后解除。该方案需要管理员权限和严格回滚。
-- 辅助线路启动/停止不应触发 TUN 重建。只有主线路或路由/TUN 参数变化才允许触发 TUN 相关流程。
+- 后续若确实需要在内部 TUN 运行时切换主线路或重载路由，应先实现可验证的 kill-switch，而不是单纯 stop/start。
 
 ## 建议整改阶段
 
@@ -426,16 +442,19 @@ TUN 整改建议：
 - [x] Clash API 和流量统计识别辅助出站：辅助出站 tag 已加入 `stats_outbounds`，单跳辅助线路也会进入统计列表。
 - [x] 右键“解析为 IP”支持选择主线路或具体辅助线路作为 DoH 请求出站路径。
 - [x] 辅助端口分配已避开主 mixed 端口、gRPC 端口、Clash API 端口、自定义入站端口、已启用辅助端口和当前系统占用端口。
-- [x] 内部 TUN 正运行时，启动/停止辅助端口会被阻断，因为当前 gRPC 核心没有热更新能力，应用辅助端口需要 stop/start 整个 sing-box，可能造成 TUN 短暂卸载。
+- [x] 内部 TUN 正运行时，启动/停止辅助端口会被阻断，因为应用辅助端口需要 stop/start 整个 sing-box，可能造成 TUN 短暂卸载。
 - [ ] 后续如需要，可增加可配置端口池和持久化辅助监听模型；当前辅助端口仍按运行会话临时管理。
 
 阶段 4：无偷跑重启。
 
-- 已部分完成：软件自重启已区分“退出清理”和“用户显式关闭”，系统代理重启期间保持 fail-closed。
-- 已部分完成：自重启参数可在未开启“记住上次代理”时恢复本次会话的系统代理/TUN 意图，并携带本次正在运行的主线路 ID，避免只恢复代理模式但不加载线路。
-- 已部分完成：辅助端口变更在内部 TUN 正运行时默认阻断，避免这类非显式 TUN 操作触发 stop/start 造成默认出口窗口。
-- 内部 TUN 重启路径设计 kill-switch 或热更新策略。
-- 增加 Windows 本机验证脚本，检查重启期间系统代理注册表和 TUN 路由没有被错误撤销。
+- [x] 软件自重启已区分“退出清理”和“用户显式关闭”，系统代理重启期间保持 fail-closed。
+- [x] 自重启参数可在未开启“记住上次代理”时恢复本次会话的系统代理/TUN 意图，并携带本次正在运行的主线路 ID，避免只恢复代理模式但不加载线路。
+- [x] 更新器重启会通过 `--` 分隔并透传 GUI 重启参数，避免更新完成后裸启动导致运行意图丢失。
+- [x] 辅助端口变更在内部 TUN 正运行时默认阻断，避免这类非显式 TUN 操作触发 stop/start 造成默认出口窗口。
+- [x] 外部 TUN 在程序退出/重启/更新过程中保持运行，用户明确关闭 TUN 时才停止。
+- [x] 内部 TUN 运行态使用实际加载成功的配置标记，而不是只看设置项。
+- [ ] 增加 Windows 本机验证脚本，检查重启期间系统代理注册表和 TUN 路由没有被错误撤销。
+- [ ] 如未来需要内部 TUN 下无中断切换主线路/路由，再设计并验证 Windows kill-switch；当前策略是阻断隐式 stop/start。
 
 ## 验收建议
 
@@ -472,5 +491,5 @@ MultiMapper 配合验收：
 
 - 执行普通 profile restart 时，Windows 系统代理没有被清空。
 - 执行软件自重启或管理员提权重启时，系统代理不被恢复为直连。
-- 内部 TUN 重启期间要么不停 TUN 热更新，要么启用 fail-closed 保护；不得存在默认出口直连窗口。
+- 内部 TUN 运行时，隐式 stop/start 操作应被 fail-closed 阻断；只有明确关闭 TUN 或未来具备可验证 kill-switch 后，才允许执行会卸载 TUN 的切换。
 - 只有用户明确点击关闭系统代理或关闭 TUN 时，才允许撤销对应 OS 状态。
