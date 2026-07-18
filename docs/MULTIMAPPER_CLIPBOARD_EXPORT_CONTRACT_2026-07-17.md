@@ -1,8 +1,8 @@
-# MultiMapper 剪贴板导出契约
+# MultiMapper 剪贴板 JSON 导出历史契约
 
 日期：2026-07-17
 
-本文定义 Nekoray 当前已实现的 MultiMapper 精简 JSON 导出格式。该格式可用，但 2026-07-18 已开始复评是否改为“精简 Clash-compatible YAML + `x-nekoray` 扩展”，详见 [MULTIMAPPER_COMPACT_YAML_EXPORT_EVALUATION_2026-07-18.md](./MULTIMAPPER_COMPACT_YAML_EXPORT_EVALUATION_2026-07-18.md)。待审核前，不应把 JSON 契约视为最终不可变方案。
+本文记录 Nekoray 早期实现过的 MultiMapper 精简 JSON 导出格式。2026-07-18 用户已确认主格式切换为“精简 Clash-compatible YAML + `x-nekoray` 扩展”，详见 [MULTIMAPPER_COMPACT_YAML_EXPORT_EVALUATION_2026-07-18.md](./MULTIMAPPER_COMPACT_YAML_EXPORT_EVALUATION_2026-07-18.md)。当前 `Copy to MultiMapper` 默认输出 YAML；本文仅用于历史兼容和无 `yaml-cpp` 构建 fallback。
 
 ## 入口
 

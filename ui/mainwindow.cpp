@@ -1822,7 +1822,7 @@ void MainWindow::on_menu_copy_links_nkr_triggered() {
 void MainWindow::on_menu_copy_links_multimapper_triggered() {
     auto ents = get_selected_or_group();
     if (ents.isEmpty()) return;
-    QApplication::clipboard()->setText(NekoGui_sub::BuildMultiMapperExportJson(ents));
+    QApplication::clipboard()->setText(NekoGui_sub::BuildMultiMapperExport(ents));
     show_log_impl(tr("Copied %1 item(s)").arg(ents.length()));
 }
 

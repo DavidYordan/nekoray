@@ -122,7 +122,7 @@ DialogEditGroup::DialogEditGroup(const std::shared_ptr<NekoGui::Group> &ent, QWi
         MessageBoxInfo(software_name, tr("Copied"));
     });
     connect(ui->copy_links_multimapper, &QPushButton::clicked, this, [=] {
-        QApplication::clipboard()->setText(NekoGui_sub::BuildMultiMapperExportJson(ent->ProfilesWithOrder()));
+        QApplication::clipboard()->setText(NekoGui_sub::BuildMultiMapperExport(ent->ProfilesWithOrder()));
         MessageBoxInfo(software_name, tr("Copied"));
     });
     connect(ui->reset_profiles_inherit_defaults, &QPushButton::clicked, this, [=] { reset_profiles_to_inherit_defaults(); });

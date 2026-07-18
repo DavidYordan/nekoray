@@ -1,8 +1,8 @@
-# MultiMapper 精简 YAML 对接方案评价
+# MultiMapper 精简 YAML 对接契约与实现说明
 
 日期：2026-07-18
 
-本文评价是否应将 Nekoray 到 MultiMapper 的剪贴板导出，从当前已实现的独立 JSON 包，调整为“精简 Clash-compatible YAML”。本轮只做方案评价，不切换实现，待审核后再改代码。
+本文记录 Nekoray 到 MultiMapper 的剪贴板导出契约。2026-07-18 用户已确认：主格式从独立 JSON 包切换为“精简 Clash-compatible YAML + `x-nekoray` 扩展元数据”。当前代码路径为 `sub/MultiMapperExport.cpp::BuildMultiMapperExport()`；启用 `yaml-cpp` 时输出 YAML，禁用 YAML 构建时保留旧 JSON fallback。
 
 ## 结论
 
@@ -105,23 +105,23 @@ x-nekoray:
 - 如果 MultiMapper 只按当前 `dns.proxy-server-nameserver` 读取 DoH，多分组不同 DoH 会丢失；需要 MultiMapper 配合读取 `x-nekoray.groups`。
 - 如果为了兼容旧 MultiMapper 在每条 AnyTLS 上重复写 `client`，会牺牲一部分“精简”；如果不重复写，则 MultiMapper 必须先支持分组默认 client。
 
-## 推荐迁移策略
+## 当前实现策略
 
-1. 先保留当前 JSON 导出实现，不在本轮切换。
-2. 若审核通过，新增或替换为 `Copy to MultiMapper` 输出精简 YAML。
-3. MultiMapper 侧优先支持：
+1. `Copy to MultiMapper` 已切换为输出精简 YAML。
+2. 旧 `nekoray-multimapper-export` JSON 函数继续保留，仅作为禁用 `yaml-cpp` 构建时的 fallback 和历史兼容契约。
+3. MultiMapper 侧需要优先支持：
    - `x-nekoray.format == compact-clash-yaml`
    - proxy 级 `x-source-tag`
    - `x-nekoray.groups.<tag>.defaults.client`
    - `x-nekoray.groups.<tag>.defaults.server_resolver`
-4. 过渡期可在 AnyTLS proxy 上内联 `client`，让未升级的 MultiMapper 至少不丢 AnyTLS client。
-5. 待 MultiMapper 支持扩展元数据后，再决定是否移除当前独立 JSON 契约和代码。
+4. 过渡期在 AnyTLS proxy 上内联 `client`，让未完全升级的 MultiMapper 至少不丢 AnyTLS client。
+5. 不导出 Clash `proxy-groups`、`rules`、dashboard、health-check、url-test、load-balance/select 等运行时块。
 
-## 需要审核确认的问题
+## 已确认的问题
 
-1. 是否将精简 YAML 作为 Nekoray 与 MultiMapper 的主格式，替代当前 JSON 包。
-2. 是否接受 `x-nekoray` 扩展字段，而不是追求完全纯 Clash YAML。
-3. AnyTLS `client` 是否在过渡期内联到每条 proxy，还是只放在分组默认值里。
-4. 多分组导出时，是否强制每条 proxy 写 `x-source-tag`，并要求 MultiMapper 按它归组。
+1. 精简 YAML 是 Nekoray 与 MultiMapper 的主格式。
+2. 接受 `x-nekoray` 扩展字段，不追求完全纯 Clash YAML。
+3. AnyTLS `client` 在过渡期内联到每条 proxy，同时在分组默认值中保留继承来源。
+4. 多分组导出时每条 proxy 写 `x-source-tag`，MultiMapper 应按它归组。
 
-我的建议是：通过该方向，但采用“Clash-compatible YAML + `x-nekoray` 扩展”，不要承诺纯 Clash YAML 能表达全部语义。
+最终结论：采用“Clash-compatible YAML + `x-nekoray` 扩展”，不承诺纯 Clash YAML 能表达全部语义。

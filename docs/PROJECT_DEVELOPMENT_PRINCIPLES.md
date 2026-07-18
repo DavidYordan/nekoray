@@ -35,6 +35,7 @@
 3. AnyTLS 线路默认继承订阅 client 和 server resolver；单线路可以覆盖，但 UI 必须明确显示继承还是覆盖。
 4. 导入 Clash 订阅时，只保留对本项目有实际运行价值的连接字段、TLS/传输字段、AnyTLS client、provider DoH 等信息。
 5. Clash 的分组、规则、rule-provider、health-check、url-test 等运行时语义默认不映射到本项目，避免和本项目自有分组/路由/测试模型混淆。
+6. 与 MultiMapper 对接的主格式是精简 Clash-compatible YAML，并通过 `x-nekoray` 扩展携带订阅级 client、DoH、继承关系和来源标签；旧 JSON 仅作为历史兼容或无 YAML 构建 fallback。
 
 ## Git 与交付规则
 
