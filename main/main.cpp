@@ -2,15 +2,20 @@
 
 #include <QApplication>
 #include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QTranslator>
 #include <QMessageBox>
 #include <QStandardPaths>
 #include <QLocalSocket>
 #include <QLocalServer>
 #include <QThread>
+#include <QTextStream>
 
 #include "3rdparty/RunGuard.hpp"
 #include "main/NekoGui.hpp"
+#include "db/ConfigBuilder.hpp"
+#include "db/Database.hpp"
 
 #include "ui/mainwindow_interface.h"
 
@@ -27,6 +32,117 @@ void signal_handler(int signum) {
 
 QTranslator* trans = nullptr;
 QTranslator* trans_qt = nullptr;
+
+namespace {
+    constexpr int kNoProfileId = -1919;
+
+    struct ProfileConfigExportOptions {
+        bool enabled = false;
+        int profileId = kNoProfileId;
+        QString outputPath;
+        bool forTest = false;
+        bool forExport = false;
+    };
+
+    void writeStderr(const QString &message) {
+        QTextStream(stderr) << message << Qt::endl;
+    }
+
+    ProfileConfigExportOptions parseProfileConfigExportOptions(const QStringList &argv) {
+        ProfileConfigExportOptions options;
+        const auto exportIndex = argv.indexOf("-flag_export_profile_config");
+        if (exportIndex < 0) return options;
+
+        options.enabled = true;
+        if (argv.size() > exportIndex + 1) {
+            bool ok = false;
+            const auto profileId = argv.at(exportIndex + 1).toInt(&ok);
+            if (ok) options.profileId = profileId;
+        }
+        if (argv.size() > exportIndex + 2) {
+            options.outputPath = argv.at(exportIndex + 2);
+        }
+        options.forTest = argv.contains("-flag_export_profile_config_for_test");
+        options.forExport = argv.contains("-flag_export_profile_config_for_share");
+        if (options.forTest && options.forExport) {
+            options.forExport = false;
+        }
+        return options;
+    }
+
+    bool ensureConfigSubdirs() {
+        QDir dir;
+        bool ok = true;
+        if (!dir.exists("profiles")) ok &= dir.mkdir("profiles");
+        if (!dir.exists("groups")) ok &= dir.mkdir("groups");
+        if (!dir.exists(ROUTES_PREFIX_NAME)) ok &= dir.mkdir(ROUTES_PREFIX_NAME);
+        return ok;
+    }
+
+    bool loadRuntimeStores() {
+        NekoGui::dataStore->fn = "groups/nekobox.json";
+        auto isLoaded = NekoGui::dataStore->Load();
+        if (!isLoaded) {
+            NekoGui::dataStore->Save();
+        }
+
+        NekoGui::dataStore->routing = std::make_unique<NekoGui::Routing>();
+        NekoGui::dataStore->routing->fn = ROUTES_PREFIX + NekoGui::dataStore->active_routing;
+        isLoaded = NekoGui::dataStore->routing->Load();
+        if (!isLoaded) {
+            NekoGui::dataStore->routing->Save();
+        }
+
+        NekoGui::profileManager->LoadManager();
+        return true;
+    }
+
+    QString resolveProfileConfigExportPath(const QString &rawPath) {
+        QFileInfo info(rawPath);
+        if (info.isAbsolute()) return info.absoluteFilePath();
+        return QDir(QApplication::applicationDirPath()).absoluteFilePath(rawPath);
+    }
+
+    int exportProfileConfigAndExit(const ProfileConfigExportOptions &options) {
+        if (options.profileId == kNoProfileId || options.outputPath.trimmed().isEmpty()) {
+            writeStderr("Usage: nekobox.exe -flag_export_profile_config <profile_id> <output_json_path> "
+                        "[-flag_export_profile_config_for_test|-flag_export_profile_config_for_share]");
+            return 2;
+        }
+        if (!ensureConfigSubdirs()) {
+            writeStderr("No permission to create config subdirectories.");
+            return 1;
+        }
+        loadRuntimeStores();
+
+        const auto profile = NekoGui::profileManager->GetProfile(options.profileId);
+        if (profile == nullptr || profile->bean == nullptr) {
+            writeStderr(QStringLiteral("Profile not found: %1").arg(options.profileId));
+            return 1;
+        }
+        const auto result = NekoGui::BuildConfig(profile, options.forTest, options.forExport);
+        if (!result->error.isEmpty()) {
+            writeStderr(QStringLiteral("BuildConfig return error: %1").arg(result->error));
+            return 1;
+        }
+
+        const auto outputPath = resolveProfileConfigExportPath(options.outputPath);
+        const QFileInfo outputInfo(outputPath);
+        if (!outputInfo.dir().exists() && !outputInfo.dir().mkpath(".")) {
+            writeStderr(QStringLiteral("Cannot create output directory: %1").arg(outputInfo.dir().absolutePath()));
+            return 1;
+        }
+
+        QFile file(outputPath);
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
+            writeStderr(QStringLiteral("Cannot write output file: %1").arg(outputPath));
+            return 1;
+        }
+        file.write(QJsonObject2QString(result->coreConfig, false).toUtf8());
+        file.close();
+        return 0;
+    }
+} // namespace
 
 void loadTranslate(const QString& locale) {
     if (trans != nullptr) {
@@ -79,6 +195,7 @@ int main(int argc, char* argv[]) {
 
     // Flags
     NekoGui::dataStore->argv = QApplication::arguments();
+    const auto profileConfigExportOptions = parseProfileConfigExportOptions(NekoGui::dataStore->argv);
     if (NekoGui::dataStore->argv.contains("-many")) NekoGui::dataStore->flag_many = true;
     if (NekoGui::dataStore->argv.contains("-appdata")) {
         NekoGui::dataStore->flag_use_appdata = true;
@@ -127,6 +244,13 @@ int main(int argc, char* argv[]) {
     // dispatchers
     DS_cores = new QThread;
     DS_cores->start();
+
+    if (profileConfigExportOptions.enabled) {
+        const auto exportExitCode = exportProfileConfigAndExit(profileConfigExportOptions);
+        DS_cores->quit();
+        DS_cores->wait();
+        return exportExitCode;
+    }
 
     // RunGuard
     RunGuard guard("nekoray" + wd.absolutePath());

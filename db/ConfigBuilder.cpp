@@ -1053,9 +1053,9 @@ namespace NekoGui {
             }};
         if (!status->forTest) {
             routeObj["final"] = finalOutbound;
-            if (!dataStore->routing->use_dns_object) {
-                routeObj["default_domain_resolver"] = QJsonObject{{"server", "dns-direct"}};
-            }
+        }
+        if (!dataStore->routing->use_dns_object) {
+            routeObj["default_domain_resolver"] = QJsonObject{{"server", "dns-direct"}};
         }
         if (status->forExport) {
             routeObj.remove("geoip");

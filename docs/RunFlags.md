@@ -6,3 +6,4 @@
 - `-flag_restart_system_proxy_on` 程序自重启后恢复本次会话中的系统代理模式，即使未开启“记住上次代理”也不让重启过程丢失代理意图。
 - `-flag_restart_profile_id <id>` 程序自重启后恢复本次会话中正在运行的主线路，即使未开启“记住上次代理”也不丢失实际线路。
 - `-flag_reorder` 进行重新整理配置文件的顺序，并删除损坏和孤立的配置。
+- `-flag_export_profile_config <profile_id> <output_json_path>` 导出指定 profile 最终传给 sing-box core 的 JSON 配置后退出，不启动 UI，不启动线路；可追加 `-flag_export_profile_config_for_test` 或 `-flag_export_profile_config_for_share` 导出测试/分享模式配置。
