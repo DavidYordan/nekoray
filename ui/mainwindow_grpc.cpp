@@ -17,6 +17,7 @@
 #include <QSet>
 
 #include <algorithm>
+#include <atomic>
 
 // ext core
 
@@ -79,12 +80,87 @@ void MainWindow::setup_grpc() {
 
 // 测速
 
-inline bool speedtesting = false;
-inline QList<QThread *> speedtesting_threads = {};
+namespace {
+    QMutex speedtestingMutex;
+    bool speedtesting = false;
+    QList<QThread *> speedtestingThreads;
+    std::shared_ptr<std::atomic_bool> speedtestingCancelToken;
+
+    QMutex runningLabelUrlTestMutex;
+    bool runningLabelUrlTesting = false;
+    quint64 runningLabelUrlTestGeneration = 0;
+
+    bool beginSpeedtesting(std::shared_ptr<std::atomic_bool> *token) {
+        QMutexLocker locker(&speedtestingMutex);
+        if (speedtesting) return false;
+        speedtesting = true;
+        speedtestingThreads.clear();
+        speedtestingCancelToken = std::make_shared<std::atomic_bool>(false);
+        if (token != nullptr) *token = speedtestingCancelToken;
+        return true;
+    }
+
+    bool cancelSpeedtesting(const std::shared_ptr<std::atomic_bool> &expectedToken = {}) {
+        QList<QThread *> threadsToStop;
+        {
+            QMutexLocker locker(&speedtestingMutex);
+            if (!speedtesting && speedtestingCancelToken == nullptr) return false;
+            if (expectedToken != nullptr && speedtestingCancelToken != expectedToken) return false;
+            if (speedtestingCancelToken != nullptr) speedtestingCancelToken->store(true);
+            threadsToStop = speedtestingThreads;
+            speedtesting = false;
+            speedtestingThreads.clear();
+            speedtestingCancelToken.reset();
+        }
+        for (auto *thread: threadsToStop) {
+            if (thread == nullptr) continue;
+            thread->requestInterruption();
+            thread->quit();
+            thread->exit();
+        }
+        return true;
+    }
+
+    bool finishSpeedtesting(const std::shared_ptr<std::atomic_bool> &token) {
+        QMutexLocker locker(&speedtestingMutex);
+        if (speedtestingCancelToken != token) return false;
+        speedtesting = false;
+        speedtestingThreads.clear();
+        speedtestingCancelToken.reset();
+        return true;
+    }
+
+    void registerSpeedtestingThread(QThread *thread) {
+        QMutexLocker locker(&speedtestingMutex);
+        if (thread != nullptr && !speedtestingThreads.contains(thread)) speedtestingThreads << thread;
+    }
+
+    void unregisterSpeedtestingThread(QThread *thread) {
+        QMutexLocker locker(&speedtestingMutex);
+        speedtestingThreads.removeAll(thread);
+    }
+
+    quint64 beginRunningLabelUrlTest() {
+        QMutexLocker locker(&runningLabelUrlTestMutex);
+        if (runningLabelUrlTesting) return 0;
+        runningLabelUrlTesting = true;
+        return ++runningLabelUrlTestGeneration;
+    }
+
+    bool finishRunningLabelUrlTest(quint64 generation) {
+        QMutexLocker locker(&runningLabelUrlTestMutex);
+        if (!runningLabelUrlTesting || runningLabelUrlTestGeneration != generation) return false;
+        runningLabelUrlTesting = false;
+        return true;
+    }
+} // namespace
 
 void MainWindow::speedtest_current_group(int mode, bool test_group) {
-    if (speedtesting) {
-        MessageBoxWarning(software_name, QObject::tr("The last speed test did not exit completely, please wait. If it persists, please restart the program."));
+    // menu_stop_testing
+    if (mode == 114514) {
+        if (cancelSpeedtesting()) {
+            MW_show_log(QObject::tr("Speedtest stop requested."));
+        }
         return;
     }
 
@@ -93,16 +169,6 @@ void MainWindow::speedtest_current_group(int mode, bool test_group) {
     if (profiles.isEmpty()) return;
     auto group = NekoGui::profileManager->CurrentGroup();
     if (group->archive) return;
-
-    // menu_stop_testing
-    if (mode == 114514) {
-        while (!speedtesting_threads.isEmpty()) {
-            auto t = speedtesting_threads.takeFirst();
-            if (t != nullptr) t->exit();
-        }
-        speedtesting = false;
-        return;
-    }
 
 #ifndef NKR_NO_GRPC
     QStringList full_test_flags;
@@ -140,37 +206,48 @@ void MainWindow::speedtest_current_group(int mode, bool test_group) {
         w->deleteLater();
         if (full_test_flags.isEmpty()) return;
     }
-    speedtesting = true;
+    std::shared_ptr<std::atomic_bool> cancelToken;
+    if (!beginSpeedtesting(&cancelToken)) {
+        MessageBoxWarning(software_name, QObject::tr("The last speed test did not exit completely, please wait. If it persists, use Stop Testing."));
+        return;
+    }
 
-    runOnNewThread([this, profiles, mode, full_test_flags]() {
+    const int profileCount = static_cast<int>(profiles.size());
+    const int configuredConcurrency = std::max(1, NekoGui::dataStore->test_concurrent);
+    const int batches = std::max(1, (profileCount + configuredConcurrency - 1) / configuredConcurrency);
+    const int perBatchTimeoutSeconds = mode == libcore::FullTest
+                                           ? std::max(20, NekoGui::dataStore->test_download_timeout + 15)
+                                           : 20;
+    const int watchdogMs = std::clamp(batches * perBatchTimeoutSeconds * 1000, 30000, 10 * 60 * 1000);
+    setTimeout([cancelToken] {
+        if (cancelSpeedtesting(cancelToken)) {
+            MW_show_log(QObject::tr("Speedtest timed out and its busy state was reset."));
+        }
+    }, this, watchdogMs);
+
+    runOnNewThread([this, profiles, mode, full_test_flags, cancelToken]() {
         QMutex lock_write;
-        QMutex lock_return;
-        int threadN = std::max(1, NekoGui::dataStore->test_concurrent);
-        int threadN_finished = 0;
+        QSemaphore doneSem;
         auto profiles_test = profiles; // copy
+        const int workerProfileCount = static_cast<int>(profiles_test.size());
+        int threadN = std::min(std::max(1, NekoGui::dataStore->test_concurrent), std::max(1, workerProfileCount));
 
         // Threads
-        lock_return.lock();
         for (int i = 0; i < threadN; i++) {
-            runOnNewThread([&] {
-                speedtesting_threads << QObject::thread();
+            runOnNewThread([&, cancelToken] {
+                auto *thread = QObject::thread();
+                registerSpeedtestingThread(thread);
 
                 forever {
+                    if (cancelToken->load()) break;
                     //
+                    std::shared_ptr<NekoGui::ProxyEntity> profile;
                     lock_write.lock();
-                    if (profiles_test.isEmpty()) {
-                        threadN_finished++;
-                        if (threadN == threadN_finished) {
-                            // quit control thread
-                            lock_return.unlock();
-                        }
-                        lock_write.unlock();
-                        // quit of this thread
-                        speedtesting_threads.removeAll(QObject::thread());
-                        return;
+                    if (!profiles_test.isEmpty() && !cancelToken->load()) {
+                        profile = profiles_test.takeFirst();
                     }
-                    auto profile = profiles_test.takeFirst();
                     lock_write.unlock();
+                    if (profile == nullptr) break;
 
                     //
                     libcore::TestReq req;
@@ -265,22 +342,38 @@ void MainWindow::speedtest_current_group(int mode, bool test_group) {
                         refresh_proxy_list(profileId);
                     });
                 }
+                unregisterSpeedtestingThread(thread);
+                doneSem.release();
             });
         }
 
         // Control
-        lock_return.lock();
-        lock_return.unlock();
-        speedtesting = false;
-        MW_show_log(QObject::tr("Speedtest finished."));
+        doneSem.acquire(threadN);
+        const auto cancelled = cancelToken->load();
+        if (finishSpeedtesting(cancelToken)) {
+            runOnUiThread([cancelled] {
+                MW_show_log(cancelled ? QObject::tr("Speedtest stopped.") : QObject::tr("Speedtest finished."));
+            });
+        }
     });
 #endif
 }
 
 void MainWindow::speedtest_current() {
 #ifndef NKR_NO_GRPC
+    const auto generation = beginRunningLabelUrlTest();
+    if (generation == 0) {
+        MW_show_log(tr("UrlTest is already running."));
+        return;
+    }
     last_test_time = QTime::currentTime();
     ui->label_running->setText(tr("Testing"));
+    setTimeout([this, generation] {
+        if (!finishRunningLabelUrlTest(generation)) return;
+        last_test_time = QTime::currentTime();
+        ui->label_running->setText(tr("Test Result") + ": " + tr("Unavailable"));
+        MW_show_log(tr("UrlTest timed out."));
+    }, this, 15000);
 
     runOnNewThread([=] {
         libcore::TestReq req;
@@ -290,12 +383,17 @@ void MainWindow::speedtest_current() {
 
         bool rpcOK;
         auto result = defaultClient->Test(&rpcOK, req);
-        if (!rpcOK) return;
 
         auto latency = result.ms();
-        last_test_time = QTime::currentTime();
 
         runOnUiThread([=] {
+            if (!finishRunningLabelUrlTest(generation)) return;
+            last_test_time = QTime::currentTime();
+            if (!rpcOK) {
+                MW_show_log(tr("UrlTest error: gRPC test failed."));
+                ui->label_running->setText(tr("Test Result") + ": " + tr("Unavailable"));
+                return;
+            }
             if (!result.error().empty()) {
                 MW_show_log(QStringLiteral("UrlTest error: %1").arg(result.error().c_str()));
             }
