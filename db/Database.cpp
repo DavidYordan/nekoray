@@ -278,6 +278,7 @@ namespace NekoGui {
     void ProfileManager::DeleteProfile(int id) {
         if (id < 0) return;
         if (dataStore->started_id == id) return;
+        if (dataStore->aux_profile_ports.remove(id) > 0) dataStore->Save();
         profiles.erase(id);
         profilesIdOrder.removeAll(id);
         QFile(QStringLiteral("profiles/%1.json").arg(id)).remove();

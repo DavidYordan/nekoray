@@ -98,6 +98,8 @@ DialogBasicSettings::DialogBasicSettings(QWidget *parent)
     D_LOAD_COMBO_STRING(log_level)
     CACHE.custom_inbound = NekoGui::dataStore->custom_inbound;
     D_LOAD_INT(inbound_socks_port)
+    D_LOAD_INT(aux_port_pool_start)
+    D_LOAD_INT(aux_port_pool_end)
     D_LOAD_INT(test_concurrent)
     D_LOAD_INT(test_download_timeout)
     D_LOAD_STRING(test_latency_url)
@@ -249,6 +251,9 @@ void DialogBasicSettings::accept() {
     D_SAVE_COMBO_STRING(log_level)
     NekoGui::dataStore->custom_inbound = CACHE.custom_inbound;
     D_SAVE_INT(inbound_socks_port)
+    D_SAVE_INT(aux_port_pool_start)
+    D_SAVE_INT(aux_port_pool_end)
+    NekoGui::dataStore->NormalizeAuxiliaryPortSettings();
     D_SAVE_INT(test_concurrent)
     D_SAVE_INT(test_download_timeout)
     D_SAVE_STRING(test_latency_url)

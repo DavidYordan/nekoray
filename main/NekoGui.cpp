@@ -8,6 +8,9 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QSet>
+
+#include <algorithm>
 
 #ifdef Q_OS_WIN
 #include "sys/windows/guihelper.h"
@@ -237,6 +240,9 @@ namespace NekoGui {
         _add(new configItem("current_group", &current_group, itemType::integer));
         _add(new configItem("inbound_address", &inbound_address, itemType::string));
         _add(new configItem("inbound_socks_port", &inbound_socks_port, itemType::integer));
+        _add(new configItem("aux_port_pool_start", &aux_port_pool_start, itemType::integer));
+        _add(new configItem("aux_port_pool_end", &aux_port_pool_end, itemType::integer));
+        _add(new configItem("aux_profile_ports", &aux_profile_port_entries, itemType::stringList));
         _add(new configItem("log_level", &log_level, itemType::string));
         _add(new configItem("mux_protocol", &mux_protocol, itemType::string));
         _add(new configItem("mux_concurrency", &mux_concurrency, itemType::integer));
@@ -283,6 +289,42 @@ namespace NekoGui {
         _add(new configItem("core_box_clash_api_secret", &core_box_clash_api_secret, itemType::string));
         _add(new configItem("core_box_underlying_dns", &core_box_underlying_dns, itemType::string));
         _add(new configItem("vpn_internal_tun", &vpn_internal_tun, itemType::boolean));
+        callback_after_load = [this] { LoadAuxiliaryProfilePorts(); };
+        callback_before_save = [this] { StoreAuxiliaryProfilePorts(); };
+    }
+
+    void DataStore::NormalizeAuxiliaryPortSettings() {
+        if (!IsValidPort(aux_port_pool_start)) aux_port_pool_start = 12100;
+        if (!IsValidPort(aux_port_pool_end)) aux_port_pool_end = 12299;
+        if (aux_port_pool_start > aux_port_pool_end) std::swap(aux_port_pool_start, aux_port_pool_end);
+    }
+
+    void DataStore::LoadAuxiliaryProfilePorts() {
+        NormalizeAuxiliaryPortSettings();
+        aux_profile_ports.clear();
+        QSet<int> seenPorts;
+        for (const auto &entry: aux_profile_port_entries) {
+            const auto parts = entry.split(":");
+            if (parts.size() != 2) continue;
+            bool idOk = false;
+            bool portOk = false;
+            const auto profileId = parts.at(0).trimmed().toInt(&idOk);
+            const auto port = parts.at(1).trimmed().toInt(&portOk);
+            if (!idOk || !portOk || profileId < 0 || !IsValidPort(port) || seenPorts.contains(port)) continue;
+            aux_profile_ports.insert(profileId, port);
+            seenPorts.insert(port);
+        }
+    }
+
+    void DataStore::StoreAuxiliaryProfilePorts() {
+        NormalizeAuxiliaryPortSettings();
+        aux_profile_port_entries.clear();
+        QSet<int> seenPorts;
+        for (auto it = aux_profile_ports.constBegin(); it != aux_profile_ports.constEnd(); ++it) {
+            if (it.key() < 0 || !IsValidPort(it.value()) || seenPorts.contains(it.value())) continue;
+            aux_profile_port_entries << QStringLiteral("%1:%2").arg(it.key()).arg(it.value());
+            seenPorts.insert(it.value());
+        }
     }
 
     void DataStore::UpdateStartedId(int id) {

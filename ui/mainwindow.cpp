@@ -303,6 +303,7 @@ namespace {
 
     int allocateAuxiliaryPort() {
         pruneAuxiliaryProfilePorts();
+        NekoGui::dataStore->NormalizeAuxiliaryPortSettings();
         QSet<int> used{
             NekoGui::dataStore->inbound_socks_port,
             NekoGui::dataStore->core_port,
@@ -312,7 +313,7 @@ namespace {
         for (auto it = NekoGui::dataStore->aux_profile_ports.constBegin(); it != NekoGui::dataStore->aux_profile_ports.constEnd(); ++it) {
             used.insert(it.value());
         }
-        for (int port = 12100; port <= 12299; ++port) {
+        for (int port = NekoGui::dataStore->aux_port_pool_start; port <= NekoGui::dataStore->aux_port_pool_end; ++port) {
             if (used.contains(port)) continue;
             if (canListenLocalPort(port)) return port;
         }
@@ -326,6 +327,13 @@ namespace {
 
     QString auxiliaryProxyText(int port) {
         return QStringLiteral("socks5h://127.0.0.1:%1\nhttp://127.0.0.1:%1").arg(port);
+    }
+
+    bool profilesContainAuxiliaryPort(const QList<std::shared_ptr<NekoGui::ProxyEntity>> &profiles) {
+        for (const auto &profile: profiles) {
+            if (profile != nullptr && NekoGui::dataStore->aux_profile_ports.contains(profile->id)) return true;
+        }
+        return false;
     }
 
     QStringList groupResolverUpstreams(const std::shared_ptr<NekoGui::ProxyEntity> &profile) {
@@ -615,6 +623,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWi
 
     // Load Manager
     NekoGui::profileManager->LoadManager();
+    pruneAuxiliaryProfilePorts();
 
     // Setup misc UI
     themeManager->ApplyTheme(NekoGui::dataStore->theme);
@@ -1798,10 +1807,19 @@ void MainWindow::on_menu_move_triggered() {
 void MainWindow::on_menu_delete_triggered() {
     auto ents = get_now_selected_list();
     if (ents.count() == 0) return;
+    const auto removesAuxiliary = profilesContainAuxiliaryPort(ents);
+    if (removesAuxiliary && internalTunRunning()) {
+        MessageBoxWarning(software_name,
+                          tr("Internal Tun is running. Deleting an auxiliary profile would reload sing-box and may restore direct traffic. Disable Tun explicitly first."));
+        return;
+    }
     if (QMessageBox::question(this, tr("Confirmation"), QString(tr("Remove %1 item(s) ?")).arg(ents.count())) ==
         QMessageBox::StandardButton::Yes) {
         for (const auto &ent: ents) {
             NekoGui::profileManager->DeleteProfile(ent->id);
+        }
+        if (removesAuxiliary && NekoGui::dataStore->started_id >= 0) {
+            neko_start(NekoGui::dataStore->started_id, CoreStartReason::ProfileReload);
         }
         refresh_proxy_list();
     }
@@ -1853,6 +1871,7 @@ void MainWindow::on_menu_start_auxiliary_triggered() {
     }
 
     show_log_impl(tr("Starting auxiliary port %1 for %2").arg(port).arg(ent->bean->DisplayTypeAndName()));
+    NekoGui::dataStore->Save();
     neko_start(NekoGui::dataStore->started_id, CoreStartReason::ProfileReload);
     refresh_status();
     refresh_proxy_list(ent->id);
@@ -1872,6 +1891,7 @@ void MainWindow::on_menu_stop_auxiliary_triggered() {
     }
     const auto port = NekoGui::dataStore->aux_profile_ports.take(ent->id);
     show_log_impl(tr("Stopping auxiliary port %1 for %2").arg(port).arg(ent->bean->DisplayTypeAndName()));
+    NekoGui::dataStore->Save();
     if (NekoGui::dataStore->started_id >= 0) {
         neko_start(NekoGui::dataStore->started_id, CoreStartReason::ProfileReload);
     }
@@ -1913,6 +1933,7 @@ void MainWindow::on_menu_profile_debug_info_triggered() {
     } else if (btn == 2) {
         NekoGui::dataStore->Load();
         NekoGui::profileManager->LoadManager();
+        pruneAuxiliaryProfilePorts();
         refresh_proxy_list();
     }
 }
@@ -2125,10 +2146,19 @@ void MainWindow::on_menu_delete_repeat_triggered() {
         }
     }
 
+    const auto removesAuxiliary = profilesContainAuxiliaryPort(out_del);
+    if (removesAuxiliary && internalTunRunning()) {
+        MessageBoxWarning(software_name,
+                          tr("Internal Tun is running. Deleting an auxiliary profile would reload sing-box and may restore direct traffic. Disable Tun explicitly first."));
+        return;
+    }
     if (out_del.length() > 0 &&
         QMessageBox::question(this, tr("Confirmation"), tr("Remove %1 item(s) ?").arg(out_del.length()) + "\n" + remove_display) == QMessageBox::StandardButton::Yes) {
         for (const auto &ent: out_del) {
             NekoGui::profileManager->DeleteProfile(ent->id);
+        }
+        if (removesAuxiliary && NekoGui::dataStore->started_id >= 0) {
+            neko_start(NekoGui::dataStore->started_id, CoreStartReason::ProfileReload);
         }
         refresh_proxy_list();
     }
@@ -2163,10 +2193,19 @@ void MainWindow::on_menu_remove_unavailable_triggered() {
         }
     }
 
+    const auto removesAuxiliary = profilesContainAuxiliaryPort(out_del);
+    if (removesAuxiliary && internalTunRunning()) {
+        MessageBoxWarning(software_name,
+                          tr("Internal Tun is running. Deleting an auxiliary profile would reload sing-box and may restore direct traffic. Disable Tun explicitly first."));
+        return;
+    }
     if (out_del.length() > 0 &&
         QMessageBox::question(this, tr("Confirmation"), tr("Remove %1 item(s) ?").arg(out_del.length()) + "\n" + remove_display) == QMessageBox::StandardButton::Yes) {
         for (const auto &ent: out_del) {
             NekoGui::profileManager->DeleteProfile(ent->id);
+        }
+        if (removesAuxiliary && NekoGui::dataStore->started_id >= 0) {
+            neko_start(NekoGui::dataStore->started_id, CoreStartReason::ProfileReload);
         }
         refresh_proxy_list();
     }

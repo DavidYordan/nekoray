@@ -352,6 +352,9 @@ void MainWindow::neko_start(int _id, CoreStartReason reason) {
         MessageBoxWarning("BuildConfig return error", result->error);
         return;
     }
+    if (NekoGui::dataStore->aux_profile_ports.remove(ent->id) > 0) {
+        NekoGui::dataStore->Save();
+    }
 
     auto neko_start_stage2 = [=] {
 #ifndef NKR_NO_GRPC
@@ -521,8 +524,9 @@ void MainWindow::neko_stop(bool crash, bool sem, CoreStopReason reason) {
 #endif
 
         const auto clearedAuxProfiles = !sem && !crash && !NekoGui::dataStore->aux_profile_ports.isEmpty();
-        NekoGui::dataStore->UpdateStartedId(-1919);
         if (clearedAuxProfiles) NekoGui::dataStore->aux_profile_ports.clear();
+        NekoGui::dataStore->UpdateStartedId(-1919);
+        if (clearedAuxProfiles) NekoGui::dataStore->Save();
         NekoGui::dataStore->need_keep_vpn_off = false;
         running_internal_tun = false;
         running = nullptr;

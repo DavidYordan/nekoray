@@ -115,6 +115,44 @@
         </layout>
        </item>
        <item>
+        <layout class="QHBoxLayout" name="auxPortPoolLayout">
+         <item>
+          <widget class="QGroupBox" name="aux_port_pool_box">
+           <layout class="QHBoxLayout" name="auxPortPoolBoxLayout">
+            <item>
+             <widget class="QLabel" name="aux_port_pool_l">
+              <property name="text">
+               <string>Auxiliary Port Pool</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QLineEdit" name="aux_port_pool_start">
+              <property name="placeholderText">
+               <string>12100</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QLabel" name="aux_port_pool_separator">
+              <property name="text">
+               <string>to</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QLineEdit" name="aux_port_pool_end">
+              <property name="placeholderText">
+               <string>12299</string>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item>
         <widget class="QGroupBox" name="groupBox1">
          <layout class="QHBoxLayout" name="horizontalLayout_9" stretch="0,8,1,1">
           <item>

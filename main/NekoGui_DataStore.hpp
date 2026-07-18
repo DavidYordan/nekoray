@@ -137,6 +137,9 @@ namespace NekoGui {
         // Socks & HTTP Inbound
         QString inbound_address = "127.0.0.1";
         int inbound_socks_port = 12080; // or Mixed
+        int aux_port_pool_start = 12100;
+        int aux_port_pool_end = 12299;
+        QStringList aux_profile_port_entries = {};
         InboundAuthorization *inbound_auth = new InboundAuthorization;
         QString custom_inbound = "{\"inbounds\": []}";
 
@@ -175,6 +178,12 @@ namespace NekoGui {
         DataStore();
 
         void UpdateStartedId(int id);
+
+        void LoadAuxiliaryProfilePorts();
+
+        void StoreAuxiliaryProfilePorts();
+
+        void NormalizeAuxiliaryPortSettings();
 
         QString GetUserAgent(bool isDefault = false) const;
     };

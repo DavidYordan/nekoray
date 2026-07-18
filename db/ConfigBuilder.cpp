@@ -764,6 +764,7 @@ namespace NekoGui {
             for (auto it = dataStore->aux_profile_ports.constBegin(); it != dataStore->aux_profile_ports.constEnd(); ++it) {
                 auto auxProfile = profileManager->GetProfile(it.key());
                 if (auxProfile == nullptr || auxProfile->bean == nullptr) continue;
+                if (status->ent != nullptr && auxProfile->id == status->ent->id) continue;
                 auto auxGroup = profileManager->GetGroup(auxProfile->gid);
                 if (auxGroup == nullptr || auxGroup->archive) continue;
                 if (!IsValidPort(it.value())) continue;
