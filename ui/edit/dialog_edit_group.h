@@ -30,7 +30,7 @@ private:
 
     void refresh_front_proxy();
 
-    void reset_profiles_to_inherit_defaults();
+    void reset_profiles_to_inherit_defaults(bool resetClient, bool resetResolver);
 
 private slots:
 

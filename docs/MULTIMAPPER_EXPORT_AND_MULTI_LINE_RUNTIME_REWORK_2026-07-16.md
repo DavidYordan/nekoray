@@ -420,7 +420,7 @@ TUN 整改建议：
 
 - 新增订阅/分组层级默认值模型：`source_type`、`defaults.client`、`defaults.server_resolver`。
 - Clash 订阅导入时，无论内部线路协议是什么，订阅默认 client 都是 `mihomo/1.19.28`。
-- 订阅层级 UI 支持统一查看、修改和批量应用 client/DoH/fallback。
+- 订阅层级 UI 支持统一查看、修改和批量应用 client/DoH/fallback；分组编辑面板可分别应用 AnyTLS client、server resolver，或一次性应用两者。
 - 订阅层级默认 client/DoH 已区分自动来源和手动覆盖；重新抓取订阅只更新自动来源，避免旧 DoH 残留或手动配置被覆盖。
 - `Copy to MultiMapper` 主输出已调整为精简 Clash-compatible YAML，并通过 `x-nekoray` 扩展携带订阅级 client、DoH、继承关系和来源标签；旧 `nekoray-multimapper-export` JSON 仅保留为历史兼容或无 YAML 构建 fallback。
 - 支持选中线路导出到剪贴板。

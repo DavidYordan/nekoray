@@ -149,7 +149,9 @@ DialogEditGroup::DialogEditGroup(const std::shared_ptr<NekoGui::Group> &ent, QWi
         QApplication::clipboard()->setText(NekoGui_sub::BuildMultiMapperExport(ent->ProfilesWithOrder()));
         MessageBoxInfo(software_name, tr("Copied"));
     });
-    connect(ui->reset_profiles_inherit_defaults, &QPushButton::clicked, this, [=] { reset_profiles_to_inherit_defaults(); });
+    connect(ui->apply_client_to_profiles, &QPushButton::clicked, this, [=] { reset_profiles_to_inherit_defaults(true, false); });
+    connect(ui->apply_resolver_to_profiles, &QPushButton::clicked, this, [=] { reset_profiles_to_inherit_defaults(false, true); });
+    connect(ui->reset_profiles_inherit_defaults, &QPushButton::clicked, this, [=] { reset_profiles_to_inherit_defaults(true, true); });
 
     ADJUST_SIZE
 }
@@ -221,16 +223,31 @@ void DialogEditGroup::refresh_front_proxy() {
     ui->front_proxy->setText(fEnt == nullptr ? tr("None") : fEnt->bean->DisplayTypeAndName());
 }
 
-void DialogEditGroup::reset_profiles_to_inherit_defaults() {
-    if (ent->id < 0) return;
+void DialogEditGroup::reset_profiles_to_inherit_defaults(bool resetClient, bool resetResolver) {
+    if (ent->id < 0 || (!resetClient && !resetResolver)) return;
     if (!save_subscription_defaults_from_ui()) return;
     ent->Save();
 
     const auto profiles = ent->Profiles();
     if (profiles.isEmpty()) return;
-    if (QMessageBox::question(this,
-                              tr("Confirmation"),
-                              tr("Reset %1 profile(s) to inherit this group's default client and resolver?").arg(profiles.count()))
+    int targetCount = 0;
+    for (const auto &profile: profiles) {
+        if (profile == nullptr || profile->bean == nullptr) continue;
+        if (resetResolver || profile->type == "anytls") targetCount++;
+    }
+    if (targetCount == 0) {
+        MessageBoxInfo(software_name, tr("No matching profiles."));
+        return;
+    }
+    QString confirmation;
+    if (resetClient && resetResolver) {
+        confirmation = tr("Reset %1 profile(s) to inherit this group's default client and resolver?").arg(targetCount);
+    } else if (resetClient) {
+        confirmation = tr("Reset AnyTLS client on %1 profile(s) to inherit this group's default client?").arg(targetCount);
+    } else {
+        confirmation = tr("Reset server resolver on %1 profile(s) to inherit this group's default resolver?").arg(targetCount);
+    }
+    if (QMessageBox::question(this, tr("Confirmation"), confirmation)
         != QMessageBox::Yes) {
         return;
     }
@@ -238,15 +255,21 @@ void DialogEditGroup::reset_profiles_to_inherit_defaults() {
     int changed = 0;
     for (const auto &profile: profiles) {
         if (profile == nullptr || profile->bean == nullptr) continue;
-        profile->bean->inheritSubscriptionClient = true;
-        profile->bean->inheritSubscriptionResolver = true;
-        profile->bean->serverResolverDohUpstreams.clear();
-        profile->bean->serverResolverAllowLocalFallback = ent->default_server_resolver_allow_local_fallback;
-        if (profile->type == "anytls") {
+        bool profileChanged = false;
+        if (resetClient && profile->type == "anytls") {
+            profile->bean->inheritSubscriptionClient = true;
             auto anytls = profile->AnyTLSBean();
             anytls->anytlsClientMode = "native";
             anytls->anytlsClientValue.clear();
+            profileChanged = true;
         }
+        if (resetResolver) {
+            profile->bean->inheritSubscriptionResolver = true;
+            profile->bean->serverResolverDohUpstreams.clear();
+            profile->bean->serverResolverAllowLocalFallback = ent->default_server_resolver_allow_local_fallback;
+            profileChanged = true;
+        }
+        if (!profileChanged) continue;
         profile->Save();
         changed++;
     }
