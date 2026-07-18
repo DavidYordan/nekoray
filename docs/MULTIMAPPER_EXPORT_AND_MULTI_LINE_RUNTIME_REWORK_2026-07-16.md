@@ -446,6 +446,7 @@ TUN 整改建议：
 - [x] 内部 TUN 正运行时，启动/停止辅助端口会被阻断，因为应用辅助端口需要 stop/start 整个 sing-box，可能造成 TUN 短暂卸载。
 - [x] 辅助端口已支持可配置端口池和持久化运行意图：启动/停止辅助端口会写入配置，显式停止主代理会清空辅助端口；程序恢复主线路时会随主配置恢复仍有效的辅助端口。
 - [x] 删除正在作为辅助端口运行的线路时，会同步移除持久化辅助状态并重载主配置；内部 TUN 正运行时阻断该删除路径，避免隐式卸载 TUN。
+- [x] 增加 Windows 运行态连通性脚本 `tools/verify_runtime_connectivity.ps1`，用于只读验证主端口、辅助端口、Clash API、系统代理指向和 curl 连通性；使用方法见 `docs/Windows_Runtime_Connectivity_Verification.md`。
 
 阶段 4：无偷跑重启。
 
@@ -486,6 +487,7 @@ MultiMapper 配合验收：
 
 - 主线路启动后，Windows 系统代理指向主端口。
 - 启动辅助线路后，主端口不变，辅助端口可单独 curl。
+- 使用 `tools/verify_runtime_connectivity.ps1 -ExpectRunning` 可自动采样主端口、辅助端口、Clash API 和 curl 连通性。
 - 停止辅助线路不影响主线路系统代理和 TUN。
 - 重启程序并恢复主线路后，仍有效的持久化辅助端口随主配置恢复；显式停止主代理后不再恢复辅助端口。
 - 删除正在运行的辅助线路后，主配置不再暴露该辅助端口；内部 TUN 正运行时删除应被阻断。
