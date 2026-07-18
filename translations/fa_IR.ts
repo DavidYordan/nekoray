@@ -48,10 +48,6 @@
         <translation>هسته</translation>
     </message>
     <message>
-        <source>Extra Core</source>
-        <translation>هسته اضافی</translation>
-    </message>
-    <message>
         <source>Select</source>
         <translation>برگزیدن</translation>
     </message>
@@ -370,10 +366,6 @@
     <message>
         <source>Application layer protocol negotiation, clear text. Please separate them with commas.</source>
         <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <source>Custom (Extra Core)</source>
-        <translation>سفارشی ( هسته اضافه)</translation>
     </message>
     <message>
         <source>Not set</source>
@@ -797,45 +789,6 @@ This needs to be run NekoBox with administrator privileges.</source>
     </message>
 </context>
 <context>
-    <name>EditNaive</name>
-    <message>
-        <source>Protocol</source>
-        <translation>پروتکل</translation>
-    </message>
-    <message>
-        <source>Password</source>
-        <translation>رمزعبور</translation>
-    </message>
-    <message>
-        <source>Extra headers</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <source>SNI</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <source>Username</source>
-        <translation>نام کاربری</translation>
-    </message>
-    <message>
-        <source>Certificate</source>
-        <translation type="unfinished">گواهی</translation>
-    </message>
-    <message>
-        <source>Insecure concurrency</source>
-        <translation>همزمانی ناامن</translation>
-    </message>
-    <message>
-        <source>Disable logs</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <source>Turn on this option if your connection is lost after a while</source>
-        <translation type="unfinished"></translation>
-    </message>
-</context>
-<context>
     <name>EditQUIC</name>
     <message>
         <source>Certificate</source>
@@ -899,10 +852,6 @@ This needs to be run NekoBox with administrator privileges.</source>
     </message>
     <message>
         <source>UDP Relay Mode</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <source>Force use external core</source>
         <translation type="unfinished"></translation>
     </message>
 </context>

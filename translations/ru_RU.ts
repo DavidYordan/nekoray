@@ -128,10 +128,6 @@
         <translation>Параметры ядра</translation>
     </message>
     <message>
-        <source>Extra Core</source>
-        <translation>Дополнительные ядра</translation>
-    </message>
-    <message>
         <source>Add</source>
         <translation>Добавить</translation>
     </message>
@@ -424,10 +420,6 @@
     <message>
         <source>Custom (%1 config)</source>
         <translation>Кастомный (%1 конфиг)</translation>
-    </message>
-    <message>
-        <source>Custom (Extra Core)</source>
-        <translation>Кастомный (доп. ядро)</translation>
     </message>
     <message>
         <source>Not set</source>
@@ -800,45 +792,6 @@ https://matsuridayo.github.io/n-configuration/#vpn-tun</translation>
     </message>
 </context>
 <context>
-    <name>EditNaive</name>
-    <message>
-        <source>Protocol</source>
-        <translation>Протокол</translation>
-    </message>
-    <message>
-        <source>Password</source>
-        <translation>Пароль</translation>
-    </message>
-    <message>
-        <source>Extra headers</source>
-        <translation>Дополнительные заголовки</translation>
-    </message>
-    <message>
-        <source>SNI</source>
-        <translation>SNI</translation>
-    </message>
-    <message>
-        <source>Username</source>
-        <translation>Имя пользователя</translation>
-    </message>
-    <message>
-        <source>Certificate</source>
-        <translation>Сертификат</translation>
-    </message>
-    <message>
-        <source>Insecure concurrency</source>
-        <translation></translation>
-    </message>
-    <message>
-        <source>Disable logs</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <source>Turn on this option if your connection is lost after a while</source>
-        <translation type="unfinished"></translation>
-    </message>
-</context>
-<context>
     <name>EditQUIC</name>
     <message>
         <source>Download (Mbps)</source>
@@ -903,10 +856,6 @@ https://matsuridayo.github.io/n-configuration/#vpn-tun</translation>
     <message>
         <source>UDP Relay Mode</source>
         <translation>Режим UDP Relay</translation>
-    </message>
-    <message>
-        <source>Force use external core</source>
-        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>

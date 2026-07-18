@@ -13,8 +13,6 @@ namespace NekoGui_fmt {
 
     class TrojanVLESSBean;
 
-    class NaiveBean;
-
     class QUICBean;
 
     class AnyTLSBean;
@@ -61,10 +59,6 @@ namespace NekoGui {
 
         [[nodiscard]] NekoGui_fmt::TrojanVLESSBean *TrojanVLESSBean() const {
             return (NekoGui_fmt::TrojanVLESSBean *) bean.get();
-        };
-
-        [[nodiscard]] NekoGui_fmt::NaiveBean *NaiveBean() const {
-            return (NekoGui_fmt::NaiveBean *) bean.get();
         };
 
         [[nodiscard]] NekoGui_fmt::QUICBean *QUICBean() const {

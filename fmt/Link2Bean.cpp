@@ -175,22 +175,6 @@ namespace NekoGui_fmt {
         }
         return !(uuid.isEmpty() || serverAddress.isEmpty());
     }
-    bool NaiveBean::TryParseLink(const QString &link) {
-        auto url = QUrl(link);
-        if (!url.isValid()) return false;
-
-        protocol = url.scheme().replace("naive+", "");
-        if (protocol != "https" && protocol != "quic") return false;
-
-        name = url.fragment(QUrl::FullyDecoded);
-        serverAddress = url.host();
-        serverPort = url.port();
-        username = url.userName();
-        password = url.password();
-
-        return !(username.isEmpty() || password.isEmpty() || serverAddress.isEmpty());
-    }
-
     bool QUICBean::TryParseLink(const QString &link) {
         auto url = QUrl(link);
         auto query = QUrlQuery(url.query());

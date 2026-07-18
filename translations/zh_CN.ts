@@ -48,10 +48,6 @@
         <translation>核心</translation>
     </message>
     <message>
-        <source>Extra Core</source>
-        <translation>其他核心</translation>
-    </message>
-    <message>
         <source>Select</source>
         <translation>选择</translation>
     </message>
@@ -376,10 +372,6 @@
     <message>
         <source>Settings</source>
         <translation>设置</translation>
-    </message>
-    <message>
-        <source>Custom (Extra Core)</source>
-        <translation>自定义 (其他核心)</translation>
     </message>
     <message>
         <source>TLS Security Settings</source>
@@ -801,45 +793,6 @@ This needs to be run NekoBox with administrator privileges.</source>
     </message>
 </context>
 <context>
-    <name>EditNaive</name>
-    <message>
-        <source>Protocol</source>
-        <translation>协议</translation>
-    </message>
-    <message>
-        <source>Password</source>
-        <translation>密码</translation>
-    </message>
-    <message>
-        <source>Extra headers</source>
-        <translation>附加标头</translation>
-    </message>
-    <message>
-        <source>SNI</source>
-        <translation></translation>
-    </message>
-    <message>
-        <source>Username</source>
-        <translation>用户名</translation>
-    </message>
-    <message>
-        <source>Certificate</source>
-        <translation>证书</translation>
-    </message>
-    <message>
-        <source>Insecure concurrency</source>
-        <translation>不安全并发</translation>
-    </message>
-    <message>
-        <source>Disable logs</source>
-        <translation>关闭日志</translation>
-    </message>
-    <message>
-        <source>Turn on this option if your connection is lost after a while</source>
-        <translation>如果连接一段时间后出现中断，请打开此选项</translation>
-    </message>
-</context>
-<context>
     <name>EditQUIC</name>
     <message>
         <source>Certificate</source>
@@ -904,10 +857,6 @@ This needs to be run NekoBox with administrator privileges.</source>
     <message>
         <source>Disable SNI</source>
         <translation>不发送服务器名称指示</translation>
-    </message>
-    <message>
-        <source>Force use external core</source>
-        <translation>强制使用外部核心</translation>
     </message>
 </context>
 <context>

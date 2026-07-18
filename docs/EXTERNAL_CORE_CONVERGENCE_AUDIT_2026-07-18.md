@@ -21,13 +21,13 @@
 3. Hysteria2/TUIC 固定走 sing-box 内建路径，旧外部核心字段不再序列化。
 4. Hysteria2/TUIC 编辑页删除 `Force use external core`，`QUICBean` 不再序列化该字段，历史 JSON 中的同名字段会被忽略。
 5. 删除 `extraCore` 数据模型、Basic Settings 的 Extra Core 页、`BuildExternal()` 抽象、协议外部构建函数、`extRs` 结果集合和 gRPC 启动/测速里的外部进程处理。
-6. 历史 Naive 配置构建时返回明确错误：`Naive is not supported by the RouteFluent sing-box core.`
+6. 删除 `NaiveBean`、Naive 分享链接解析/导出和 Naive sing-box 构建函数；Raw/Clash 导入仍显式跳过 `naive+` / `type: naive`。
 7. core outbound 构建错误优先级已调整，bean 返回的明确错误会优先于泛化的 `unsupported outbound`。
 8. `CustomBean` 只保留 `internal` 与 `internal-full` 两类 sing-box JSON；历史外部 custom core 会在构建/编辑时明确提示不支持。
 
 ## 保留兼容
 
-1. `NaiveBean` 类型定义暂时保留，用于历史数据库反序列化和链接导出兼容；正式入口不再生成。
+1. 历史配置文件中的 `type=naive` 会按未知/不支持配置处理，不再保留可编辑或可运行的 Naive 协议模型。
 2. 历史配置文件中的 `extraCore`、`forceExternal`、`cmd`、`mapping_port`、`socks_port` 等字段会被新版本忽略，不再参与保存和运行。
 
 ## 下一步建议

@@ -172,12 +172,6 @@ namespace NekoGui_fmt {
         return result;
     }
 
-    CoreObjOutboundBuildResult NaiveBean::BuildCoreObjSingBox() {
-        CoreObjOutboundBuildResult result;
-        result.error = "Naive is not supported by the RouteFluent sing-box core.";
-        return result;
-    }
-
     CoreObjOutboundBuildResult QUICBean::BuildCoreObjSingBox() {
         CoreObjOutboundBuildResult result;
 

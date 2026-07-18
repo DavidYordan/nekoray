@@ -480,7 +480,7 @@ namespace {
             if (reason != nullptr) *reason = "empty profile";
             return false;
         }
-        if (profile->type == "chain" || profile->type == "custom" || profile->type == "naive") {
+        if (profile->type == "chain" || profile->type == "custom") {
             if (reason != nullptr) *reason = "unsupported profile type";
             return false;
         }

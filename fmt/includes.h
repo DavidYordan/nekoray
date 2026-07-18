@@ -5,7 +5,6 @@
 #include "ChainBean.hpp"
 #include "VMessBean.hpp"
 #include "TrojanVLESSBean.hpp"
-#include "NaiveBean.hpp"
 #include "QUICBean.hpp"
 #include "AnyTLSBean.hpp"
 #include "CustomBean.hpp"
