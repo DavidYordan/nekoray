@@ -41,4 +41,4 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\export_profile_core_
 2. 确认 Clash 订阅导入的 AnyTLS 是否带 `client=mihomo/1.19.28`。
 3. 确认 AnyTLS server 域名是否绑定 `domain_resolver`，且 DNS servers 中有 `routefluent_resolver_group` 和订阅 DoH。
 4. 用 `nekobox_core.exe check -c` 先排除配置 schema 错误。
-5. 若 Trojan 基线可用、AnyTLS 配置校验通过但运行时仍 `failed to create session: EOF`，则优先怀疑 AnyTLS 线路参数、服务端策略、服务端兼容性或该节点当前不可用，而不是本地入站端口或生产 TUN 抢流。
+5. 若 Trojan 基线可用、AnyTLS 配置校验通过但运行时仍 `failed to create session: EOF`，需要先确认当前机器是否存在另一套 TUN、系统级透明代理或强制路由。存在这些外部网络控制时，EOF 只作为本机观测记录，不作为项目缺陷或节点缺陷的单独判断依据。

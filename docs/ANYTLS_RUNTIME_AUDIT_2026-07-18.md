@@ -11,7 +11,9 @@
 - DNS servers 中包含 RouteFluent provider resolver group 和订阅 DoH。
 - `nekobox_core.exe check -c` 对真实运行配置返回 0。
 
-同一测试环境下 Trojan 基线可用，而当前 AnyTLS 节点在 core 创建 AnyTLS session 阶段返回 EOF。因此，当前问题不再指向本地 mixed 入站、Windows 系统代理、生产版 TUN、GUI gRPC 启动流程、RouteFluent `client` 字段名或订阅 DoH 绑定。
+同一测试环境下 Trojan 基线可用，而当前 AnyTLS 节点在 core 创建 AnyTLS session 阶段返回 EOF。需要注意：当前机器同时运行另一套 Nekoray 的 TUN 模式，它可能显著影响本项目实例的出站网络路径，因此 EOF 只能作为本机观测记录，不作为 AnyTLS 支持是否完成的阻塞结论。
+
+本轮审计重点收敛为：最终 core 配置是否正确、`nekobox_core.exe check -c` 是否通过、URL 测试配置是否仍使用 sing-box 已废弃/拒绝的 DNS 写法。实际连通性以后以用户在干净或明确绕过 TUN 的环境中手动测试为准。
 
 ## 已验证项
 
@@ -49,7 +51,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\export_profile_core_
 2. 移除前置代理且 AnyTLS 不写 `client`，仍 EOF。
 3. 保留订阅默认 `client=mihomo/1.19.28` 且移除前置代理，仍 EOF。
 
-因此，当前 EOF 不能简单归因于 `client=mihomo/1.19.28` 或前置代理链路。
+因此，当前 EOF 不能简单归因于 `client=mihomo/1.19.28` 或前置代理链路；同时也不能反向证明节点或服务端一定有问题，因为本机外部 TUN 仍可能改变网络路径。
 
 ## 已修复问题
 
@@ -69,7 +71,7 @@ missing route.default_domain_resolver or domain_resolver in dial fields
 
 ## 下一步建议
 
-1. 从同一订阅中选择多条 AnyTLS 节点重复运行时测试，确认是单节点失效还是该订阅的 AnyTLS 全部失效。
-2. 若多个 AnyTLS 节点均 EOF，需要进一步对比 provider 原始 Clash YAML 中的 AnyTLS 字段，重点看 `sni`、`alpn`、端口、password、skip-cert、idle session 参数是否存在 provider 特殊要求。
-3. 若 Mihomo 客户端实际可用而本项目不可用，需要抓取 Mihomo 对同一节点的最终 outbound 配置，比较 AnyTLS handshake 相关字段。
-4. 本项目后续可继续增强 UI 诊断：右键线路导出最终 core 配置摘要、运行 `check -c`、并提示 EOF 更可能是线路侧或协议握手问题。
+1. 不再把当前机器上的 EOF 作为优先排障项。
+2. 用户后续手动实测时，优先确认实际运行环境是否关闭或绕过另一套 Nekoray TUN。
+3. 若干净环境中仍出现 AnyTLS 不通而 Mihomo 可通，再抓取 Mihomo 对同一节点的最终 outbound 配置，比较 AnyTLS handshake 相关字段。
+4. 本项目后续可继续增强 UI 诊断：右键线路导出最终 core 配置摘要、运行 `check -c`，并提示运行时 EOF 在存在外部 TUN 时不具备单独定性价值。
