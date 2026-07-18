@@ -696,11 +696,15 @@ namespace NekoGui_sub {
         if (group != nullptr) {
             if (rawUpdater->detected_source_type == "clash") {
                 group->source_type = "clash";
-                group->default_client_mode = "mihomo";
-                group->default_client_value = "mihomo/1.19.28";
-                if (!rawUpdater->detected_doh_upstreams.isEmpty()) {
+                if (group->DefaultClientManagedBySubscription()) {
+                    group->default_client_mode = "mihomo";
+                    group->default_client_value = "mihomo/1.19.28";
+                    group->SetDefaultClientManagedBySubscription(true);
+                }
+                if (group->DefaultResolverManagedBySubscription()) {
                     group->default_server_resolver_doh = rawUpdater->detected_doh_upstreams.join("\n");
                     group->default_server_resolver_allow_local_fallback = false;
+                    group->SetDefaultResolverManagedBySubscription(true);
                 }
             } else if (group->source_type.isEmpty() && asURL) {
                 group->source_type = "subscription";

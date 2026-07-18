@@ -179,6 +179,13 @@
       <item row="3" column="1">
        <layout class="QHBoxLayout" name="defaultClientLayout">
         <item>
+         <widget class="QCheckBox" name="default_client_auto">
+          <property name="text">
+           <string>Auto from subscription</string>
+          </property>
+         </widget>
+        </item>
+        <item>
          <widget class="QComboBox" name="default_client_mode">
           <item>
            <property name="text">
@@ -214,17 +221,28 @@
        </widget>
       </item>
       <item row="4" column="1">
-       <widget class="QPlainTextEdit" name="default_server_resolver_doh">
-        <property name="maximumSize">
-         <size>
-          <width>16777215</width>
-          <height>82</height>
-         </size>
-        </property>
-        <property name="placeholderText">
-         <string>HTTPS DoH upstreams, one per line</string>
-        </property>
-       </widget>
+       <layout class="QVBoxLayout" name="defaultServerResolverLayout">
+        <item>
+         <widget class="QCheckBox" name="default_server_resolver_auto">
+          <property name="text">
+           <string>Auto from subscription</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPlainTextEdit" name="default_server_resolver_doh">
+          <property name="maximumSize">
+           <size>
+            <width>16777215</width>
+            <height>82</height>
+           </size>
+          </property>
+          <property name="placeholderText">
+           <string>HTTPS DoH upstreams, one per line</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
       </item>
       <item row="5" column="1">
        <widget class="QCheckBox" name="default_server_resolver_fallback">
@@ -299,8 +317,10 @@
   <tabstop>url</tabstop>
   <tabstop>skip_auto_update</tabstop>
   <tabstop>source_type</tabstop>
+  <tabstop>default_client_auto</tabstop>
   <tabstop>default_client_mode</tabstop>
   <tabstop>default_client_value</tabstop>
+  <tabstop>default_server_resolver_auto</tabstop>
   <tabstop>default_server_resolver_doh</tabstop>
   <tabstop>default_server_resolver_fallback</tabstop>
   <tabstop>reset_profiles_inherit_defaults</tabstop>

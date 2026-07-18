@@ -18,7 +18,9 @@ namespace NekoGui {
         QString source_type = "";
         QString default_client_mode = "";
         QString default_client_value = "";
+        QString default_client_source = "";
         QString default_server_resolver_doh = "";
+        QString default_server_resolver_source = "";
         bool default_server_resolver_allow_local_fallback = false;
 
         // list ui
@@ -27,6 +29,14 @@ namespace NekoGui {
         QList<int> order;
 
         Group();
+
+        [[nodiscard]] bool DefaultClientManagedBySubscription() const;
+
+        [[nodiscard]] bool DefaultResolverManagedBySubscription() const;
+
+        void SetDefaultClientManagedBySubscription(bool enabled);
+
+        void SetDefaultResolverManagedBySubscription(bool enabled);
 
         // 按 id 顺序
         [[nodiscard]] QList<std::shared_ptr<ProxyEntity>> Profiles() const;

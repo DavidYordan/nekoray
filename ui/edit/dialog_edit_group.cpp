@@ -65,10 +65,12 @@ DialogEditGroup::DialogEditGroup(const std::shared_ptr<NekoGui::Group> &ent, QWi
     auto sourceType = ent->source_type.trimmed().isEmpty() ? "auto" : ent->source_type.trimmed().toLower();
     if (ui->source_type->findText(sourceType) < 0) sourceType = "auto";
     ui->source_type->setCurrentText(sourceType);
+    ui->default_client_auto->setChecked(ent->DefaultClientManagedBySubscription());
     auto defaultClientMode = ent->default_client_mode.trimmed().isEmpty() ? "native" : ent->default_client_mode.trimmed().toLower();
     if (ui->default_client_mode->findText(defaultClientMode) < 0) defaultClientMode = "native";
     ui->default_client_mode->setCurrentText(defaultClientMode);
     ui->default_client_value->setText(ent->default_client_value);
+    ui->default_server_resolver_auto->setChecked(ent->DefaultResolverManagedBySubscription());
     ui->default_server_resolver_doh->setPlainText(ent->default_server_resolver_doh);
     ui->default_server_resolver_fallback->setChecked(ent->default_server_resolver_allow_local_fallback);
     ui->type->setCurrentIndex(ent->url.isEmpty() ? 0 : 1);
@@ -77,13 +79,35 @@ DialogEditGroup::DialogEditGroup(const std::shared_ptr<NekoGui::Group> &ent, QWi
     ui->cat_share->setVisible(false);
 
     auto refreshDefaultClientUi = [=] {
+        const auto autoManaged = ui->default_client_auto->isChecked();
+        const auto sourceType = normalizeSourceType(ui->source_type->currentText());
+        ui->default_client_mode->setEnabled(!autoManaged);
         const auto mode = ui->default_client_mode->currentText();
-        ui->default_client_value->setEnabled(mode == "custom");
-        if (mode == "mihomo") ui->default_client_value->setText("mihomo/1.19.28");
-        if (mode == "native") ui->default_client_value->clear();
+        if (autoManaged && sourceType == "clash") {
+            ui->default_client_mode->setCurrentText("mihomo");
+            ui->default_client_value->setText("mihomo/1.19.28");
+        } else if (autoManaged) {
+            ui->default_client_mode->setCurrentText("native");
+            ui->default_client_value->clear();
+        } else if (mode == "mihomo") {
+            ui->default_client_value->setText("mihomo/1.19.28");
+        } else if (mode == "native") {
+            ui->default_client_value->clear();
+        }
+        ui->default_client_value->setEnabled(!autoManaged && ui->default_client_mode->currentText() == "custom");
     };
     connect(ui->default_client_mode, &QComboBox::currentTextChanged, this, [=](const QString &) { refreshDefaultClientUi(); });
+    connect(ui->default_client_auto, &QCheckBox::clicked, this, [=] { refreshDefaultClientUi(); });
+    connect(ui->source_type, &QComboBox::currentTextChanged, this, [=](const QString &) { refreshDefaultClientUi(); });
     refreshDefaultClientUi();
+
+    auto refreshDefaultResolverUi = [=] {
+        const auto autoManaged = ui->default_server_resolver_auto->isChecked();
+        ui->default_server_resolver_doh->setEnabled(!autoManaged);
+        ui->default_server_resolver_fallback->setEnabled(!autoManaged);
+    };
+    connect(ui->default_server_resolver_auto, &QCheckBox::clicked, this, [=] { refreshDefaultResolverUi(); });
+    refreshDefaultResolverUi();
 
     if (ent->id >= 0) { // already a group
         ui->type->setDisabled(true);
@@ -136,25 +160,42 @@ DialogEditGroup::~DialogEditGroup() {
 
 bool DialogEditGroup::save_subscription_defaults_from_ui() {
     ent->source_type = normalizeSourceType(ui->source_type->currentText());
-    ent->default_client_mode = ui->default_client_mode->currentText().trimmed().toLower();
-    if (ent->default_client_mode == "native") {
-        ent->default_client_mode.clear();
-        ent->default_client_value.clear();
-    } else if (ent->default_client_mode == "mihomo") {
-        ent->default_client_value = "mihomo/1.19.28";
-    } else if (ent->default_client_mode == "custom") {
-        const auto clientValue = ui->default_client_value->text().trimmed();
-        if (!isVisibleAsciiClientValue(clientValue)) {
-            MessageBoxWarning(tr("Default Client"), tr("Custom client value must be 1..128 visible ASCII characters without spaces."));
-            return false;
+    const auto clientAuto = ui->default_client_auto->isChecked();
+    ent->SetDefaultClientManagedBySubscription(clientAuto);
+    if (clientAuto) {
+        if (ent->source_type == "clash") {
+            ent->default_client_mode = "mihomo";
+            ent->default_client_value = "mihomo/1.19.28";
+        } else {
+            ent->default_client_mode.clear();
+            ent->default_client_value.clear();
         }
-        ent->default_client_value = clientValue;
     } else {
-        ent->default_client_mode.clear();
-        ent->default_client_value.clear();
+        ent->default_client_mode = ui->default_client_mode->currentText().trimmed().toLower();
+        if (ent->default_client_mode == "native") {
+            ent->default_client_mode.clear();
+            ent->default_client_value.clear();
+        } else if (ent->default_client_mode == "mihomo") {
+            ent->default_client_value = "mihomo/1.19.28";
+        } else if (ent->default_client_mode == "custom") {
+            const auto clientValue = ui->default_client_value->text().trimmed();
+            if (!isVisibleAsciiClientValue(clientValue)) {
+                MessageBoxWarning(tr("Default Client"), tr("Custom client value must be 1..128 visible ASCII characters without spaces."));
+                return false;
+            }
+            ent->default_client_value = clientValue;
+        } else {
+            ent->default_client_mode.clear();
+            ent->default_client_value.clear();
+        }
     }
-    ent->default_server_resolver_doh = parseDohUpstreams(ui->default_server_resolver_doh->toPlainText()).join("\n");
-    ent->default_server_resolver_allow_local_fallback = ui->default_server_resolver_fallback->isChecked();
+
+    const auto resolverAuto = ui->default_server_resolver_auto->isChecked();
+    ent->SetDefaultResolverManagedBySubscription(resolverAuto);
+    if (!resolverAuto) {
+        ent->default_server_resolver_doh = parseDohUpstreams(ui->default_server_resolver_doh->toPlainText()).join("\n");
+        ent->default_server_resolver_allow_local_fallback = ui->default_server_resolver_fallback->isChecked();
+    }
     return true;
 }
 

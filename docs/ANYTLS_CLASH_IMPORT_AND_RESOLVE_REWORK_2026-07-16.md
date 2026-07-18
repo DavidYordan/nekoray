@@ -175,6 +175,7 @@
 - [x] 后台“解析为 IP”已增加进度展示和取消能力。
 - [x] Clash 订阅导入后，在订阅/分组层级保存 `source_type=clash`。
 - [x] Clash 订阅无论协议类型，订阅默认 client 都设为 `mihomo/1.19.28`。
+- [x] 订阅级默认 client/DoH 已区分自动来源和手动覆盖；重新抓取 Clash 订阅只刷新自动来源，新订阅没有 DoH 时会清空自动 DoH，手动覆盖不被覆盖。
 - [x] AnyTLS 线路默认继承订阅 client；非 AnyTLS 线路保留来源默认元数据但不向 core 写无效字段。
 - [x] 订阅层级 client/DoH/fallback 管理 UI 已在分组编辑面板提供，并支持重置线路为继承默认值。
 - [x] 单线路编辑 UI 已增加“继承订阅 / 覆盖订阅”状态。

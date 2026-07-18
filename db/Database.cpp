@@ -318,10 +318,42 @@ namespace NekoGui {
         _add(new configItem("source_type", &source_type, itemType::string));
         _add(new configItem("default_client_mode", &default_client_mode, itemType::string));
         _add(new configItem("default_client_value", &default_client_value, itemType::string));
+        _add(new configItem("default_client_source", &default_client_source, itemType::string));
         _add(new configItem("default_server_resolver_doh", &default_server_resolver_doh, itemType::string));
+        _add(new configItem("default_server_resolver_source", &default_server_resolver_source, itemType::string));
         _add(new configItem("default_server_resolver_fallback", &default_server_resolver_allow_local_fallback, itemType::boolean));
         _add(new configItem("manually_column_width", &manually_column_width, itemType::boolean));
         _add(new configItem("column_width", &column_width, itemType::integerList));
+    }
+
+    bool Group::DefaultClientManagedBySubscription() const {
+        const auto source = default_client_source.trimmed().toLower();
+        if (source == "manual") return false;
+        if (source == "subscription") return true;
+
+        const auto sourceType = source_type.trimmed().toLower();
+        const auto mode = default_client_mode.trimmed().toLower();
+        if (sourceType == "clash") {
+            return mode.isEmpty() || mode == "mihomo";
+        }
+        return false;
+    }
+
+    bool Group::DefaultResolverManagedBySubscription() const {
+        const auto source = default_server_resolver_source.trimmed().toLower();
+        if (source == "manual") return false;
+        if (source == "subscription") return true;
+
+        const auto sourceType = source_type.trimmed().toLower();
+        return sourceType == "clash";
+    }
+
+    void Group::SetDefaultClientManagedBySubscription(bool enabled) {
+        default_client_source = enabled ? "subscription" : "manual";
+    }
+
+    void Group::SetDefaultResolverManagedBySubscription(bool enabled) {
+        default_server_resolver_source = enabled ? "subscription" : "manual";
     }
 
     std::shared_ptr<Group> ProfileManager::LoadGroup(const QString &jsonPath) {

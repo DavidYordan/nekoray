@@ -42,6 +42,7 @@
 4. 导入 Clash 订阅时，只保留对本项目有实际运行价值的连接字段、TLS/传输字段、AnyTLS client、provider DoH 等信息。
 5. Clash 的分组、规则、rule-provider、health-check、url-test 等运行时语义默认不映射到本项目，避免和本项目自有分组/路由/测试模型混淆。
 6. 与 MultiMapper 对接的主格式是精简 Clash-compatible YAML，并通过 `x-nekoray` 扩展携带订阅级 client、DoH、继承关系和来源标签；旧 JSON 仅作为历史兼容或无 YAML 构建 fallback。
+7. 订阅/分组默认值必须区分 `subscription` 自动来源和 `manual` 手动覆盖。重新抓取 Clash 订阅只能刷新自动来源；新订阅没有 DoH 时应清空自动 DoH，不能沿用旧订阅的解析器；手动 client/DoH 不得被订阅更新覆盖。
 
 ## Git 与交付规则
 

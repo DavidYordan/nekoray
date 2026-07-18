@@ -184,6 +184,38 @@ function Restore-PackageConfig([string] $PackageConfigDir, [string] $PackageConf
     Remove-SafeDirectory $PackageConfigBackupDir $DeployRoot
 }
 
+function Backup-PackageBinaries([string] $PackageDir, [string] $PackageBinaryBackupDir, [string] $DeployRoot) {
+    Remove-SafeDirectory $PackageBinaryBackupDir $DeployRoot
+    New-Item -ItemType Directory -Force -Path $PackageBinaryBackupDir | Out-Null
+    $copied = 0
+    foreach ($name in @("updater.exe", "nekobox_core.exe")) {
+        $source = Join-Path $PackageDir $name
+        if (Test-Path -LiteralPath $source -PathType Leaf) {
+            Copy-Item -LiteralPath $source -Destination (Join-Path $PackageBinaryBackupDir $name) -Force
+            $copied++
+        }
+    }
+    if ($copied -eq 0) {
+        Write-Warning "SkipGoBuild requested but no existing Go binaries were found under $PackageDir."
+    } else {
+        Write-Host "Preserved package Go binaries: $PackageBinaryBackupDir ($copied file(s))"
+    }
+}
+
+function Restore-PackageBinaries([string] $PackageDir, [string] $PackageBinaryBackupDir, [string] $DeployRoot) {
+    if (!(Test-Path -LiteralPath $PackageBinaryBackupDir -PathType Container)) {
+        return
+    }
+    New-Item -ItemType Directory -Force -Path $PackageDir | Out-Null
+    foreach ($name in @("updater.exe", "nekobox_core.exe")) {
+        $source = Join-Path $PackageBinaryBackupDir $name
+        if (Test-Path -LiteralPath $source -PathType Leaf) {
+            Copy-Item -LiteralPath $source -Destination (Join-Path $PackageDir $name) -Force
+        }
+    }
+    Remove-SafeDirectory $PackageBinaryBackupDir $DeployRoot
+}
+
 function Find-QtDir {
     param([string] $Requested)
     if (![string]::IsNullOrWhiteSpace($Requested)) {
@@ -363,6 +395,7 @@ try {
     $PackageDir = Join-Path $DeployRoot "windows64"
     $PackageConfigDir = Join-Path $PackageDir "config"
     $PackageConfigBackupDir = Join-Path $DeployRoot "windows64-config-preserve"
+    $PackageBinaryBackupDir = Join-Path $DeployRoot "windows64-binary-preserve"
     $PublicResDir = Join-Path $DeployRoot "public_res"
     $RouteFluentWorkDir = Join-Path $Root "third_party\routefluent-sing-box\work"
     $RouteFluentCoreBuildDir = Join-Path $Root "build-routefluent-sing-box"
@@ -399,6 +432,9 @@ try {
     New-Item -ItemType Directory -Force -Path $DeployRoot | Out-Null
     Stop-PackageProcesses $PackageDir
     Backup-PackageConfig $PackageConfigDir $PackageConfigBackupDir $DeployRoot
+    if ($SkipGoBuild) {
+        Backup-PackageBinaries $PackageDir $PackageBinaryBackupDir $DeployRoot
+    }
     Remove-SafeDirectory $PackageDir $DeployRoot
     Remove-SafeDirectory $ZipStageRoot $DeployRoot
     New-Item -ItemType Directory -Force -Path $PackageDir | Out-Null
@@ -497,6 +533,7 @@ try {
         }
     } else {
         Write-Step "Skip Go build"
+        Restore-PackageBinaries $PackageDir $PackageBinaryBackupDir $DeployRoot
         Require-File (Join-Path $PackageDir "updater.exe") "updater.exe" | Out-Null
         Require-File (Join-Path $PackageDir "nekobox_core.exe") "nekobox_core.exe" | Out-Null
     }
@@ -660,6 +697,15 @@ try {
             Restore-PackageConfig $PackageConfigDir $PackageConfigBackupDir $PackageDir $DeployRoot
         } catch {
             Write-Warning "Could not restore preserved package config: $($_.Exception.Message)"
+        }
+    }
+    if ((Get-Variable -Name PackageBinaryBackupDir -Scope Local -ErrorAction SilentlyContinue) -and
+        (Get-Variable -Name PackageDir -Scope Local -ErrorAction SilentlyContinue) -and
+        (Get-Variable -Name DeployRoot -Scope Local -ErrorAction SilentlyContinue)) {
+        try {
+            Restore-PackageBinaries $PackageDir $PackageBinaryBackupDir $DeployRoot
+        } catch {
+            Write-Warning "Could not restore preserved Go binaries: $($_.Exception.Message)"
         }
     }
     if (Get-Variable -Name oldPath -Scope Local -ErrorAction SilentlyContinue) { $env:PATH = $oldPath }
