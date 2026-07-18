@@ -116,12 +116,9 @@ namespace NekoGui_sub {
             if (!ok) return;
         }
 
-        // Naive
+        // Naive requires an external core and is intentionally not imported in the sing-box-only mainline.
         if (str.startsWith("naive+")) {
-            needFix = false;
-            ent = NekoGui::ProfileManager::NewProxyEntity("naive");
-            auto ok = ent->NaiveBean()->TryParseLink(str);
-            if (!ok) return;
+            return;
         }
 
         // Hysteria2
@@ -300,6 +297,7 @@ namespace NekoGui_sub {
 
                 if (type == "ss" || type == "ssr") type = "shadowsocks";
                 if (type == "socks5") type = "socks";
+                if (type == "naive") continue;
 
                 auto ent = NekoGui::ProfileManager::NewProxyEntity(type);
                 if (ent->bean->version == -114514) continue;

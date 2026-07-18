@@ -632,12 +632,12 @@ namespace NekoGui {
                 outbound["server_port"] = ext_socks_port;
             } else {
                 const auto coreR = ent->bean->BuildCoreObjSingBox();
-                if (coreR.outbound.isEmpty()) {
-                    status->result->error = "unsupported outbound";
-                    return {};
-                }
                 if (!coreR.error.isEmpty()) { // rejected
                     status->result->error = coreR.error;
+                    return {};
+                }
+                if (coreR.outbound.isEmpty()) {
+                    status->result->error = "unsupported outbound";
                     return {};
                 }
                 outbound = coreR.outbound;

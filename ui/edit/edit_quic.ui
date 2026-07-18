@@ -160,13 +160,6 @@
    <item>
     <layout class="QHBoxLayout" name="horizontalLayout">
      <item>
-      <widget class="QCheckBox" name="forceExternal">
-       <property name="text">
-        <string>Force use external core</string>
-       </property>
-      </widget>
-     </item>
-     <item>
       <widget class="QCheckBox" name="uos">
        <property name="toolTip">
         <string notr="true">Requires sing-box server</string>
@@ -352,7 +345,6 @@
   <tabstop>udpRelayMode</tabstop>
   <tabstop>heartbeat</tabstop>
   <tabstop>zeroRttHandshake</tabstop>
-  <tabstop>forceExternal</tabstop>
   <tabstop>uos</tabstop>
   <tabstop>disableMtuDiscovery</tabstop>
   <tabstop>obfsPassword</tabstop>

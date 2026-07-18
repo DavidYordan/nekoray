@@ -189,9 +189,11 @@ DialogBasicSettings::DialogBasicSettings(QWidget *parent)
     ui->core_features->setText(RouteFluentCoreSummary());
     //
     CACHE.extraCore = QString2QJsonObject(NekoGui::dataStore->extraCore->core_map);
-    if (!CACHE.extraCore.contains("naive")) CACHE.extraCore.insert("naive", "");
-    if (!CACHE.extraCore.contains("hysteria2")) CACHE.extraCore.insert("hysteria2", "");
-    if (!CACHE.extraCore.contains("tuic")) CACHE.extraCore.insert("tuic", "");
+    for (const auto &legacyCore: QStringList{"naive", "hysteria2", "tuic"}) {
+        if (CACHE.extraCore.value(legacyCore).toString().trimmed().isEmpty()) {
+            CACHE.extraCore.remove(legacyCore);
+        }
+    }
     //
     auto extra_core_layout = ui->extra_core_box_scrollAreaWidgetContents->layout();
     for (const auto &s: CACHE.extraCore.keys()) {

@@ -189,10 +189,6 @@ set(PROJECT_SOURCES
         ui/edit/edit_trojan_vless.cpp
         ui/edit/edit_trojan_vless.ui
 
-        ui/edit/edit_naive.h
-        ui/edit/edit_naive.cpp
-        ui/edit/edit_naive.ui
-
         ui/edit/edit_quic.h
         ui/edit/edit_quic.cpp
         ui/edit/edit_quic.ui

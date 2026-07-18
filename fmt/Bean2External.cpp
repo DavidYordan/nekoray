@@ -26,37 +26,13 @@ namespace NekoGui_fmt {
     // 2: Direct External
 
     int NaiveBean::NeedExternal(bool isFirstProfile) {
-        if (isFirstProfile) {
-            if (NekoGui::dataStore->spmode_vpn) {
-                return 1;
-            }
-            return 2;
-        }
-        return 1;
+        Q_UNUSED(isFirstProfile)
+        return 0;
     }
 
     int QUICBean::NeedExternal(bool isFirstProfile) {
-        auto extCore = [=] {
-            if (isFirstProfile) {
-                if (NekoGui::dataStore->spmode_vpn && hopPort.trimmed().isEmpty()) {
-                    return 1;
-                }
-                return 2;
-            } else {
-                if (!hopPort.trimmed().isEmpty()) {
-                    return -1;
-                }
-            }
-            return 1;
-        };
-
-        if (!forceExternal) {
-            // sing-box support
-            return 0;
-        } else {
-            // external core support
-            return extCore();
-        }
+        Q_UNUSED(isFirstProfile)
+        return 0;
     }
 
     int CustomBean::NeedExternal(bool isFirstProfile) {

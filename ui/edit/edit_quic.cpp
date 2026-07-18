@@ -28,7 +28,6 @@ void EditQUIC::onStart(std::shared_ptr<NekoGui::ProxyEntity> _ent) {
     P_LOAD_INT(streamReceiveWindow);
     P_LOAD_INT(connectionReceiveWindow);
 
-    P_LOAD_BOOL(forceExternal);
     P_LOAD_STRING(uuid);
     P_LOAD_STRING(password);
 
@@ -88,8 +87,6 @@ void EditQUIC::onStart(std::shared_ptr<NekoGui::ProxyEntity> _ent) {
 
 bool EditQUIC::onEnd() {
     auto bean = this->ent->QUICBean();
-
-    P_SAVE_BOOL(forceExternal);
 
     // Hysteria 2
     P_SAVE_STRING(hopPort);

@@ -10,6 +10,9 @@
 2. 不再引入、恢复或依赖 xray/v2ray 相关核心路径。无法支撑 AnyTLS 的遗留核心会制造歧义，应继续清理。
 3. 上游 sing-box 源码和补丁应本地化管理，构建脚本优先复用 `third_party/routefluent-sing-box` 与项目内缓存，不能每次临时下载。
 4. 缺失依赖优先放入项目目录，例如 `qtsdk/`、`libs/deps/`、`tools/`、`third_party/`，避免污染全局环境。
+5. Hysteria2/TUIC 必须优先并默认使用 sing-box 原生 outbound。旧版 `forceExternal` 标记不得再出现在新配置中，历史 JSON 字段只能被忽略。
+6. Naive 依赖外部核心，当前 RouteFluent/sing-box 主线不支持。新建、订阅导入和默认 UI 不得继续生成 Naive；历史配置只允许加载并给出明确不支持错误。
+7. `extraCore` 只能作为显式用户扩展项保留，不得默认注入 `naive`、`hysteria2`、`tuic` 等旧预设，避免误导用户以为正式构建仍需要这些外部核心。
 
 ## Windows 构建规则
 

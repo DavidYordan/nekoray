@@ -10,8 +10,6 @@ namespace NekoGui_fmt {
         static constexpr int proxy_Hysteria2 = 3;
         int proxy_type = proxy_Hysteria2;
 
-        bool forceExternal = false;
-
         // Hysteria 2
 
         QString obfsPassword = "";
@@ -68,7 +66,6 @@ namespace NekoGui_fmt {
                 _add(new configItem("heartbeat", &heartbeat, itemType::string));
                 _add(new configItem("uos", &uos, itemType::boolean));
             }
-            _add(new configItem("forceExternal", &forceExternal, itemType::boolean));
             // TLS
             _add(new configItem("allowInsecure", &allowInsecure, itemType::boolean));
             _add(new configItem("sni", &sni, itemType::string));
