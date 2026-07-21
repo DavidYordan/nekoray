@@ -4,3 +4,6 @@
 [submodule "third_party/routefluent-sing-box"]
 	path = third_party/routefluent-sing-box
 	url = https://github.com/DavidYordan/routefluent-sing-box.git
+[submodule "third_party/libneko"]
+	path = third_party/libneko
+	url = https://github.com/MatsuriDayo/libneko.git

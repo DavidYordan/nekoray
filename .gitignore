@@ -63,11 +63,53 @@ Thumbs.db
 
 # Python byte code
 *.pyc
+*.pyo
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage/
+htmlcov/
 
 # Binaries
 # --------
 *.dll
 *.exe
+*.dmp
+*.stackdump
+*.zip
+*.7z
+*.tar
+*.tgz
+
+# Local secrets and machine-specific environment
+# ------------------------------------------------
+.env
+.env.*
+!.env.example
+remote.env
+*.pem
+*.key
+*.pfx
+*.p12
+*.jks
+*.keystore
+
+# Runtime data may contain subscriptions, credentials and node secrets.
+/config/
+/groups/
+/routes_box/
+
+# Logs, reports and disposable test output
+*.log
+*.tmp
+*.temp
+/artifacts/
+/dist/
+/packages/
+/release/
+/test-results/
 
 # Custom
 /nekoray
@@ -77,6 +119,19 @@ CMakeLists.txt.user*
 /build-*
 .vscode
 .idea
+
+# In-source CMake/Ninja output
+/CMakeCache.txt
+/CMakeFiles/
+/cmake_install.cmake
+/compile_commands.json
+/build.ninja
+/.ninja_deps
+/.ninja_log
+
+# Local Go workspace files may contain paths outside this repository.
+/go.work
+/go.work.sum
 
 # Deploy
 /deployment

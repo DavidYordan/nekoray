@@ -1,0 +1,41 @@
+# Keep repository text deterministic across Windows workstations.
+* text=auto
+
+.gitattributes text eol=lf
+.gitignore text eol=lf
+.gitmodules text eol=lf
+*.c text eol=lf
+*.cc text eol=lf
+*.cpp text eol=lf
+*.h text eol=lf
+*.hpp text eol=lf
+*.go text eol=lf
+*.mod text eol=lf
+*.sum text eol=lf
+*.py text eol=lf
+*.proto text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.cmake text eol=lf
+*.txt text eol=lf
+*.ts text eol=lf
+*.ui text eol=lf
+*.sh text eol=lf
+CMakeLists.txt text eol=lf
+
+*.ps1 text eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.svg text eol=lf
+*.zip binary
+*.7z binary
+*.dll binary
+*.exe binary
