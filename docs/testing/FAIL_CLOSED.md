@@ -1,7 +1,7 @@
 # Windows fail-closed 验证
 
 状态：需求已确认，实现尚未验收
-最后更新：2026-07-20
+最后更新：2026-07-22
 
 ## 已确认的产品语义
 
@@ -47,7 +47,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\verify_fail_closed_r
 
 本机生产 Nekoray 必须保持运行，因此日常自动测试只允许执行无侵入快照和隔离 contract。OpenWrt 可验证相同 core 的配置、DNS 和远端出站，但不能验证 Windows Wintun、系统代理、WFP、GUI 退出或线路重启；边界见 [OpenWrt 远程实验室](OPENWRT_REMOTE_LAB.md)。
 
-本轮 OpenWrt 探针每次都保持既有 RouteFluent PID `24565`、命令行、配置/manifest 哈希和监听集合完全不变，并清理了每个临时目录。这只能证明远端探针的资源所有权与清理约束有效，不能证明 Windows 产品已经 fail-closed；尤其不能替代 TUN 开启时的线路重启、core 崩溃、WFP 或 IPv4/IPv6 泄漏测试。
+2026-07-20 的历史 OpenWrt 探针每次都保持既有 RouteFluent PID `24565`、命令行、配置/manifest 哈希和监听集合完全不变，并清理了每个临时目录；但旧探针对临时配置强制 `auto_detect_interface=true`。这些结果只能证明资源所有权/清理约束以及同一接口变体下的组合诊断，必须按默认 preserve 重跑，且不能证明 Windows 产品已经 fail-closed；尤其不能替代 TUN 开启时的线路重启、core 崩溃、WFP 或 IPv4/IPv6 泄漏测试。
 
 只有同时满足以下条件才申请维护窗口：问题属于 Windows 专有行为；独立 Windows 测试环境无法复现或不可用；生产 TUN 的独占驱动、接口或默认路由使证据无效；并且已准备好精确步骤、预期阻断行为和人工恢复方案。工具和 agent 不得自行停止生产 Nekoray。
 

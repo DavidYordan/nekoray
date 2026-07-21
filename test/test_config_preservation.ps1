@@ -56,6 +56,24 @@ function Invoke-Export([string]$Lab) {
     }
 }
 
+function Invoke-Maintenance([string]$Lab, [string[]]$Arguments) {
+    $stdoutPath = Join-Path $Lab ("maintenance-stdout-" + [Guid]::NewGuid().ToString("N") + ".log")
+    $stderrPath = Join-Path $Lab ("maintenance-stderr-" + [Guid]::NewGuid().ToString("N") + ".log")
+    $process = Start-Process `
+        -FilePath $ExecutablePath `
+        -ArgumentList (@("-appdata", $Lab) + $Arguments) `
+        -WindowStyle Hidden `
+        -RedirectStandardOutput $stdoutPath `
+        -RedirectStandardError $stderrPath `
+        -Wait `
+        -PassThru
+    return [ordered]@{
+        exit_code = $process.ExitCode
+        stdout = if ([IO.File]::Exists($stdoutPath)) { [IO.File]::ReadAllText($stdoutPath) } else { "" }
+        stderr = if ([IO.File]::Exists($stderrPath)) { [IO.File]::ReadAllText($stderrPath) } else { "" }
+    }
+}
+
 $utf8NoBom = [Text.UTF8Encoding]::new($false)
 $cases = @()
 
@@ -267,6 +285,87 @@ Add-ProfileRecoveryCase `
     -ProfileJson '{"type":"socks","id":7,"gid":99,"bean":{}}' `
     -ExpectedReasonPattern "missing or unreadable group 99"
 
+$manualRecoveryLab = New-TestLab
+try {
+    $configDir = Join-Path $manualRecoveryLab "config"
+    $groupsDir = Join-Path $configDir "groups"
+    $transactionDir = Join-Path $configDir "recovery\transactions\cli-test"
+    $beforeDir = Join-Path $transactionDir "before"
+    $afterDir = Join-Path $transactionDir "after"
+    [IO.Directory]::CreateDirectory($groupsDir) | Out-Null
+    [IO.Directory]::CreateDirectory($beforeDir) | Out-Null
+    [IO.Directory]::CreateDirectory($afterDir) | Out-Null
+
+    $targetPath = Join-Path $groupsDir "recovery-cli.json"
+    $beforeBytes = [Text.Encoding]::UTF8.GetBytes('{"state":"before"}')
+    $afterBytes = [Text.Encoding]::UTF8.GetBytes('{"state":"after"}')
+    [IO.File]::WriteAllBytes($targetPath, $afterBytes)
+    $beforeSnapshotPath = Join-Path $beforeDir "0000.bin"
+    $afterSnapshotPath = Join-Path $afterDir "0000.bin"
+    [IO.File]::WriteAllBytes($beforeSnapshotPath, $beforeBytes)
+    [IO.File]::WriteAllBytes($afterSnapshotPath, $afterBytes)
+    $beforeHash = (Get-FileHash -LiteralPath $beforeSnapshotPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $afterHash = (Get-FileHash -LiteralPath $afterSnapshotPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $manifest = [ordered]@{
+        schema = "nekoray.config_transaction.v1"
+        id = "cli-test"
+        operation = "manual recovery CLI integration test"
+        state = "prepared"
+        entries = @(
+            [ordered]@{
+                path = "groups/recovery-cli.json"
+                before = [ordered]@{
+                    exists = $true
+                    sha256 = $beforeHash
+                    size = $beforeBytes.Length
+                    snapshot = "before/0000.bin"
+                }
+                after = [ordered]@{
+                    exists = $true
+                    sha256 = $afterHash
+                    size = $afterBytes.Length
+                    snapshot = "after/0000.bin"
+                }
+            }
+        )
+    } | ConvertTo-Json -Depth 8
+    $manifestPath = Join-Path $transactionDir "manifest.json"
+    [IO.File]::WriteAllText($manifestPath, $manifest, $utf8NoBom)
+
+    $reportRun = Invoke-Maintenance $manualRecoveryLab @("-flag_config_transaction_report")
+    $report = if ($reportRun.exit_code -eq 0) { $reportRun.stdout | ConvertFrom-Json } else { $null }
+    $recoverRun = Invoke-Maintenance $manualRecoveryLab @(
+        "-flag_config_transaction_recover", "cli-test", "before")
+    $malformedRun = Invoke-Maintenance $manualRecoveryLab @(
+        "-flag_config_transaction_report", "-flag_config_transaction_report")
+    $recoveredManifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $targetRestored = (Get-FileHash -LiteralPath $targetPath -Algorithm SHA256).Hash.ToLowerInvariant() -eq $beforeHash
+    $reportValid = $null -ne $report -and
+                   @($report.transactions).Count -eq 1 -and
+                   $report.transactions[0].recoverable -eq $true -and
+                   $report.transactions[0].entries[0].current -eq "after"
+    $cases += [ordered]@{
+        name = "explicit_transaction_report_and_rollback"
+        passed = ($reportRun.exit_code -eq 0 -and
+                  $reportValid -and
+                  $recoverRun.exit_code -eq 0 -and
+                  $malformedRun.exit_code -eq 2 -and
+                  $malformedRun.stderr -match "exactly one" -and
+                  $targetRestored -and
+                  $recoveredManifest.state -eq "rolled_back" -and
+                  $recoveredManifest.recovery_direction -eq "before" -and
+                  -not [string]::IsNullOrWhiteSpace($recoveredManifest.recovered_utc))
+        report_exit_code = $reportRun.exit_code
+        recovery_exit_code = $recoverRun.exit_code
+        malformed_exit_code = $malformedRun.exit_code
+        report_recoverable = $reportValid
+        target_restored = $targetRestored
+        final_state = $recoveredManifest.state
+    }
+} finally {
+    Remove-TestLab $manualRecoveryLab
+}
+
 $pendingTransactionLab = New-TestLab
 try {
     $firstRun = Invoke-Export $pendingTransactionLab
@@ -295,10 +394,10 @@ try {
                   $secondRun.exit_code -ne 0 -and
                   -not $secondRun.output_created -and
                   $before -eq $after -and
-                  $secondRun.stderr -match "interrupted multi-file transaction")
+                  $secondRun.stderr -match "interrupted configuration transaction")
         exit_code = $secondRun.exit_code
         hash_unchanged = ($before -eq $after)
-        recovery_block_reported = ($secondRun.stderr -match "interrupted multi-file transaction")
+        recovery_block_reported = ($secondRun.stderr -match "interrupted configuration transaction")
     }
 } finally {
     Remove-TestLab $pendingTransactionLab

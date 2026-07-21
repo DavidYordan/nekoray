@@ -1,7 +1,7 @@
 # profile core 配置导出
 
 状态：现行
-最后更新：2026-07-20
+最后更新：2026-07-22
 
 该工具用于查看 GUI 对指定 profile 实际生成的 sing-box 配置，避免只根据数据库字段或 UI 文案推断运行行为。
 
@@ -23,7 +23,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\export_profile_core_
 - `check` 成功不代表 Mixed 可访问、DNS 可用或远端握手成功；连通性应继续使用 `verify_mixed_inbound.ps1`。
 - `nekobox_core check/run` 是直接读取 sing-box 配置的高级 CLI，不会重复 C++ ConfigBuilder 的产品策略；本工具之所以可用，是因为配置先由 GUI 导出路径生成并通过其 guard。不得把任意外部 JSON 的 `check` 成功解释为安全产品配置。
 - “安全导出”只表示导出动作本身不启动线路，且构建器剥离/拒绝已知 OS 模式副作用；文件仍可能含主 Mixed、自定义 listener 和完整网络配置，不得未经审计直接启动。
-- 首次对真实配置目录运行任何 GUI 工具前先完整备份 `config/`；接管工作树会保留未知 profile，但尚未提供 quarantine/UI 恢复与完整迁移验收。
+- 首次对真实配置目录运行任何 GUI 工具前先完整备份 `config/`；接管工作树会保留未知 profile 并生成 quarantine 证据，但尚无 GUI 恢复或完整迁移验收。
 - 调试结束后安全删除包含凭据的临时导出文件。
 
 部分最终配置拒绝分支可在隔离临时 appdata 中验证：

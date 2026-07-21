@@ -1,4 +1,5 @@
 #include <csignal>
+#include <memory>
 
 #include <QApplication>
 #include <QDir>
@@ -48,11 +49,26 @@ namespace {
         bool forExport = true;
     };
 
-    void writeStderr(const QString &message) {
+    struct ConfigTransactionMaintenanceOptions {
+        enum class Action {
+            None,
+            Report,
+            Recover,
+        };
+
+        bool requested = false;
+        Action action = Action::None;
+        QString transactionId;
+        NekoGui_ConfigTransaction::RecoveryDirection direction =
+            NekoGui_ConfigTransaction::RecoveryDirection::RestoreBefore;
+        QString error;
+    };
+
+    void writeStderr(const QString& message) {
         QTextStream(stderr) << message << Qt::endl;
     }
 
-    bool loadOrCreateStore(JsonStore *store) {
+    bool loadOrCreateStore(JsonStore* store) {
         const bool existed = QFileInfo::exists(store->fn);
         if (store->Load()) return true;
         if (existed) {
@@ -68,7 +84,7 @@ namespace {
         return true;
     }
 
-    ProfileConfigExportOptions parseProfileConfigExportOptions(const QStringList &argv) {
+    ProfileConfigExportOptions parseProfileConfigExportOptions(const QStringList& argv) {
         ProfileConfigExportOptions options;
         const auto exportIndex = argv.indexOf("-flag_export_profile_config");
         if (exportIndex < 0) return options;
@@ -88,6 +104,76 @@ namespace {
         // there is no CLI path that exports a live OS-mode configuration.
         options.forExport = !options.forTest;
         return options;
+    }
+
+    ConfigTransactionMaintenanceOptions parseConfigTransactionMaintenanceOptions(
+        const QStringList& argv) {
+        ConfigTransactionMaintenanceOptions options;
+        const auto reportCount = argv.count(QStringLiteral("-flag_config_transaction_report"));
+        const auto recoverCount = argv.count(QStringLiteral("-flag_config_transaction_recover"));
+        if (reportCount == 0 && recoverCount == 0) return options;
+        options.requested = true;
+        if (reportCount + recoverCount != 1) {
+            options.error = QStringLiteral(
+                "Choose exactly one configuration transaction maintenance action.");
+        } else if (reportCount == 1) {
+            options.action = ConfigTransactionMaintenanceOptions::Action::Report;
+        } else {
+            options.action = ConfigTransactionMaintenanceOptions::Action::Recover;
+            const auto index = argv.indexOf(QStringLiteral("-flag_config_transaction_recover"));
+            if (index < 0 || argv.size() <= index + 2) {
+                options.error = QStringLiteral(
+                    "Usage: nekobox.exe -flag_config_transaction_recover <transaction_id> <before|after>");
+            } else {
+                options.transactionId = argv.at(index + 1);
+                const auto direction = argv.at(index + 2).trimmed().toLower();
+                if (direction == QStringLiteral("before")) {
+                    options.direction = NekoGui_ConfigTransaction::RecoveryDirection::RestoreBefore;
+                } else if (direction == QStringLiteral("after")) {
+                    options.direction = NekoGui_ConfigTransaction::RecoveryDirection::ApplyAfter;
+                } else {
+                    options.error = QStringLiteral(
+                        "Recovery direction must be exactly 'before' or 'after'.");
+                }
+            }
+        }
+
+        if (argv.count(QStringLiteral("-appdata")) != 1 && options.error.isEmpty()) {
+            options.error = QStringLiteral(
+                "Configuration transaction maintenance requires exactly one -appdata [dir] selector.");
+        }
+        return options;
+    }
+
+    int runConfigTransactionMaintenanceAndExit(
+        const ConfigTransactionMaintenanceOptions& options) {
+        if (!options.error.isEmpty()) {
+            writeStderr(options.error);
+            return 2;
+        }
+        if (options.action == ConfigTransactionMaintenanceOptions::Action::Report) {
+            const auto report = NekoGui_ConfigTransaction::BuildRecoveryReport();
+            if (!report.succeeded) {
+                writeStderr(report.error);
+                return 1;
+            }
+            QTextStream(stdout) << report.json;
+            return 0;
+        }
+        if (options.action == ConfigTransactionMaintenanceOptions::Action::Recover) {
+            const auto recovery = NekoGui_ConfigTransaction::Recover(
+                options.transactionId, options.direction);
+            if (!recovery.succeeded) {
+                writeStderr(recovery.error);
+                return 1;
+            }
+            QTextStream(stdout)
+                << QStringLiteral("Transaction %1 recovered to state '%2': %3")
+                       .arg(options.transactionId, recovery.finalState, recovery.transactionPath)
+                << Qt::endl;
+            return 0;
+        }
+        return 0;
     }
 
     bool ensureConfigSubdirs() {
@@ -111,16 +197,17 @@ namespace {
         return true;
     }
 
-    QString resolveProfileConfigExportPath(const QString &rawPath) {
+    QString resolveProfileConfigExportPath(const QString& rawPath) {
         QFileInfo info(rawPath);
         if (info.isAbsolute()) return info.absoluteFilePath();
         return QDir(QApplication::applicationDirPath()).absoluteFilePath(rawPath);
     }
 
-    int exportProfileConfigAndExit(const ProfileConfigExportOptions &options) {
+    int exportProfileConfigAndExit(const ProfileConfigExportOptions& options) {
         if (options.profileId == kNoProfileId || options.outputPath.trimmed().isEmpty()) {
-            writeStderr("Usage: nekobox.exe -flag_export_profile_config <profile_id> <output_json_path> "
-                        "[-flag_export_profile_config_for_test|-flag_export_profile_config_for_share]");
+            writeStderr(
+                "Usage: nekobox.exe -flag_export_profile_config <profile_id> <output_json_path> "
+                "[-flag_export_profile_config_for_test|-flag_export_profile_config_for_share]");
             return 2;
         }
         if (!ensureConfigSubdirs()) {
@@ -196,20 +283,26 @@ int main(int argc, char* argv[]) {
     QApplication::setQuitOnLastWindowClosed(false);
     auto preQApp = new QApplication(argc, argv);
 
-    // Clean
+    // Select the application directory before parsing config-root flags.
     QDir::setCurrent(QApplication::applicationDirPath());
-    if (QFile::exists("updater.old")) {
-        QFile::remove("updater.old");
-    }
-#ifndef Q_OS_WIN
-    if (!QFile::exists("updater")) {
-        QFile::link("launcher", "updater");
-    }
-#endif
 
     // Flags
     NekoGui::dataStore->argv = QApplication::arguments();
     const auto profileConfigExportOptions = parseProfileConfigExportOptions(NekoGui::dataStore->argv);
+    const auto transactionMaintenanceOptions =
+        parseConfigTransactionMaintenanceOptions(NekoGui::dataStore->argv);
+    if (transactionMaintenanceOptions.requested &&
+        profileConfigExportOptions.enabled) {
+        writeStderr("Configuration export and transaction maintenance cannot run together.");
+        delete preQApp;
+        return 2;
+    }
+    if (transactionMaintenanceOptions.requested &&
+        !transactionMaintenanceOptions.error.isEmpty()) {
+        writeStderr(transactionMaintenanceOptions.error);
+        delete preQApp;
+        return 2;
+    }
     if (NekoGui::dataStore->argv.contains("-many")) NekoGui::dataStore->flag_many = true;
     if (NekoGui::dataStore->argv.contains("-appdata")) {
         NekoGui::dataStore->flag_use_appdata = true;
@@ -244,18 +337,81 @@ int main(int argc, char* argv[]) {
             wd.setPath(QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation));
         }
     }
-    if (!wd.exists()) wd.mkpath(wd.absolutePath());
-    if (!wd.exists("config")) wd.mkdir("config");
-    QDir::setCurrent(wd.absoluteFilePath("config"));
+    if ((!wd.exists() && !QDir().mkpath(wd.absolutePath())) ||
+        (!wd.exists("config") && !wd.mkdir("config")) ||
+        !QDir::setCurrent(wd.absoluteFilePath("config"))) {
+        writeStderr(QStringLiteral("Cannot create or enter the selected configuration root: %1")
+                        .arg(wd.absoluteFilePath("config")));
+        delete preQApp;
+        return 1;
+    }
 
     // init QApplication
     delete preQApp;
     QApplication a(argc, argv);
 
+    if (transactionMaintenanceOptions.requested) {
+        return runConfigTransactionMaintenanceAndExit(transactionMaintenanceOptions);
+    }
+
+    if (QFile::exists(QDir(QApplication::applicationDirPath()).absoluteFilePath("updater.old"))) {
+        QFile::remove(QDir(QApplication::applicationDirPath()).absoluteFilePath("updater.old"));
+    }
+#ifndef Q_OS_WIN
+    if (!QFile::exists(QDir(QApplication::applicationDirPath()).absoluteFilePath("updater"))) {
+        QFile::link(
+            QDir(QApplication::applicationDirPath()).absoluteFilePath("launcher"),
+            QDir(QApplication::applicationDirPath()).absoluteFilePath("updater"));
+    }
+#endif
+
+    // Reject an ordinary second GUI instance before it can hold the config
+    // disk lock and make saves in the already-running instance fail. Export
+    // and explicit -many sessions still require the full disk-lock path.
+    std::unique_ptr<RunGuard> runGuard;
+    quint64 guard_data_in = GetRandomUint64();
+    quint64 guard_data_out = 0;
+    if (!profileConfigExportOptions.enabled) {
+        runGuard = std::make_unique<RunGuard>("nekoray" + wd.absolutePath());
+        if (!NekoGui::dataStore->flag_many && !runGuard->tryToRun(&guard_data_in)) {
+            if (runGuard->isAnotherRunning(&guard_data_out)) {
+                QLocalSocket socket;
+                socket.connectToServer(LOCAL_SERVER_PREFIX + Int2String(guard_data_out));
+                qDebug() << socket.fullServerName();
+                if (!socket.waitForConnected(500)) {
+                    qDebug() << "Failed to wake a running instance.";
+                    return 0;
+                }
+                qDebug() << "connected to local server, try to raise another program";
+                return 0;
+            }
+            QMessageBox::warning(
+                nullptr,
+                "NekoGui",
+                "RunGuard disallow to run, use -many to force start.");
+            return 0;
+        }
+        auto* runGuardPointer = runGuard.get();
+        MF_release_runguard = [runGuardPointer] { runGuardPointer->release(); };
+    }
+
+    auto startupConfigLock = std::make_unique<NekoGui_ConfigTransaction::DiskLockGuard>();
+    if (!startupConfigLock->acquired()) {
+        const auto message = QStringLiteral(
+                                 "Configuration startup is blocked because the config disk lock is owned elsewhere. "
+                                 "No user configuration was loaded.\n\n%1")
+                                 .arg(startupConfigLock->error());
+        writeStderr(message);
+        if (!profileConfigExportOptions.enabled) {
+            QMessageBox::critical(nullptr, QStringLiteral("Configuration lock busy"), message);
+        }
+        return 1;
+    }
+
     const auto transactionIssues = NekoGui_ConfigTransaction::BlockingTransactionIssues();
     if (!transactionIssues.isEmpty()) {
         const auto message = QStringLiteral(
-                                 "Configuration startup is blocked because an interrupted multi-file transaction "
+                                 "Configuration startup is blocked because an interrupted configuration transaction "
                                  "requires explicit recovery. No configuration file was modified during this check.\n\n%1")
                                  .arg(transactionIssues.join(QStringLiteral("\n")));
         writeStderr(message);
@@ -276,30 +432,6 @@ int main(int argc, char* argv[]) {
         DS_cores->wait();
         return exportExitCode;
     }
-
-    // RunGuard
-    RunGuard guard("nekoray" + wd.absolutePath());
-    quint64 guard_data_in = GetRandomUint64();
-    quint64 guard_data_out = 0;
-    if (!NekoGui::dataStore->flag_many && !guard.tryToRun(&guard_data_in)) {
-        // Some Good System
-        if (guard.isAnotherRunning(&guard_data_out)) {
-            // Wake up a running instance
-            QLocalSocket socket;
-            socket.connectToServer(LOCAL_SERVER_PREFIX + Int2String(guard_data_out));
-            qDebug() << socket.fullServerName();
-            if (!socket.waitForConnected(500)) {
-                qDebug() << "Failed to wake a running instance.";
-                return 0;
-            }
-            qDebug() << "connected to local server, try to raise another program";
-            return 0;
-        }
-        // Some Bad System
-        QMessageBox::warning(nullptr, "NekoGui", "RunGuard disallow to run, use -many to force start.");
-        return 0;
-    }
-    MF_release_runguard = [&] { guard.release(); };
 
 // icons
 #if (QT_VERSION >= QT_VERSION_CHECK(5, 11, 0))
@@ -401,5 +533,6 @@ int main(int argc, char* argv[]) {
     });
 
     UI_InitMainWindow();
+    startupConfigLock.reset();
     return QApplication::exec();
 }

@@ -10,23 +10,25 @@
 
 namespace NekoGui_network {
 
-    NekoHTTPResponse NetworkRequestHelper::HttpGet(const QUrl &url) {
+    NekoHTTPResponse NetworkRequestHelper::HttpGet(
+        const QUrl& url,
+        const NekoHTTPRequestOptions& options) {
         QNetworkRequest request;
         QNetworkAccessManager accessManager;
         request.setUrl(url);
         // Set proxy
-        if (NekoGui::dataStore->sub_use_proxy) {
+        if (options.useProxy) {
             QNetworkProxy p;
             // Note: sing-box mixed socks5 protocol error
             p.setType(QNetworkProxy::HttpProxy);
             p.setHostName("127.0.0.1");
-            p.setPort(NekoGui::dataStore->inbound_socks_port);
-            if (NekoGui::dataStore->inbound_auth->NeedAuth()) {
-                p.setUser(NekoGui::dataStore->inbound_auth->username);
-                p.setPassword(NekoGui::dataStore->inbound_auth->password);
+            p.setPort(options.proxyPort);
+            if (!options.proxyUsername.isEmpty() || !options.proxyPassword.isEmpty()) {
+                p.setUser(options.proxyUsername);
+                p.setPassword(options.proxyPassword);
             }
             accessManager.setProxy(p);
-            if (NekoGui::dataStore->started_id < 0) {
+            if (!options.proxyAvailable) {
                 return NekoHTTPResponse{QObject::tr("Request with proxy but no profile started.")};
             }
         }
@@ -38,20 +40,20 @@ namespace NekoGui_network {
 #if (QT_VERSION >= QT_VERSION_CHECK(5, 9, 0))
         request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
 #endif
-        request.setHeader(QNetworkRequest::KnownHeaders::UserAgentHeader, NekoGui::dataStore->GetUserAgent());
-        if (NekoGui::dataStore->sub_insecure) {
+        request.setHeader(QNetworkRequest::KnownHeaders::UserAgentHeader, options.userAgent);
+        if (options.insecureTls) {
             QSslConfiguration c;
             c.setPeerVerifyMode(QSslSocket::PeerVerifyMode::VerifyNone);
             request.setSslConfiguration(c);
         }
         //
         auto _reply = accessManager.get(request);
-        connect(_reply, &QNetworkReply::sslErrors, _reply, [](const QList<QSslError> &errors) {
+        connect(_reply, &QNetworkReply::sslErrors, _reply, [insecureTls = options.insecureTls](const QList<QSslError>& errors) {
             QStringList error_str;
-            for (const auto &err: errors) {
+            for (const auto& err: errors) {
                 error_str << err.errorString();
             }
-            MW_show_log(QStringLiteral("SSL Errors: %1 %2").arg(error_str.join(","), NekoGui::dataStore->sub_insecure ? "(Ignored)" : ""));
+            MW_show_log(QStringLiteral("SSL Errors: %1 %2").arg(error_str.join(","), insecureTls ? "(Ignored)" : ""));
         });
         // Wait for response
         auto abortTimer = new QTimer;
@@ -75,8 +77,8 @@ namespace NekoGui_network {
         return result;
     }
 
-    QString NetworkRequestHelper::GetHeader(const QList<QPair<QByteArray, QByteArray>> &header, const QString &name) {
-        for (const auto &p: header) {
+    QString NetworkRequestHelper::GetHeader(const QList<QPair<QByteArray, QByteArray>>& header, const QString& name) {
+        for (const auto& p: header) {
             if (QString(p.first).toLower() == name.toLower()) return p.second;
         }
         return "";

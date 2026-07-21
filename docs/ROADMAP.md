@@ -1,7 +1,7 @@
 # 推进路线
 
 状态：现行
-最后更新：2026-07-21
+最后更新：2026-07-22
 
 原则：先止损和恢复 NekoRay，再收敛三项扩展，最后解决 Windows fail-closed 运行时。未经需求授权不新增第四项产品功能。
 
@@ -19,17 +19,19 @@
 
 ## 阶段 1：数据止损与上游能力恢复
 
-1. [x] 将单文件配置保存改为检查完整写入、禁止 direct fallback 的 `QSaveFile` 原子替换。
+1. [x] 将单文件配置保存改为检查完整写入、禁止 direct fallback 的 `QSaveFile` 原子替换；现已与多文件操作共享提交串行化 mutex 和跨进程磁盘锁。每次有内容变化的单文件保存会在 commit 前发布短生命周期 durable before/after intent，精确验证 before/after 后退役并尽力删除；`Indeterminate` 保留 `prepared` 并阻断。多文件终态事务作为历史证据持久保留。
 2. [x] loader 停止删除损坏/未知/未来 profile/group，并避免复用其 ID；危险 reorder 已禁止。
 3. [x] 为单文件覆盖建立内容寻址、写后校验的自动备份；磁盘内容偏离已加载版本时拒绝覆盖。损坏/未知 profile、ID 不一致和已识别的悬空引用会保留原件并生成 snapshot + 审计元数据，GUI 启动时明确提示。
 4. [x] 单 profile、空 group 与非活动 route 显式删除前建立内容寻址、回读校验的快照；外部修改、引用关系或快照失败时拒绝删除。旧的非空 group 半删除路径已 fail-closed 禁用，活动 route 必须先显式切换后才能删除。
-5. [ ] 建立可选择原件/快照的恢复 UI、显式悬空引用修复和跨 profile/group/主配置的多文件事务。事务基础层已落地：单 profile/空 group/非活动 route 删除和 profile 跨组移动会记录 before/after 清单、串行提交、失败逆序回滚，未完成状态会阻断保存和下次启动；尚未提供人工恢复 UI，也尚未覆盖非空 group 和订阅成功候选。
+5. [ ] 建立可选择原件/快照的恢复 UI、显式悬空引用修复和跨 profile/group/主配置的多文件事务。事务基础层已落地：group 创建、单 profile/空 group/非活动 route 删除和 profile 跨组移动会记录 before/after 清单、串行提交、失败逆序回滚，未完成状态会阻断保存和下次启动；启动扫描到完整配置加载也由同一可重入磁盘锁覆盖。扫描会拒绝隐藏/意外条目、身份/header 错误和非终态状态，但终态只做 schema/id/state header 校验；合法 terminal header + 损坏/空 entries 不阻断 startup，report 必须深解析并标为 `valid=false`，非法 terminal schema 仍阻断。命令行已能先报告再由用户明确选择结构化事务的完整 before/after，且恢复开始后锁定方向；它不自动修复 unknown/quarantine。尚未提供图形 UI，也尚未覆盖非空 group 和订阅成功候选。
 6. [ ] 选择性恢复 external-core、Naive、ExtraCore、custom external、TUIC/Hysteria2外核；Xray保持删除。
 7. [ ] 恢复 VMess/v2rayN、SOCKS userinfo、SS v2ray-plugin等非 Xray 兼容。
 8. [x] URL Test 已恢复为显式有界生成配置；TCP Ping 因系统直连 socket 已在 GUI/core 两层禁用。
 9. [ ] 为现用 geosite/geoip `.db` 重建自动完成或明确替代。
 10. [x] 订阅改成内存 parse/stage/validate 后提交；空/HTML/坏 YAML/零节点失败旧组零变化；清理/回滚删除失败会保留对象并报告。
-11. [ ] 把订阅成功候选与非空 group 删除接入现有事务层，并覆盖真实磁盘失败、并发刷新、进程中断、显式恢复、版本回退和旧 profile。
+11. [ ] 把订阅成功候选与非空 group 删除接入现有事务层，并覆盖真实磁盘失败、并发刷新、进程中断、显式恢复、版本回退和旧 profile。前置止损已完成一部分：联网前按值快照不可变 HTTP 选项，记录 group 与全部成员的身份/顺序/tombstone/序列化状态，提交转回 UI 线程并在提交串行化 mutex 下逐项重验；group 创建同步提交 `pm.json`，删除对象 tombstone，运行中 auxiliary 拒删。下一步必须一次性预检 running/front/chain/remember/活动 auxiliary/未知文件并构造最终新增与删除集合，禁止继续逐个 `AddProfile/Save/DeleteProfile`。
+12. [ ] 为 ConfigBuilder、订阅和其它跨线程读模型操作建立完整 immutable snapshot 或显式模型读写同步。当前 mutex 只串行化参与的 mutation 提交，core transition 也只在最终 Start gate 再次串行化和复核，不能宣称整个模型已有读写锁。
+13. [ ] 统一 route/settings/hotkey 等保存失败的强类型传播、用户提示和内存回滚；任何磁盘失败后都必须保持磁盘—内存一致，并纳入故障注入。
 
 完成门：旧配置不会因本分支首次启动或任一失败路径丢失；已有订阅可以安全刷新。
 

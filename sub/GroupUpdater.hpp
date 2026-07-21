@@ -5,9 +5,9 @@
 namespace NekoGui_sub {
     class RawUpdater {
     public:
-        void updateClash(const QString &str);
+        void updateClash(const QString& str);
 
-        void update(const QString &str);
+        void update(const QString& str);
 
         int gid_add_to = -1; // Import into the selected group when negative.
 
@@ -22,15 +22,16 @@ namespace NekoGui_sub {
         QString detected_source_type;
         QStringList detected_doh_upstreams;
         QStringList detected_invalid_doh_upstreams;
+        QString fallback_utls_fingerprint;
     };
 
     class GroupUpdater : public QObject {
         Q_OBJECT
 
     public:
-        void AsyncUpdate(const QString &str, int _sub_gid = -1, const std::function<void()> &finish = nullptr);
+        void AsyncUpdate(const QString& str, int _sub_gid = -1, const std::function<void()>& finish = nullptr);
 
-        int Update(const QString &_str, int _sub_gid = -1, bool _not_sub_as_url = false,
+        int Update(const QString& _str, int _sub_gid = -1, bool _not_sub_as_url = false,
                    bool _create_new_group = false);
 
     signals:
@@ -38,7 +39,7 @@ namespace NekoGui_sub {
         void asyncUpdateCallback(int gid);
     };
 
-    extern GroupUpdater *groupUpdater;
+    extern GroupUpdater* groupUpdater;
 } // namespace NekoGui_sub
 
 // 更新所有订阅 关闭分组窗口时 更新动作继续执行

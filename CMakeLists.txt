@@ -127,6 +127,8 @@ set(PROJECT_SOURCES
         main/main.cpp
         main/NekoGui.cpp
         main/NekoGui_Utils.cpp
+        main/ConfigMutation.cpp
+        main/ConfigPathSafety.cpp
         main/ConfigRecovery.cpp
         main/ConfigTransaction.cpp
         main/HTTPRequestHelper.cpp
@@ -304,6 +306,8 @@ endif ()
 if (BUILD_TESTING)
     add_executable(config_recovery_test
             test/config_recovery_test.cpp
+            main/ConfigMutation.cpp
+            main/ConfigPathSafety.cpp
             main/ConfigRecovery.cpp
             main/ConfigTransaction.cpp
     )

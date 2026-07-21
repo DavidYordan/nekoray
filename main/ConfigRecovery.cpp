@@ -1,4 +1,5 @@
 #include "ConfigRecovery.hpp"
+#include "ConfigPathSafety.hpp"
 
 #include <QCryptographicHash>
 #include <QDateTime>
@@ -15,32 +16,15 @@ namespace {
     QStringList recoveryNotices;
     QSet<QString> recoveryNoticeKeys;
 
-    QByteArray sha256(const QByteArray &content) {
+    QByteArray sha256(const QByteArray& content) {
         return QCryptographicHash::hash(content, QCryptographicHash::Sha256).toHex();
     }
 
-    bool relativeSourcePath(const QString &sourcePath, QString *relativePath, QString *error) {
-        const QDir configRoot(QDir::currentPath());
-        const auto absoluteSource = QFileInfo(sourcePath).absoluteFilePath();
-        auto relative = QDir::cleanPath(configRoot.relativeFilePath(absoluteSource));
-        relative.replace('\\', '/');
-
-        if (relative.isEmpty() || relative == "." || relative == ".." ||
-            relative.startsWith("../") || QDir::isAbsolutePath(relative)) {
-            *error = QStringLiteral("Recovery refuses a source outside the active config directory: %1")
-                         .arg(absoluteSource);
-            return false;
-        }
-        if (relative == "recovery" || relative.startsWith("recovery/")) {
-            *error = QStringLiteral("Recovery refuses to snapshot its own output: %1").arg(relative);
-            return false;
-        }
-
-        *relativePath = relative;
-        return true;
+    bool relativeSourcePath(const QString& sourcePath, QString* relativePath, QString* error) {
+        return NekoGui_ConfigPathSafety::RelativeConfigPath(sourcePath, relativePath, error);
     }
 
-    bool readExact(const QString &path, QByteArray *content, QString *error) {
+    bool readExact(const QString& path, QByteArray* content, QString* error) {
         QFile file(path);
         if (!file.open(QIODevice::ReadOnly)) {
             *error = QStringLiteral("Cannot read recovery file %1: %2").arg(path, file.errorString());
@@ -54,11 +38,16 @@ namespace {
         return true;
     }
 
-    bool writeAtomicExact(const QString &path, const QByteArray &content, QString *error) {
+    bool writeAtomicExact(const QString& path, const QByteArray& content, QString* error) {
+        if (!NekoGui_ConfigPathSafety::ValidatePathWithinRoot(
+                QDir::currentPath(), path, nullptr, error)) {
+            return false;
+        }
         const QFileInfo info(path);
-        QDir parent;
-        if (!parent.mkpath(info.absolutePath())) {
-            *error = QStringLiteral("Cannot create recovery directory: %1").arg(info.absolutePath());
+        if (!NekoGui_ConfigPathSafety::EnsureDirectoryWithinRoot(
+                QDir::currentPath(), info.absolutePath(), error)) {
+            *error = QStringLiteral("Cannot prepare safe recovery directory %1: %2")
+                         .arg(info.absolutePath(), *error);
             return false;
         }
 
@@ -100,10 +89,14 @@ namespace {
     }
 
     bool replaceAtomicExact(
-        const QString &path,
-        const QByteArray &expectedContent,
-        const QByteArray &newContent,
-        QString *error) {
+        const QString& path,
+        const QByteArray& expectedContent,
+        const QByteArray& newContent,
+        QString* error) {
+        if (!NekoGui_ConfigPathSafety::ValidatePathWithinRoot(
+                QDir::currentPath(), path, nullptr, error)) {
+            return false;
+        }
         QByteArray current;
         if (!readExact(path, &current, error)) return false;
         if (current != expectedContent) {
@@ -140,10 +133,10 @@ namespace {
     }
 
     NekoGui_ConfigRecovery::SnapshotResult createSnapshot(
-        const QString &category,
-        const QString &suffix,
-        const QString &sourcePath,
-        const QByteArray &sourceContent) {
+        const QString& category,
+        const QString& suffix,
+        const QString& sourcePath,
+        const QByteArray& sourceContent) {
         NekoGui_ConfigRecovery::SnapshotResult result;
         result.sha256 = sha256(sourceContent);
 
@@ -160,7 +153,7 @@ namespace {
         return result;
     }
 
-    void addNotice(const QString &sourcePath, const QString &reason, const QString &snapshotPath) {
+    void addNotice(const QString& sourcePath, const QString& reason, const QString& snapshotPath) {
         const auto key = QFileInfo(sourcePath).absoluteFilePath() + "\n" + reason;
         if (recoveryNoticeKeys.contains(key)) return;
         recoveryNoticeKeys.insert(key);
@@ -169,12 +162,12 @@ namespace {
     }
 
     NekoGui_ConfigRecovery::SnapshotResult recordEvidence(
-        const QString &category,
-        const QString &schema,
-        const QString &firstRecordedField,
-        const QString &sourcePath,
-        const QByteArray &sourceContent,
-        const QString &reason,
+        const QString& category,
+        const QString& schema,
+        const QString& firstRecordedField,
+        const QString& sourcePath,
+        const QByteArray& sourceContent,
+        const QString& reason,
         bool notifyUser) {
         auto result = createSnapshot(category, QStringLiteral(".snapshot"), sourcePath, sourceContent);
         if (!result.succeeded) return result;
@@ -186,6 +179,11 @@ namespace {
         }
 
         const auto metadataPath = result.snapshotPath + QStringLiteral(".meta.json");
+        if (!NekoGui_ConfigPathSafety::ValidatePathWithinRoot(
+                QDir::currentPath(), metadataPath, nullptr, &result.error)) {
+            result.succeeded = false;
+            return result;
+        }
         QJsonObject metadata;
         QJsonArray reasons;
         QByteArray existingMetadata;
@@ -228,7 +226,7 @@ namespace {
         }
 
         bool reasonExists = false;
-        for (const auto &value: reasons) {
+        for (const auto& value: reasons) {
             if (value.toString() == reason) {
                 reasonExists = true;
                 break;
@@ -239,8 +237,8 @@ namespace {
             metadata.insert(QStringLiteral("reasons"), reasons);
             const auto serialized = QJsonDocument(metadata).toJson(QJsonDocument::Indented);
             const auto metadataWritten = existingMetadata.isEmpty()
-                                           ? writeAtomicExact(metadataPath, serialized, &result.error)
-                                           : replaceAtomicExact(metadataPath, existingMetadata, serialized, &result.error);
+                                             ? writeAtomicExact(metadataPath, serialized, &result.error)
+                                             : replaceAtomicExact(metadataPath, existingMetadata, serialized, &result.error);
             if (!metadataWritten) {
                 result.succeeded = false;
                 return result;
@@ -250,7 +248,7 @@ namespace {
         if (notifyUser) addNotice(sourcePath, reason, result.snapshotPath);
         return result;
     }
-}
+} // namespace
 
 namespace NekoGui_ConfigRecovery {
     QString RecoveryRootPath() {
@@ -258,9 +256,10 @@ namespace NekoGui_ConfigRecovery {
     }
 
     bool CurrentContentMatches(
-        const QString &sourcePath,
-        const QByteArray &expectedContent,
-        QString *error) {
+        const QString& sourcePath,
+        const QByteArray& expectedContent,
+        QString* error) {
+        if (!NekoGui_ConfigPathSafety::RelativeConfigPath(sourcePath, nullptr, error)) return false;
         QByteArray current;
         if (!readExact(sourcePath, &current, error)) return false;
         if (current != expectedContent) {
@@ -271,10 +270,14 @@ namespace NekoGui_ConfigRecovery {
     }
 
     OverwritePreparation PrepareOverwrite(
-        const QString &sourcePath,
-        const QByteArray &loadedContent,
-        const QByteArray &newContent) {
+        const QString& sourcePath,
+        const QByteArray& loadedContent,
+        const QByteArray& newContent) {
         OverwritePreparation result;
+        if (!NekoGui_ConfigPathSafety::RelativeConfigPath(
+                sourcePath, nullptr, &result.error)) {
+            return result;
+        }
         result.targetExisted = QFileInfo::exists(sourcePath);
         if (!result.targetExisted) {
             result.decision = OverwriteDecision::Proceed;
@@ -309,14 +312,14 @@ namespace NekoGui_ConfigRecovery {
         return result;
     }
 
-    SnapshotResult CreateBackupBeforeOverwrite(const QString &sourcePath, const QByteArray &sourceContent) {
+    SnapshotResult CreateBackupBeforeOverwrite(const QString& sourcePath, const QByteArray& sourceContent) {
         return createSnapshot(QStringLiteral("backups"), QStringLiteral(".bak"), sourcePath, sourceContent);
     }
 
     SnapshotResult RecordQuarantine(
-        const QString &sourcePath,
-        const QByteArray &sourceContent,
-        const QString &reason) {
+        const QString& sourcePath,
+        const QByteArray& sourceContent,
+        const QString& reason) {
         return recordEvidence(
             QStringLiteral("quarantine"),
             QStringLiteral("nekoray.recovery.quarantine.v1"),
@@ -328,9 +331,9 @@ namespace NekoGui_ConfigRecovery {
     }
 
     SnapshotResult RecordPreDeletion(
-        const QString &sourcePath,
-        const QByteArray &sourceContent,
-        const QString &reason) {
+        const QString& sourcePath,
+        const QByteArray& sourceContent,
+        const QString& reason) {
         return recordEvidence(
             QStringLiteral("deletions"),
             QStringLiteral("nekoray.recovery.pre_delete.v1"),
@@ -342,9 +345,9 @@ namespace NekoGui_ConfigRecovery {
     }
 
     DeletionPreparation PrepareDeletion(
-        const QString &sourcePath,
-        const QByteArray &loadedContent,
-        const QString &reason) {
+        const QString& sourcePath,
+        const QByteArray& loadedContent,
+        const QString& reason) {
         DeletionPreparation result;
         if (!QFileInfo::exists(sourcePath)) {
             result.error = QStringLiteral("Refusing to delete a config whose source file is missing: %1")
@@ -380,4 +383,4 @@ namespace NekoGui_ConfigRecovery {
         recoveryNoticeKeys.clear();
         return notices;
     }
-}
+} // namespace NekoGui_ConfigRecovery

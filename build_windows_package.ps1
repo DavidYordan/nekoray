@@ -69,6 +69,36 @@ function Get-FullPath([string] $Path) {
     return [System.IO.Path]::GetFullPath((Join-Path $Root $Path))
 }
 
+function Assert-ReferenceDirIsNotProduction([string] $Path) {
+    $candidate = [System.IO.Path]::GetFullPath($Path).TrimEnd('\', '/')
+    $protected = [System.IO.Path]::GetFullPath('D:\Program Files\nekoray').TrimEnd('\', '/')
+    $candidateRoot = [System.IO.Path]::GetPathRoot($candidate)
+    $candidateParts = $candidate.Substring($candidateRoot.Length) -split '[\\/]'
+    if ($candidateParts | Where-Object { $_.Contains('~') }) {
+        Fail "ReferenceDir rejects ambiguous Windows short-name components: $candidate"
+    }
+    if ($candidate.Equals($protected, [StringComparison]::OrdinalIgnoreCase) -or
+        $candidate.StartsWith($protected + [System.IO.Path]::DirectorySeparatorChar,
+                              [StringComparison]::OrdinalIgnoreCase)) {
+        Fail "ReferenceDir must not read from the protected production NekoRay installation: $candidate"
+    }
+}
+
+function Assert-ReferenceDirHasNoReparseComponents([string] $Path) {
+    $candidate = [System.IO.Path]::GetFullPath($Path)
+    $pathRoot = [System.IO.Path]::GetPathRoot($candidate)
+    $current = $pathRoot
+    foreach ($component in ($candidate.Substring($pathRoot.Length) -split '[\\/]')) {
+        if ([string]::IsNullOrWhiteSpace($component)) { continue }
+        $current = Join-Path $current $component
+        if (!(Test-Path -LiteralPath $current)) { return }
+        $item = Get-Item -LiteralPath $current -Force -ErrorAction Stop
+        if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            Fail "ReferenceDir rejects reparse/junction components: $current"
+        }
+    }
+}
+
 function Require-File([string] $Path, [string] $Name) {
     if (!(Test-Path -LiteralPath $Path -PathType Leaf)) {
         Fail "$Name not found: $Path"
@@ -485,9 +515,18 @@ try {
 
     New-Item -ItemType Directory -Force -Path $PublicResDir | Out-Null
     Copy-Item -Path (Join-Path $Root "res\public\*") -Destination $PublicResDir -Force
-    $fallback = if (![string]::IsNullOrWhiteSpace($ReferenceDir) -and
-                    (Test-Path -LiteralPath $ReferenceDir -PathType Container)) {
-        (Resolve-Path -LiteralPath $ReferenceDir).Path
+    $fallback = if (![string]::IsNullOrWhiteSpace($ReferenceDir)) {
+        $referenceCandidate = Get-FullPath $ReferenceDir
+        # Reject the protected path before even probing its existence.
+        Assert-ReferenceDirIsNotProduction $referenceCandidate
+        Assert-ReferenceDirHasNoReparseComponents $referenceCandidate
+        if (Test-Path -LiteralPath $referenceCandidate -PathType Container) {
+            $resolvedReference = (Resolve-Path -LiteralPath $referenceCandidate).Path
+            Assert-ReferenceDirIsNotProduction $resolvedReference
+            $resolvedReference
+        } else {
+            ""
+        }
     } else {
         ""
     }

@@ -1,7 +1,7 @@
 # Windows 运行时连通性验证
 
 状态：现行
-最后更新：2026-07-20
+最后更新：2026-07-22
 
 ## 环境硬约束
 
@@ -37,7 +37,7 @@
 
 ## 当前 L2 结论
 
-真实 OpenWrt 对照已经证明：主 `proxy` Mixed 能收到请求并命中目标 AnyTLS outbound；保持 `mihomo/1.19.28`、移除 `g-2` detour 后三种协议均返回 204。独立 profile 2 的 Trojan 也三协议返回 204，且结构比对确认它与 `g-2` 是同一个完整 outbound 对象。只有 “AnyTLS mihomo client + `g-2` detour” 主配置组合出现 HTTP 502、HTTPS超时、SOCKS空响应和 `failed to create session: EOF`；改用原生AnyTLS client又触发服务端internal error。首轮结果使用旧探针的临时 `auto_detect_interface=true` 变体，足以在同一变体内隔离协议组合，但需按新默认preserve重跑后才能代表导出接口策略。
+2026-07-20 的历史 OpenWrt 对照中：主 `proxy` Mixed 能收到请求并命中目标 AnyTLS outbound；保持 `mihomo/1.19.28`、移除 `g-2` detour 后三种协议均返回 204。独立 profile 2 的 Trojan 也三协议返回 204，且结构比对确认它与 `g-2` 是同一个完整 outbound 对象。只有 “AnyTLS mihomo client + `g-2` detour” 主配置组合出现 HTTP 502、HTTPS 超时、SOCKS 空响应和 `failed to create session: EOF`；改用原生 AnyTLS client又触发服务端 internal error。该轮旧探针对所有临时变体强制 `auto_detect_interface=true`，只能在这一共同条件下隔离协议组合；需按当前默认 preserve 重跑后才能代表导出接口策略。
 
 因此当前 “Mixed 无法连接” 表象不能再归因为入口解析器或端口映射完全失效，阻断项是主 outbound 组合链路。完整数据和安全基线见 [OpenWrt 远程实验室](OPENWRT_REMOTE_LAB.md#已验证基线)。这仍不是 Windows Wintun、WFP、系统代理或生命周期通过证明。
 

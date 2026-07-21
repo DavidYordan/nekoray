@@ -1,5 +1,8 @@
 # Mixed 入口排障
 
+状态：现行
+最后更新：2026-07-22
+
 Mixed 同时接受 HTTP proxy 和 SOCKS5。排障必须区分“监听/入口协议”“逻辑线路映射”“DNS”“远端 outbound”和“底层接口”五层。
 
 ## 0. 先保护生产环境
@@ -107,7 +110,7 @@ powershell -NoProfile -ExecutionPolicy Bypass `
 - 只有本机失败、OpenWrt 相同临时配置成功：优先检查 Windows 默认路由、TUN 回环、接口选择和进程生命周期。
 - 本机与 OpenWrt 同一配置均失败：优先检查配置生成、DNS、detour、节点或上游网络。
 
-当前 OpenWrt 真实对照已经完成：保持主配置时，Mixed 和目标 outbound 均有事件，但 “AnyTLS `mihomo/1.19.28` + `g-2` detour” 返回 HTTP 502、HTTPS 超时、SOCKS 空响应；移除 detour 后三协议均为 204，独立 Trojan/profile 2 与独立 `g-2` 完整 outbound 也均为 204。详细证据和安全基线见 [OpenWrt 已验证基线](../testing/OPENWRT_REMOTE_LAB.md#已验证基线)。这证明当前主组合失败，但不证明 Windows 集成已经通过。
+2026-07-20 的历史 OpenWrt 真实对照中：保持主配置时，Mixed 和目标 outbound 均有事件，但 “AnyTLS `mihomo/1.19.28` + `g-2` detour” 返回 HTTP 502、HTTPS 超时、SOCKS 空响应；移除 detour 后三协议均为 204，独立 Trojan/profile 2 与独立 `g-2` 完整 outbound 也均为 204。该轮旧探针对所有临时变体强制 `auto_detect_interface=true`，只能证明共同接口变体下存在组合差异，不能证明产品导出接口策略；必须按当前默认 preserve 重跑。详细证据和安全基线见 [OpenWrt 已验证基线](../testing/OPENWRT_REMOTE_LAB.md#已验证基线)。这也不证明 Windows 集成已经通过。
 
 早期本机接管实验已归档到 [2026-07-20 接管基线](../archive/audits/2026-07-20-takeover-baseline.md)，不得用其中单次成功覆盖新的可重复 OpenWrt 对照。
 

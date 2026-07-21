@@ -34,9 +34,9 @@ namespace NekoGui {
 
         static QStringList List();
 
-        [[nodiscard]] static bool IsSafeName(const QString &name);
+        [[nodiscard]] static bool IsSafeName(const QString& name);
 
-        static bool SetToActive(const QString &name);
+        static bool SetToActive(const QString& name);
     };
 
     class InboundAuthorization : public JsonStore {
@@ -56,6 +56,7 @@ namespace NekoGui {
         QString core_token;
         int core_port = 19810;
         int started_id = -1919;
+        std::atomic_int core_transition_depth = 0;
         QMap<int, int> aux_profile_ports = {};
         bool core_running = false;
         bool prepare_exit = false;
@@ -127,7 +128,7 @@ namespace NekoGui {
         int aux_port_pool_end = 12299;
         QStringList aux_profile_port_entries = {};
         QString aux_profile_ports_load_error = "";
-        InboundAuthorization *inbound_auth = new InboundAuthorization;
+        InboundAuthorization* inbound_auth = new InboundAuthorization;
         QString custom_inbound = "{\"inbounds\": []}";
 
         // Routing
@@ -165,7 +166,7 @@ namespace NekoGui {
 
         void LoadAuxiliaryProfilePorts();
 
-        [[nodiscard]] QString ValidateAuxiliaryProfilePortEntries(const QJsonObject &object) const;
+        [[nodiscard]] QString ValidateAuxiliaryProfilePortEntries(const QJsonObject& object) const;
 
         [[nodiscard]] QString StoreAuxiliaryProfilePorts();
 
@@ -174,6 +175,6 @@ namespace NekoGui {
         QString GetUserAgent(bool isDefault = false) const;
     };
 
-    extern DataStore *dataStore;
+    extern DataStore* dataStore;
 
 } // namespace NekoGui

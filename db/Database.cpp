@@ -1,6 +1,7 @@
 #include "Database.hpp"
 
 #include "fmt/includes.h"
+#include "main/ConfigMutation.hpp"
 #include "main/ConfigRecovery.hpp"
 #include "main/ConfigTransaction.hpp"
 
@@ -15,9 +16,9 @@ namespace NekoGui {
 
     namespace {
         void recordRecoveryIssue(
-            const QString &path,
-            const QByteArray &content,
-            const QString &reason) {
+            const QString& path,
+            const QByteArray& content,
+            const QString& reason) {
             const auto quarantine = NekoGui_ConfigRecovery::RecordQuarantine(path, content, reason);
             if (!quarantine.succeeded) {
                 qCritical() << "Could not record config recovery issue:" << path << quarantine.error;
@@ -26,8 +27,7 @@ namespace NekoGui {
             }
         }
 
-        bool serializeStoreForTransaction(JsonStore *store, QByteArray *content, QString *error) {
-            store->last_save_succeeded = false;
+        bool serializeStoreForTransaction(JsonStore* store, QByteArray* content, QString* error) {
             if (store->callback_before_save != nullptr) {
                 const auto validationError = store->callback_before_save();
                 if (!validationError.isEmpty()) {
@@ -49,18 +49,18 @@ namespace NekoGui {
             return true;
         }
 
-        NekoGui_ConfigTransaction::FileState loadedStoreState(const JsonStore *store) {
-            return {QFileInfo::exists(store->fn), store->last_save_content};
+        NekoGui_ConfigTransaction::FileState loadedStoreState(const JsonStore* store) {
+            return {store->last_save_existed, store->last_save_content};
         }
-    }
+    } // namespace
 
-    ProfileManager *profileManager = new ProfileManager();
+    ProfileManager* profileManager = new ProfileManager();
 
     ProfileManager::ProfileManager() : JsonStore("groups/pm.json") {
         _add(new configItem("groups", &groupsTabOrder, itemType::integerList));
     }
 
-    QList<int> filterIntJsonFile(const QString &path) {
+    QList<int> filterIntJsonFile(const QString& path) {
         QList<int> result;
         QDir dr(path);
         auto entryList = dr.entryList(QDir::Files);
@@ -142,7 +142,7 @@ namespace NekoGui {
                     QStringLiteral("Group order references missing or unreadable group %1.").arg(id));
             }
         }
-        for (const auto &[id, profile]: profiles) {
+        for (const auto& [id, profile]: profiles) {
             if (!groups.count(profile->gid)) {
                 recordRecoveryIssue(
                     profile->fn,
@@ -152,7 +152,7 @@ namespace NekoGui {
                         .arg(profile->gid));
             }
         }
-        for (const auto &[id, group]: groups) {
+        for (const auto& [id, group]: groups) {
             QStringList missingOrderProfiles;
             for (const auto profileId: group->order) {
                 if (!profiles.count(profileId)) missingOrderProfiles.append(QString::number(profileId));
@@ -203,7 +203,7 @@ namespace NekoGui {
         JsonStore::Save();
     }
 
-    std::shared_ptr<ProxyEntity> ProfileManager::LoadProxyEntity(const QString &jsonPath) {
+    std::shared_ptr<ProxyEntity> ProfileManager::LoadProxyEntity(const QString& jsonPath) {
         // Load type
         ProxyEntity ent0(nullptr, nullptr);
         ent0.fn = jsonPath;
@@ -235,8 +235,8 @@ namespace NekoGui {
 
     //  新建的不给 fn 和 id
 
-    std::shared_ptr<ProxyEntity> ProfileManager::NewProxyEntity(const QString &type) {
-        NekoGui_fmt::AbstractBean *bean;
+    std::shared_ptr<ProxyEntity> ProfileManager::NewProxyEntity(const QString& type) {
+        NekoGui_fmt::AbstractBean* bean;
 
         if (type == "socks") {
             bean = new NekoGui_fmt::SocksHttpBean(NekoGui_fmt::SocksHttpBean::type_Socks5);
@@ -275,7 +275,7 @@ namespace NekoGui {
 
     // ProxyEntity
 
-    ProxyEntity::ProxyEntity(NekoGui_fmt::AbstractBean *bean, const QString &type_) {
+    ProxyEntity::ProxyEntity(NekoGui_fmt::AbstractBean* bean, const QString& type_) {
         if (type_ != nullptr) this->type = type_;
 
         _add(new configItem("type", &type, itemType::string));
@@ -288,8 +288,8 @@ namespace NekoGui {
         if (bean != nullptr) {
             this->bean = std::shared_ptr<NekoGui_fmt::AbstractBean>(bean);
             // 有虚函数就要在这里 dynamic_cast
-            _add(new configItem("bean", dynamic_cast<JsonStore *>(bean), itemType::jsonStore));
-            _add(new configItem("traffic", dynamic_cast<JsonStore *>(traffic_data.get()), itemType::jsonStore));
+            _add(new configItem("bean", dynamic_cast<JsonStore*>(bean), itemType::jsonStore));
+            _add(new configItem("traffic", dynamic_cast<JsonStore*>(traffic_data.get()), itemType::jsonStore));
         }
     };
 
@@ -330,11 +330,21 @@ namespace NekoGui {
         return profilesIdOrder.last() + 1;
     }
 
-    bool ProfileManager::AddProfile(const std::shared_ptr<ProxyEntity> &ent, int gid) {
-        if (ent->id >= 0) {
+    bool ProfileManager::AddProfile(const std::shared_ptr<ProxyEntity>& ent, int gid) {
+        NekoGui_ConfigMutation::Guard mutationGuard(false);
+        if (!mutationGuard.acquired()) {
+            qCritical() << "Profile creation was refused while another model mutation is committing.";
+            return false;
+        }
+        if (dataStore->core_transition_depth.load() > 0) {
+            qCritical() << "Profile creation was refused during a core transition.";
+            return false;
+        }
+        if (ent == nullptr || ent->id >= 0) {
             return false;
         }
 
+        const auto previousId = ent->id;
         const auto previousGid = ent->gid;
         const auto previousFn = ent->fn;
         const auto newId = NewProfileID();
@@ -343,7 +353,15 @@ namespace NekoGui {
             return false;
         }
 
-        ent->gid = gid < 0 ? dataStore->current_group : gid;
+        const auto targetGroupId = gid < 0 ? dataStore->current_group : gid;
+        const auto targetGroup = GetGroup(targetGroupId);
+        if (targetGroup == nullptr || targetGroup->archive || targetGroup->save_control_no_save) {
+            qCritical() << "Cannot add a profile to an unavailable or archived group:"
+                        << targetGroupId;
+            return false;
+        }
+
+        ent->gid = targetGroupId;
         ent->id = newId;
         profiles[ent->id] = ent;
         profilesIdOrder.push_back(ent->id);
@@ -351,9 +369,14 @@ namespace NekoGui {
         ent->fn = QStringLiteral("profiles/%1.json").arg(ent->id);
         ent->Save();
         if (!ent->last_save_succeeded) {
+            if (ent->last_save_indeterminate) {
+                qCritical() << "Profile creation is indeterminate and remains loaded for explicit recovery:"
+                            << ent->id;
+                return false;
+            }
             profiles.erase(ent->id);
             profilesIdOrder.removeAll(ent->id);
-            ent->id = -1;
+            ent->id = previousId;
             ent->gid = previousGid;
             ent->fn = previousFn;
             return false;
@@ -361,25 +384,44 @@ namespace NekoGui {
         return true;
     }
 
-    bool ProfileManager::DeleteProfile(int id, const QString &reason, QString *error) {
+    bool ProfileManager::DeleteProfile(int id, const QString& reason, QString* error) {
         if (error != nullptr) error->clear();
-        auto fail = [&](const QString &message) {
+        auto fail = [&](const QString& message) {
             if (error != nullptr) *error = message;
             qCritical() << message;
             return false;
         };
+        NekoGui_ConfigMutation::Guard mutationGuard(false);
+        if (!mutationGuard.acquired()) {
+            return fail(QStringLiteral(
+                "Profile deletion was refused while another model mutation is committing."));
+        }
+        if (dataStore->core_transition_depth.load() > 0) {
+            return fail(QStringLiteral("Profile deletion was refused during a core transition."));
+        }
 
         if (id < 0) return fail(QStringLiteral("Profile deletion requires a non-negative id."));
         if (dataStore->started_id == id) {
             return fail(QStringLiteral("Profile %1 is running and cannot be deleted.").arg(id));
+        }
+        if (dataStore->flag_restart_profile_id == id) {
+            return fail(QStringLiteral("Profile %1 is queued to start and cannot be deleted.").arg(id));
         }
         const auto profileIt = profiles.find(id);
         if (profileIt == profiles.end()) {
             return fail(QStringLiteral("Profile %1 is not loaded and cannot be deleted.").arg(id));
         }
         const auto profile = profileIt->second;
-
-        for (const auto &[groupId, group]: groups) {
+        if (profile == nullptr || profile->save_control_no_save) {
+            return fail(QStringLiteral("Profile %1 is already deleted or unavailable.").arg(id));
+        }
+        if (dataStore->started_id >= 0 && dataStore->aux_profile_ports.contains(id)) {
+            return fail(
+                QStringLiteral(
+                    "Profile %1 is an active auxiliary line and cannot be deleted while the core is running.")
+                    .arg(id));
+        }
+        for (const auto& [groupId, group]: groups) {
             if (group->front_proxy_id == id) {
                 return fail(
                     QStringLiteral("Profile %1 is the front proxy of group %2; clear that reference explicitly first.")
@@ -387,7 +429,7 @@ namespace NekoGui {
                         .arg(groupId));
             }
         }
-        for (const auto &[otherId, other]: profiles) {
+        for (const auto& [otherId, other]: profiles) {
             if (otherId == id || other->type != "chain" || other->bean == nullptr) continue;
             if (other->ChainBean()->list.contains(id)) {
                 return fail(
@@ -399,12 +441,17 @@ namespace NekoGui {
 
         const auto profilePath = profile->fn;
         const auto operation = reason.trimmed().isEmpty()
-                                 ? QStringLiteral("Profile deletion requested by the application.")
-                                 : reason.trimmed();
+                                   ? QStringLiteral("Profile deletion requested by the application.")
+                                   : reason.trimmed();
 
         const auto previousAuxPorts = dataStore->aux_profile_ports;
         const auto previousAuxEntries = dataStore->aux_profile_port_entries;
+        const auto previousAuxPoolStart = dataStore->aux_port_pool_start;
+        const auto previousAuxPoolEnd = dataStore->aux_port_pool_end;
+        const auto previousRememberId = dataStore->remember_id;
         const auto removedAuxiliaryMapping = dataStore->aux_profile_ports.remove(id) > 0;
+        const auto clearedRememberedProfile = dataStore->remember_id == id;
+        if (clearedRememberedProfile) dataStore->remember_id = -1919;
         const auto group = GetGroup(profile->gid);
         const auto previousGroupOrder = group != nullptr ? group->order : QList<int>{};
         const auto removedFromGroupOrder = group != nullptr && group->order.removeAll(id) > 0;
@@ -412,6 +459,9 @@ namespace NekoGui {
         auto restoreMemory = [&] {
             dataStore->aux_profile_ports = previousAuxPorts;
             dataStore->aux_profile_port_entries = previousAuxEntries;
+            dataStore->aux_port_pool_start = previousAuxPoolStart;
+            dataStore->aux_port_pool_end = previousAuxPoolEnd;
+            dataStore->remember_id = previousRememberId;
             if (group != nullptr) group->order = previousGroupOrder;
         };
 
@@ -419,7 +469,7 @@ namespace NekoGui {
         QByteArray dataStoreAfter;
         QByteArray groupAfter;
         QString stagingError;
-        if (removedAuxiliaryMapping) {
+        if (removedAuxiliaryMapping || clearedRememberedProfile) {
             if (!serializeStoreForTransaction(dataStore, &dataStoreAfter, &stagingError)) {
                 restoreMemory();
                 return fail(stagingError);
@@ -444,32 +494,52 @@ namespace NekoGui {
                     .arg(transaction.error));
         }
 
-        if (removedAuxiliaryMapping) {
+        if (removedAuxiliaryMapping || clearedRememberedProfile) {
             dataStore->last_save_content = dataStoreAfter;
+            dataStore->last_save_existed = true;
             dataStore->last_save_succeeded = true;
+            dataStore->last_save_indeterminate = false;
         }
         if (removedFromGroupOrder) {
             group->last_save_content = groupAfter;
+            group->last_save_existed = true;
             group->last_save_succeeded = true;
+            group->last_save_indeterminate = false;
         }
+        // Background test workers may still hold a shared_ptr to this entity.
+        // Tombstone it before removing the manager reference so a late Save()
+        // cannot recreate the explicitly deleted profile file.
+        profile->save_control_no_save = true;
         profiles.erase(id);
-        profilesIdOrder.removeAll(id);
+        // Keep the retired ID as an in-process high-water mark. This prevents
+        // stale integer callbacks from targeting a newly created profile with
+        // the same ID; LoadManager rebuilds the list on the next process start.
         qInfo() << "Profile deletion transaction committed:" << transaction.transactionPath;
         return true;
     }
 
     bool ProfileManager::MoveProfile(
-        const std::shared_ptr<ProxyEntity> &ent,
+        const std::shared_ptr<ProxyEntity>& ent,
         int gid,
-        QString *error) {
+        QString* error) {
         if (error != nullptr) error->clear();
-        auto fail = [&](const QString &message) {
+        auto fail = [&](const QString& message) {
             if (error != nullptr) *error = message;
             qCritical() << message;
             return false;
         };
+        NekoGui_ConfigMutation::Guard mutationGuard(false);
+        if (!mutationGuard.acquired()) {
+            return fail(QStringLiteral(
+                "Profile move was refused while another model mutation is committing."));
+        }
+        if (dataStore->core_transition_depth.load() > 0) {
+            return fail(QStringLiteral("Profile move was refused during a core transition."));
+        }
 
-        if (ent == nullptr || ent->id < 0 || profiles.count(ent->id) == 0) {
+        const auto profileIt = ent == nullptr ? profiles.end() : profiles.find(ent->id);
+        if (ent == nullptr || ent->id < 0 || profileIt == profiles.end() ||
+            profileIt->second != ent || ent->save_control_no_save) {
             return fail(QStringLiteral("Profile move requires a loaded profile."));
         }
         if (gid < 0 || GetGroup(gid) == nullptr) {
@@ -531,14 +601,20 @@ namespace NekoGui {
 
         if (removedFromOldOrder) {
             oldGroup->last_save_content = oldGroupAfter;
+            oldGroup->last_save_existed = true;
             oldGroup->last_save_succeeded = true;
+            oldGroup->last_save_indeterminate = false;
         }
         if (addedToNewOrder) {
             newGroup->last_save_content = newGroupAfter;
+            newGroup->last_save_existed = true;
             newGroup->last_save_succeeded = true;
+            newGroup->last_save_indeterminate = false;
         }
         ent->last_save_content = profileAfter;
+        ent->last_save_existed = true;
         ent->last_save_succeeded = true;
+        ent->last_save_indeterminate = false;
         qInfo() << "Profile move transaction committed:" << transaction.transactionPath;
         return true;
     }
@@ -600,7 +676,7 @@ namespace NekoGui {
         default_server_resolver_source = enabled ? "subscription" : "manual";
     }
 
-    std::shared_ptr<Group> ProfileManager::LoadGroup(const QString &jsonPath) {
+    std::shared_ptr<Group> ProfileManager::LoadGroup(const QString& jsonPath) {
         auto ent = std::make_shared<Group>();
         ent->fn = jsonPath;
         if (!ent->Load()) return nullptr;
@@ -616,12 +692,21 @@ namespace NekoGui {
         return groupsIdOrder.last() + 1;
     }
 
-    bool ProfileManager::AddGroup(const std::shared_ptr<Group> &ent) {
-        if (ent->id >= 0) {
+    bool ProfileManager::AddGroup(const std::shared_ptr<Group>& ent) {
+        NekoGui_ConfigMutation::Guard mutationGuard(false);
+        if (!mutationGuard.acquired()) {
+            qCritical() << "Group creation was refused while another model mutation is committing.";
             return false;
         }
+        if (dataStore->core_transition_depth.load() > 0) {
+            qCritical() << "Group creation was refused during a core transition.";
+            return false;
+        }
+        if (ent == nullptr || ent->id >= 0) return false;
 
+        const auto previousId = ent->id;
         const auto previousFn = ent->fn;
+        const auto previousGroupsTabOrder = groupsTabOrder;
         const auto newId = NewGroupID();
         if (newId < 0) {
             qCritical() << "Cannot allocate a group ID without overwriting preserved data.";
@@ -634,25 +719,64 @@ namespace NekoGui {
         groupsTabOrder.push_back(ent->id);
 
         ent->fn = QStringLiteral("groups/%1.json").arg(ent->id);
-        ent->Save();
-        if (!ent->last_save_succeeded) {
+        auto restoreMemory = [&] {
             groups.erase(ent->id);
             groupsIdOrder.removeAll(ent->id);
-            groupsTabOrder.removeAll(ent->id);
-            ent->id = -1;
+            groupsTabOrder = previousGroupsTabOrder;
+            ent->id = previousId;
             ent->fn = previousFn;
+        };
+
+        QByteArray groupAfter;
+        QByteArray managerAfter;
+        QString stagingError;
+        if (!serializeStoreForTransaction(ent.get(), &groupAfter, &stagingError) ||
+            !serializeStoreForTransaction(this, &managerAfter, &stagingError)) {
+            restoreMemory();
+            qCritical() << "Cannot stage group creation transaction:" << stagingError;
             return false;
         }
+
+        const auto transaction = NekoGui_ConfigTransaction::Execute(
+            QStringLiteral("Explicit group creation."),
+            {
+                {ent->fn, {false, {}}, {true, groupAfter}},
+                {fn, loadedStoreState(this), {true, managerAfter}},
+            });
+        if (!transaction.succeeded()) {
+            restoreMemory();
+            qCritical() << "Group creation transaction did not commit; loaded data was restored:"
+                        << transaction.error;
+            return false;
+        }
+
+        ent->last_save_content = groupAfter;
+        ent->last_save_existed = true;
+        ent->last_save_succeeded = true;
+        ent->last_save_indeterminate = false;
+        last_save_content = managerAfter;
+        last_save_existed = true;
+        last_save_succeeded = true;
+        last_save_indeterminate = false;
+        qInfo() << "Group creation transaction committed:" << transaction.transactionPath;
         return true;
     }
 
-    bool ProfileManager::DeleteGroup(int gid, const QString &reason, QString *error) {
+    bool ProfileManager::DeleteGroup(int gid, const QString& reason, QString* error) {
         if (error != nullptr) error->clear();
-        auto fail = [&](const QString &message) {
+        auto fail = [&](const QString& message) {
             if (error != nullptr) *error = message;
             qCritical() << message;
             return false;
         };
+        NekoGui_ConfigMutation::Guard mutationGuard(false);
+        if (!mutationGuard.acquired()) {
+            return fail(QStringLiteral(
+                "Group deletion was refused while another model mutation is committing."));
+        }
+        if (dataStore->core_transition_depth.load() > 0) {
+            return fail(QStringLiteral("Group deletion was refused during a core transition."));
+        }
 
         if (groups.size() <= 1) return fail(QStringLiteral("The last remaining group cannot be deleted."));
         const auto groupIt = groups.find(gid);
@@ -661,7 +785,7 @@ namespace NekoGui {
         }
 
         QList<int> toDelete;
-        for (const auto &[id, profile]: profiles) {
+        for (const auto& [id, profile]: profiles) {
             if (profile->gid == gid) toDelete += id; // map访问中，不能操作
         }
         if (!toDelete.isEmpty()) {
@@ -676,18 +800,21 @@ namespace NekoGui {
         const auto group = groupIt->second;
         const auto groupPath = group->fn;
         const auto operation = reason.trimmed().isEmpty()
-                                 ? QStringLiteral("Empty group deletion requested by the application.")
-                                 : reason.trimmed();
+                                   ? QStringLiteral("Empty group deletion requested by the application.")
+                                   : reason.trimmed();
 
         const auto previousOrder = groupsTabOrder;
         const auto removedFromOrder = groupsTabOrder.removeAll(gid) > 0;
 
         const auto previousCurrentGroup = dataStore->current_group;
+        const auto previousAuxPorts = dataStore->aux_profile_ports;
+        const auto previousAuxEntries = dataStore->aux_profile_port_entries;
+        const auto previousAuxPoolStart = dataStore->aux_port_pool_start;
+        const auto previousAuxPoolEnd = dataStore->aux_port_pool_end;
         const bool changesCurrentGroup = previousCurrentGroup == gid;
         if (changesCurrentGroup) {
-            for (const auto &[candidateId, candidate]: groups) {
-                (void) candidate;
-                if (candidateId != gid) {
+            for (const auto candidateId: groupsTabOrder) {
+                if (candidateId != gid && groups.count(candidateId) > 0) {
                     dataStore->current_group = candidateId;
                     break;
                 }
@@ -697,6 +824,10 @@ namespace NekoGui {
         auto restoreMemory = [&] {
             groupsTabOrder = previousOrder;
             dataStore->current_group = previousCurrentGroup;
+            dataStore->aux_profile_ports = previousAuxPorts;
+            dataStore->aux_profile_port_entries = previousAuxEntries;
+            dataStore->aux_port_pool_start = previousAuxPoolStart;
+            dataStore->aux_port_pool_end = previousAuxPoolEnd;
         };
 
         QList<NekoGui_ConfigTransaction::FileMutation> mutations;
@@ -730,15 +861,20 @@ namespace NekoGui {
 
         if (removedFromOrder) {
             last_save_content = managerAfter;
+            last_save_existed = true;
             last_save_succeeded = true;
+            last_save_indeterminate = false;
         }
         if (changesCurrentGroup) {
             dataStore->last_save_content = dataStoreAfter;
+            dataStore->last_save_existed = true;
             dataStore->last_save_succeeded = true;
+            dataStore->last_save_indeterminate = false;
         }
 
+        group->save_control_no_save = true;
         groups.erase(gid);
-        groupsIdOrder.removeAll(gid);
+        // Keep the retired ID as an in-process high-water mark; see profiles.
         qInfo() << "Group deletion transaction committed:" << transaction.transactionPath;
         return true;
     }
@@ -753,7 +889,7 @@ namespace NekoGui {
 
     QList<std::shared_ptr<ProxyEntity>> Group::Profiles() const {
         QList<std::shared_ptr<ProxyEntity>> ret;
-        for (const auto &[_, profile]: profileManager->profiles) {
+        for (const auto& [_, profile]: profileManager->profiles) {
             if (id == profile->gid) ret += profile;
         }
         return ret;

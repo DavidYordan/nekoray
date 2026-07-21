@@ -1,5 +1,8 @@
 # 订阅导入规则
 
+状态：现行
+最后更新：2026-07-22
+
 ## 目标安全流水线
 
 ```text
@@ -8,7 +11,8 @@
   -> 内存格式识别与解析
   -> 至少一个支持节点 + 字段校验
   -> 差异与丢弃项报告
-  -> 串行提交 + 原子保存
+  -> UI 线程提交串行化 + 身份/序列化快照重验
+  -> 目标：单事务候选提交（尚未完成）
 ```
 
 任一步失败都必须保持旧 group、order、profile文件、稳定ID、本地覆盖和运行引用不变。零支持节点不是“成功的空订阅”。
@@ -41,6 +45,6 @@ dns:
 
 ## 当前状态
 
-接管工作树已实现 parse/stage-before-mutate：Clash root/proxies、节点 endpoint 和精确 DoH 字段先验证；解析失败或零支持节点不创建组、不改 order/profile。成功候选才逐个写入并提交元数据。
+接管工作树已实现 parse/stage-before-mutate：Clash root/proxies、节点 endpoint 和精确 DoH 字段先验证；解析失败或零支持节点不创建组、不改 order/profile。发起网络请求前会按值捕获不可变 HTTP 选项，包括是否使用代理、代理端口/凭据、User-Agent 与 insecure-TLS；同时记录目标 group 的对象身份、ID、完整序列化字节，以及全部现有成员的 ID、对象身份、group ID、tombstone 和序列化字节。下载/解析可以并行；进入模型提交后调度到 UI 线程并取得参与 mutation 路径的提交串行化 mutex，逐项重验 group 和完整成员集合/顺序/状态均未变化。该 mutex 不是覆盖整个模型的通用读写锁。新建 group 的文件和 `groups/pm.json` 会在同一事务创建。core 运行时若旧节点仍是 auxiliary，删除会失败关闭并保留该节点。
 
-这还不是完整事务：`AddProfile`、group 保存和旧 profile 删除是多个独立操作，全局 ProfileManager mutation 仍需串行化；崩溃或磁盘故障可能留下新增、重复或残留节点。完成故障注入与单事务提交前，不能把手动或定时刷新标记为正式验收。详见 [ADR 0003](../architecture/decisions/0003-subscription-import-policy.md)。
+这还不是完整候选事务：刷新内部仍按多个 `AddProfile`、group 保存和旧 profile 删除提交，崩溃或磁盘故障可能留下新增、重复或残留节点；受保护引用或运行中 auxiliary 也尚未在任何写入前整体预检。完成最终集合构造、单事务提交和故障注入前，不能把手动或定时刷新标记为正式验收。详见 [ADR 0003](../architecture/decisions/0003-subscription-import-policy.md)。

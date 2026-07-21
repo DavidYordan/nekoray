@@ -4,6 +4,8 @@
 #include "db/Database.hpp"
 #include "db/ConfigBuilder.hpp"
 #include "db/traffic/TrafficLooper.hpp"
+#include "main/ConfigMutation.hpp"
+#include "main/ConfigTransaction.hpp"
 #include "rpc/gRPC.h"
 #include "sys/CoreProcess.hpp"
 #include "ui/widget/MessageBoxTimer.h"
@@ -45,13 +47,23 @@ namespace {
     QString tunModeChangeBlockedMessage() {
         return QObject::tr("Tun implementation was changed while Tun is running. Disable Tun explicitly before restarting or reloading.");
     }
-}
+
+    QString configRecoveryBlockReason() {
+        const auto runtimeReason = NekoGui_ConfigTransaction::RuntimeMutationBlockReason();
+        if (!runtimeReason.isEmpty()) return runtimeReason;
+        const auto issues = NekoGui_ConfigTransaction::BlockingTransactionIssues();
+        return issues.isEmpty()
+                   ? QString{}
+                   : QStringLiteral("Configuration recovery is required: %1")
+                         .arg(issues.join(QStringLiteral(" | ")));
+    }
+} // namespace
 
 void MainWindow::setup_grpc() {
 #ifndef NKR_NO_GRPC
     // Setup Connection
     defaultClient = new Client(
-        [=](const QString &errStr) {
+        [=](const QString& errStr) {
             MW_show_log("[Error] gRPC: " + errStr);
         },
         "127.0.0.1:" + Int2String(NekoGui::dataStore->core_port), NekoGui::dataStore->core_token);
@@ -66,14 +78,14 @@ void MainWindow::setup_grpc() {
 namespace {
     QMutex speedtestingMutex;
     bool speedtesting = false;
-    QList<QThread *> speedtestingThreads;
+    QList<QThread*> speedtestingThreads;
     std::shared_ptr<std::atomic_bool> speedtestingCancelToken;
 
     QMutex runningLabelUrlTestMutex;
     bool runningLabelUrlTesting = false;
     quint64 runningLabelUrlTestGeneration = 0;
 
-    bool beginSpeedtesting(std::shared_ptr<std::atomic_bool> *token) {
+    bool beginSpeedtesting(std::shared_ptr<std::atomic_bool>* token) {
         QMutexLocker locker(&speedtestingMutex);
         if (speedtesting) return false;
         speedtesting = true;
@@ -83,8 +95,8 @@ namespace {
         return true;
     }
 
-    bool cancelSpeedtesting(const std::shared_ptr<std::atomic_bool> &expectedToken = {}) {
-        QList<QThread *> threadsToStop;
+    bool cancelSpeedtesting(const std::shared_ptr<std::atomic_bool>& expectedToken = {}) {
+        QList<QThread*> threadsToStop;
         {
             QMutexLocker locker(&speedtestingMutex);
             if (!speedtesting && speedtestingCancelToken == nullptr) return false;
@@ -96,7 +108,7 @@ namespace {
             // worker reaches finishSpeedtesting(). Otherwise TUN could be
             // enabled while a temporary Box still owns live sockets.
         }
-        for (auto *thread: threadsToStop) {
+        for (auto* thread: threadsToStop) {
             if (thread == nullptr) continue;
             thread->requestInterruption();
             thread->quit();
@@ -105,7 +117,7 @@ namespace {
         return true;
     }
 
-    bool finishSpeedtesting(const std::shared_ptr<std::atomic_bool> &token) {
+    bool finishSpeedtesting(const std::shared_ptr<std::atomic_bool>& token) {
         QMutexLocker locker(&speedtestingMutex);
         if (speedtestingCancelToken != token) return false;
         speedtesting = false;
@@ -114,12 +126,12 @@ namespace {
         return true;
     }
 
-    void registerSpeedtestingThread(QThread *thread) {
+    void registerSpeedtestingThread(QThread* thread) {
         QMutexLocker locker(&speedtestingMutex);
         if (thread != nullptr && !speedtestingThreads.contains(thread)) speedtestingThreads << thread;
     }
 
-    void unregisterSpeedtestingThread(QThread *thread) {
+    void unregisterSpeedtestingThread(QThread* thread) {
         QMutexLocker locker(&speedtestingMutex);
         speedtestingThreads.removeAll(thread);
     }
@@ -244,7 +256,8 @@ void MainWindow::speedtest_current_group(int mode, bool test_group) {
         if (cancelSpeedtesting(cancelToken)) {
             MW_show_log(QObject::tr("Speedtest timed out; cancellation was requested. Tun remains blocked until every test worker exits."));
         }
-    }, this, watchdogMs);
+    },
+               this, watchdogMs);
 
     runOnNewThread([this, profiles, mode, full_test_flags, cancelToken]() {
         QMutex lock_write;
@@ -256,7 +269,7 @@ void MainWindow::speedtest_current_group(int mode, bool test_group) {
         // Threads
         for (int i = 0; i < threadN; i++) {
             runOnNewThread([&, cancelToken] {
-                auto *thread = QObject::thread();
+                auto* thread = QObject::thread();
                 registerSpeedtestingThread(thread);
 
                 forever {
@@ -384,7 +397,8 @@ void MainWindow::speedtest_current() {
         last_test_time = QTime::currentTime();
         ui->label_running->setText(tr("Test Result") + ": " + tr("Unavailable"));
         MW_show_log(tr("UrlTest timed out; Tun remains blocked until the test RPC exits."));
-    }, this, 15000);
+    },
+               this, 15000);
 
     runOnNewThread([=] {
         libcore::TestReq req;
@@ -429,6 +443,14 @@ void MainWindow::stop_core_daemon() {
 
 void MainWindow::neko_start(int _id, CoreStartReason reason) {
     if (NekoGui::dataStore->prepare_exit) return;
+    const auto recoveryBlock = configRecoveryBlockReason();
+    if (!recoveryBlock.isEmpty()) {
+        MessageBoxWarning(
+            software_name,
+            tr("Profile start/reload was blocked until configuration recovery is completed.\n%1")
+                .arg(recoveryBlock));
+        return;
+    }
 
     auto ents = get_now_selected_list();
     auto ent = (_id < 0 && !ents.isEmpty()) ? ents.first() : NekoGui::profileManager->GetProfile(_id);
@@ -473,18 +495,39 @@ void MainWindow::neko_start(int _id, CoreStartReason reason) {
     }
 
     auto neko_start_stage2 = [=] {
+        // The final recovery check and the core state commit are one
+        // fail-closed critical section.  This prevents this process or a
+        // second instance from publishing a config mutation after the check
+        // but before the Start RPC takes effect.
+        NekoGui_ConfigMutation::Guard stageMutationGuard(true);
+        if (!stageMutationGuard.acquired()) {
+            MW_show_log("<<<<<<<< " + tr("Profile start/reload could not acquire the configuration model lock."));
+            return false;
+        }
+        NekoGui_ConfigTransaction::DiskLockGuard stageDiskLock;
+        if (!stageDiskLock.acquired()) {
+            MW_show_log("<<<<<<<< " + tr("Profile start/reload could not acquire the configuration disk lock: %1")
+                                          .arg(stageDiskLock.error()));
+            return false;
+        }
+        const auto stageRecoveryBlock = configRecoveryBlockReason();
+        if (!stageRecoveryBlock.isEmpty()) {
+            MW_show_log("<<<<<<<< " + tr("Profile start/reload blocked by configuration recovery: %1")
+                                          .arg(stageRecoveryBlock));
+            return false;
+        }
 #ifndef NKR_NO_GRPC
         libcore::LoadConfigReq req;
         req.set_core_config(QJsonObject2QString(result->coreConfig, false).toStdString());
         req.set_enable_nekoray_connections(NekoGui::dataStore->connection_statistics);
         if (NekoGui::dataStore->traffic_loop_interval > 0) {
             QSet<QString> statsTags;
-            for (const auto &item: result->outboundStats) {
+            for (const auto& item: result->outboundStats) {
                 const auto tag = QString::fromStdString(item->tag);
                 if (!tag.isEmpty()) statsTags.insert(tag);
             }
             statsTags.insert("proxy");
-            for (const auto &tag: statsTags) {
+            for (const auto& tag: statsTags) {
                 req.add_stats_outbounds(tag.toStdString());
             }
             req.add_stats_outbounds("bypass");
@@ -547,6 +590,7 @@ void MainWindow::neko_start(int _id, CoreStartReason reason) {
     connect(restartMsgbox, &QMessageBox::accepted, this, [=] { MW_dialog_message("", "RestartProgram"); });
     auto restartMsgboxTimer = new MessageBoxTimer(this, restartMsgbox, 5000);
 
+    NekoGui::dataStore->core_transition_depth.fetch_add(1);
     runOnNewThread([=] {
         // stop current running
         if (NekoGui::dataStore->started_id >= 0) {
@@ -566,6 +610,7 @@ void MainWindow::neko_start(int _id, CoreStartReason reason) {
         if (!neko_start_stage2()) {
             MW_show_log("<<<<<<<< " + tr("Failed to start profile %1").arg(ent->bean->DisplayTypeAndName()));
         }
+        NekoGui::dataStore->core_transition_depth.fetch_sub(1);
         mu_starting.unlock();
         // cancel timeout
         runOnUiThread([=] {
@@ -583,6 +628,12 @@ void MainWindow::neko_start(int _id, CoreStartReason reason) {
 }
 
 void MainWindow::neko_stop(bool crash, bool sem, CoreStopReason reason) {
+    if (reason == CoreStopReason::UserAction &&
+        NekoGui::dataStore->core_transition_depth.load() > 0) {
+        MessageBoxWarning(software_name, tr("Wait for the current core transition to finish."));
+        if (sem) sem_stopped.release();
+        return;
+    }
     auto id = NekoGui::dataStore->started_id;
     if (id < 0) {
         if (sem) sem_stopped.release();
@@ -603,8 +654,13 @@ void MainWindow::neko_stop(bool crash, bool sem, CoreStopReason reason) {
         NekoGui_traffic::trafficLooper->loop_mutex.lock();
         if (NekoGui::dataStore->traffic_loop_interval != 0) {
             NekoGui_traffic::trafficLooper->UpdateAll();
-            for (const auto &item: NekoGui_traffic::trafficLooper->items) {
-                NekoGui::profileManager->GetProfile(item->id)->Save();
+            for (const auto& item: NekoGui_traffic::trafficLooper->items) {
+                const auto profile = NekoGui::profileManager->GetProfile(item->id);
+                if (profile == nullptr) {
+                    qWarning() << "Skipping traffic save for an explicitly deleted profile:" << item->id;
+                    continue;
+                }
+                profile->Save();
                 runOnUiThread([=] { refresh_proxy_list(item->id); });
             }
         }
@@ -642,6 +698,7 @@ void MainWindow::neko_stop(bool crash, bool sem, CoreStopReason reason) {
         if (sem) sem_stopped.release();
         return;
     }
+    NekoGui::dataStore->core_transition_depth.fetch_add(1);
 
     // timeout message
     auto restartMsgbox = new QMessageBox(QMessageBox::Question, software_name, tr("If there is no response for a long time, it is recommended to restart the software."),
@@ -655,6 +712,7 @@ void MainWindow::neko_stop(bool crash, bool sem, CoreStopReason reason) {
         if (!neko_stop_stage2()) {
             MW_show_log("<<<<<<<< " + tr("Failed to stop, please restart the program."));
         }
+        NekoGui::dataStore->core_transition_depth.fetch_sub(1);
         mu_stopping.unlock();
         if (sem) sem_stopped.release();
         // cancel timeout

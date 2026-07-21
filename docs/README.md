@@ -20,6 +20,7 @@
 - [ADR 0006：Mixed 默认端口与生产实例隔离](architecture/decisions/0006-mixed-port-migration.md)
 - [ADR 0007：Mixed 端口到线路映射](architecture/decisions/0007-mixed-routing-contract.md)
 - [ADR 0008：持久 Windows Runtime 与无直连切换（候选架构）](architecture/decisions/0008-persistent-windows-runtime.md)
+- [ADR 0009：配置事务与显式恢复方向](architecture/decisions/0009-config-transaction-recovery.md)
 
 ADR 0005（MultiMapper）已撤出产品决策序列；相关材料只保留在历史归档。
 
