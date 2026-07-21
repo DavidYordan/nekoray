@@ -59,6 +59,33 @@ function Invoke-Export([string]$Lab) {
 $utf8NoBom = [Text.UTF8Encoding]::new($false)
 $cases = @()
 
+function Test-QuarantineEvidence(
+    [string]$Lab,
+    [string]$RelativeSource,
+    [string]$ExpectedHash,
+    [string]$ExpectedReasonPattern
+) {
+    $relativeSnapshot = "$RelativeSource.$($ExpectedHash.ToLowerInvariant()).snapshot"
+    $snapshotPath = Join-Path (Join-Path $Lab "config\recovery\quarantine") $relativeSnapshot
+    $metadataPath = "$snapshotPath.meta.json"
+    if (-not [IO.File]::Exists($snapshotPath) -or -not [IO.File]::Exists($metadataPath)) {
+        return $false
+    }
+    if ((Get-FileHash -LiteralPath $snapshotPath -Algorithm SHA256).Hash -ne $ExpectedHash) {
+        return $false
+    }
+    try {
+        $metadata = Get-Content -LiteralPath $metadataPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    } catch {
+        return $false
+    }
+    $normalizedSource = $RelativeSource.Replace('\', '/')
+    return $metadata.schema -eq "nekoray.recovery.quarantine.v1" -and
+           $metadata.source_path -eq $normalizedSource -and
+           $metadata.sha256 -eq $ExpectedHash.ToLowerInvariant() -and
+           @($metadata.reasons | Where-Object { $_ -match $ExpectedReasonPattern }).Count -ge 1
+}
+
 function Add-InvalidAuxiliaryMappingCase([string]$Name, [string]$InvalidAuxJson) {
     $lab = New-TestLab
     try {
@@ -77,11 +104,17 @@ function Add-InvalidAuxiliaryMappingCase([string]$Name, [string]$InvalidAuxJson)
         $before = (Get-FileHash -LiteralPath $mainConfig -Algorithm SHA256).Hash
         $secondRun = Invoke-Export $lab
         $after = (Get-FileHash -LiteralPath $mainConfig -Algorithm SHA256).Hash
+        $quarantineVerified = Test-QuarantineEvidence `
+            -Lab $lab `
+            -RelativeSource "groups\nekobox.json" `
+            -ExpectedHash $before `
+            -ExpectedReasonPattern "aux_profile_ports"
         $script:cases += [ordered]@{
             name = $Name
-            passed = ($firstRun.exit_code -ne 0 -and $secondRun.exit_code -ne 0 -and -not $secondRun.output_created -and $before -eq $after)
+            passed = ($firstRun.exit_code -ne 0 -and $secondRun.exit_code -ne 0 -and -not $secondRun.output_created -and $before -eq $after -and $quarantineVerified)
             exit_code = $secondRun.exit_code
             hash_unchanged = ($before -eq $after)
+            quarantine_verified = $quarantineVerified
         }
     } finally {
         Remove-TestLab $lab
@@ -97,11 +130,17 @@ try {
     $before = (Get-FileHash -LiteralPath $mainConfig -Algorithm SHA256).Hash
     $run = Invoke-Export $invalidMainLab
     $after = (Get-FileHash -LiteralPath $mainConfig -Algorithm SHA256).Hash
+    $quarantineVerified = Test-QuarantineEvidence `
+        -Lab $invalidMainLab `
+        -RelativeSource "groups\nekobox.json" `
+        -ExpectedHash $before `
+        -ExpectedReasonPattern "unterminated|JSON"
     $cases += [ordered]@{
         name = "invalid_existing_main_config"
-        passed = ($run.exit_code -ne 0 -and -not $run.output_created -and $before -eq $after)
+        passed = ($run.exit_code -ne 0 -and -not $run.output_created -and $before -eq $after -and $quarantineVerified)
         exit_code = $run.exit_code
         hash_unchanged = ($before -eq $after)
+        quarantine_verified = $quarantineVerified
     }
 } finally {
     Remove-TestLab $invalidMainLab
@@ -136,15 +175,63 @@ try {
     $before = (Get-FileHash -LiteralPath $routeConfig -Algorithm SHA256).Hash
     $secondRun = Invoke-Export $invalidRouteLab
     $after = (Get-FileHash -LiteralPath $routeConfig -Algorithm SHA256).Hash
+    $routeRelative = "routes_box\$([IO.Path]::GetFileName($routeConfig))"
+    $quarantineVerified = Test-QuarantineEvidence `
+        -Lab $invalidRouteLab `
+        -RelativeSource $routeRelative `
+        -ExpectedHash $before `
+        -ExpectedReasonPattern "root must be an object"
     $cases += [ordered]@{
         name = "invalid_existing_route_config"
-        passed = ($firstRun.exit_code -ne 0 -and $secondRun.exit_code -ne 0 -and -not $secondRun.output_created -and $before -eq $after)
+        passed = ($firstRun.exit_code -ne 0 -and $secondRun.exit_code -ne 0 -and -not $secondRun.output_created -and $before -eq $after -and $quarantineVerified)
         exit_code = $secondRun.exit_code
         hash_unchanged = ($before -eq $after)
+        quarantine_verified = $quarantineVerified
     }
 } finally {
     Remove-TestLab $invalidRouteLab
 }
+
+function Add-ProfileRecoveryCase(
+    [string]$Name,
+    [string]$ProfileJson,
+    [string]$ExpectedReasonPattern
+) {
+    $lab = New-TestLab
+    try {
+        $firstRun = Invoke-Export $lab
+        $profilesDir = Join-Path $lab "config\profiles"
+        $profilePath = Join-Path $profilesDir "7.json"
+        [IO.File]::WriteAllText($profilePath, $ProfileJson, $utf8NoBom)
+        $before = (Get-FileHash -LiteralPath $profilePath -Algorithm SHA256).Hash
+        $secondRun = Invoke-Export $lab
+        $after = (Get-FileHash -LiteralPath $profilePath -Algorithm SHA256).Hash
+        $quarantineVerified = Test-QuarantineEvidence `
+            -Lab $lab `
+            -RelativeSource "profiles\7.json" `
+            -ExpectedHash $before `
+            -ExpectedReasonPattern $ExpectedReasonPattern
+        $script:cases += [ordered]@{
+            name = $Name
+            passed = ($firstRun.exit_code -ne 0 -and $secondRun.exit_code -ne 0 -and $before -eq $after -and $quarantineVerified)
+            exit_code = $secondRun.exit_code
+            hash_unchanged = ($before -eq $after)
+            quarantine_verified = $quarantineVerified
+        }
+    } finally {
+        Remove-TestLab $lab
+    }
+}
+
+Add-ProfileRecoveryCase `
+    -Name "unknown_profile_type_quarantined" `
+    -ProfileJson '{"type":"future-core","id":7,"gid":0}' `
+    -ExpectedReasonPattern "Unsupported or unknown profile type"
+
+Add-ProfileRecoveryCase `
+    -Name "dangling_profile_group_quarantined" `
+    -ProfileJson '{"type":"socks","id":7,"gid":99,"bean":{}}' `
+    -ExpectedReasonPattern "missing or unreadable group 99"
 
 $result = [ordered]@{
     passed = (@($cases | Where-Object { -not $_.passed }).Count -eq 0)

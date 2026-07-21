@@ -30,7 +30,7 @@ $forbiddenTracked = @(
     $tracked | Where-Object {
         $path = $_ -replace "\\", "/"
         $path -match '(^|/)(remote\.env|\.env(?:\.|$))' -or
-        ($path -match '(^|/)(config|groups|routes_box)/') -or
+        ($path -match '(^|/)(config|groups|routes_box|recovery)/') -or
         ($path -match '\.(pem|key|pfx|p12|jks|keystore|exe|dll|dmp|zip|7z|log)$') -or
         ($path -match '^(build(?:-|/)|deployment/|qtsdk/|artifacts/|dist/|packages/|release/|test-results/)')
     }
@@ -45,6 +45,7 @@ $requiredIgnorePatterns = @(
     "*.pem",
     "*.key",
     "/config/",
+    "/recovery/",
     "__pycache__/",
     "/build-*",
     "/deployment",

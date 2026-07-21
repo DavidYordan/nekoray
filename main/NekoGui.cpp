@@ -1,4 +1,5 @@
 #include "NekoGui.hpp"
+#include "ConfigRecovery.hpp"
 #include "fmt/Preset.hpp"
 
 #include <QFile>
@@ -215,7 +216,18 @@ namespace NekoGui_ConfigItem {
         }
 
         auto save_content = ToJsonBytes();
-        const auto changed = last_save_content != save_content;
+        const auto preparation = NekoGui_ConfigRecovery::PrepareOverwrite(fn, last_save_content, save_content);
+        if (preparation.decision == NekoGui_ConfigRecovery::OverwriteDecision::Refused) {
+            qCritical() << preparation.error;
+            return false;
+        }
+        if (preparation.decision == NekoGui_ConfigRecovery::OverwriteDecision::Unchanged) {
+            last_save_succeeded = true;
+            return false;
+        }
+        if (!preparation.backupPath.isEmpty()) {
+            qInfo() << "Verified pre-overwrite config backup:" << preparation.backupPath;
+        }
 
         QSaveFile file(fn);
         file.setDirectWriteFallback(false);
@@ -228,6 +240,18 @@ namespace NekoGui_ConfigItem {
             file.cancelWriting();
             return false;
         }
+        if (preparation.targetExisted) {
+            QString verificationError;
+            if (!NekoGui_ConfigRecovery::CurrentContentMatches(fn, last_save_content, &verificationError)) {
+                qCritical() << "Config changed while its replacement was being prepared:" << verificationError;
+                file.cancelWriting();
+                return false;
+            }
+        } else if (QFileInfo::exists(fn)) {
+            qCritical() << "Refusing to overwrite a config created while this save was being prepared:" << fn;
+            file.cancelWriting();
+            return false;
+        }
         if (!file.commit()) {
             qWarning() << "Cannot commit config atomically:" << fn << file.errorString();
             return false;
@@ -236,7 +260,7 @@ namespace NekoGui_ConfigItem {
         last_save_content = save_content;
         last_save_succeeded = true;
 
-        return changed;
+        return true;
     }
 
     bool JsonStore::Load() {
@@ -256,6 +280,13 @@ namespace NekoGui_ConfigItem {
             const auto load_content = file.readAll();
             if (!FromJsonBytes(load_content)) {
                 qWarning() << "Cannot load invalid config; original file is preserved:" << fn;
+                const auto quarantine = NekoGui_ConfigRecovery::RecordQuarantine(fn, load_content, last_load_error);
+                if (!quarantine.succeeded) {
+                    qCritical() << "Could not create a verified quarantine snapshot:"
+                                << fn << quarantine.error;
+                } else {
+                    qWarning() << "Verified quarantine snapshot:" << quarantine.snapshotPath;
+                }
                 load_failed_existing = true;
                 ok = false;
             } else {

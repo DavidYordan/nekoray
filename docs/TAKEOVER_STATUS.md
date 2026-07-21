@@ -17,7 +17,7 @@
 | 等级 | 发现 | 处理方向 |
 |---|---|---|
 | P0 | external-core、Naive、custom external、TUIC/Hysteria2 外核被整体删除 | 选择性恢复；仅 Xray 保持删除 |
-| P0 | 未知/现已不识别 profile 曾被 loader 删除 | 已停止删除与 ID 复用；补 quarantine/UI 恢复后再恢复模型 |
+| P0 | 未知/现已不识别 profile 曾被 loader 删除 | 已停止删除与 ID 复用，并生成可验证 quarantine 证据；仍缺可操作恢复 UI 后再恢复模型 |
 | P0 | 订阅刷新曾在验证前改 order/删 profile | 已改为 parse/stage/validate 后提交；继续补多文件事务与故障注入 |
 | P0 | TUN 下重载被 UI 阻止；整核 Stop/Start 无独立 kill-switch | 持久 runtime + WFP + generation 事务 |
 | P0 | final custom 曾可覆盖 Mixed 端口绑定；空辅助 chain 曾可 fail-open | 最终 validator 已落地；补完整负向自动回归 |
@@ -75,14 +75,14 @@ OpenWrt `192.168.1.7` 使用同版本 `sing-box 1.13.12-routefluent-anytls-clien
 
 - 当前源码的 Windows GUI 增量构建成功；两个 Go 模块普通测试通过，本轮较早也用仓库 MinGW、`CGO_ENABLED=1` 通过两个模块的 race 测试，随后已重建 `build-package-windows64/nekobox_core.exe`。
 - 本轮构建目录快照：`nekobox.exe` SHA-256 `1461350861798D076D39A5BF0A5AD195E4943202C6C948495E6A859D01CD75B1`；`nekobox_core.exe` SHA-256 `D2D532E72CEE65791D5A098D688FB6C9A9F0133C2C79B847070627E595656E92`。这只是接管审计证据，不是 release manifest。
-- `test_final_config_guards.ps1` 10/10，`test_config_preservation.ps1` 5/5，OpenWrt helper Python 单测 19/19。
+- `test_final_config_guards.ps1` 10/10，`test_config_preservation.ps1` 7/7，`config_recovery_test` 1/1，OpenWrt helper Python 单测 19/19。
 - 本地 Mixed fixture 7/7；额外 listener、系统代理、禁用日志和 loopback origin 清理均保持预期。
 - runtime connectivity 的 expected 204 场景通过，HTTP 与 SOCKS5h 均为 204；expected 200 场景按预期报告 2 项 mismatch 并返回失败。系统代理、fixture 端口和 origin 清理均通过。
 - 本轮已执行 `ctest --test-dir build-package-windows64 --output-on-failure`；命令退出 0，但明确输出 `No tests were found!!!`，即实际执行 0 项测试，不能写成 C++ 测试通过。以上证据均不覆盖 Windows TUN/WFP/退出/切线，也不改变 Alpha/不可发布判断。
 
 ## 仍然阻断发布
 
-1. external-core/Naive 与误删格式兼容尚未恢复；未知数据虽已保留，但 quarantine/UI 恢复和备份仍缺。
+1. external-core/Naive 与误删格式兼容尚未恢复；未知数据已保留并生成 quarantine，单文件覆盖已有备份，但恢复 UI 与多文件事务仍缺。
 2. 单文件原子保存已落地，订阅也已先 stage；跨 profile/group 的提交仍不是完整事务，缺故障注入。
 3. 最终 Mixed、strict resolver 与 TUN/系统代理副作用不变量校验已落地，并新增 `test/test_final_config_guards.ps1` 覆盖部分导出拒绝分支；完整 C++ 配置生成 golden/负向回归仍未完成，不能只凭脚本存在判定通过。
 4. AnyTLS + Trojan detour 仍失败。

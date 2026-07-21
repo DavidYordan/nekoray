@@ -1619,6 +1619,20 @@ Release note:
         <translation>默认</translation>
     </message>
     <message>
+        <source>Configuration recovery required</source>
+        <translation>配置需要恢复处理</translation>
+    </message>
+    <message>
+        <source>%1 configuration issue(s) were detected. Original files were not modified. Verified snapshots and audit metadata were written under:
+%2
+
+No automatic repair was attempted.</source>
+        <translation>检测到 %1 个配置问题。原始文件未被修改；已验证的快照和审计元数据保存在：
+%2
+
+程序没有执行任何自动修复。</translation>
+    </message>
+    <message>
         <source>The last speed test did not exit completely, please wait. If it persists, please restart the program.</source>
         <translation>上次速度测试未完全退出，请等待。如果问题仍然存在，请重新启动程序。</translation>
     </message>

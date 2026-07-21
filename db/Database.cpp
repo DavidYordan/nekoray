@@ -1,6 +1,7 @@
 #include "Database.hpp"
 
 #include "fmt/includes.h"
+#include "main/ConfigRecovery.hpp"
 
 #include <QFile>
 #include <QDir>
@@ -9,6 +10,20 @@
 #include <limits>
 
 namespace NekoGui {
+
+    namespace {
+        void recordRecoveryIssue(
+            const QString &path,
+            const QByteArray &content,
+            const QString &reason) {
+            const auto quarantine = NekoGui_ConfigRecovery::RecordQuarantine(path, content, reason);
+            if (!quarantine.succeeded) {
+                qCritical() << "Could not record config recovery issue:" << path << quarantine.error;
+            } else {
+                qWarning() << "Config recovery issue recorded:" << path << reason << quarantine.snapshotPath;
+            }
+        }
+    }
 
     ProfileManager *profileManager = new ProfileManager();
 
@@ -47,8 +62,16 @@ namespace NekoGui {
             // Preserve unreadable and unknown profiles on disk. A later version
             // may understand them, and silently deleting user data is never a
             // valid compatibility strategy.
-            if (ent == nullptr || ent->bean == nullptr || ent->bean->version == -114514 || ent->id != id) {
+            if (ent == nullptr || ent->bean == nullptr || ent->bean->version == -114514) {
                 qWarning() << "Profile was not loaded; original file is preserved:" << id;
+                continue;
+            }
+            if (ent->id != id) {
+                recordRecoveryIssue(
+                    ent->fn,
+                    ent->last_save_content,
+                    QStringLiteral("Profile filename id %1 does not match stored id %2.").arg(id).arg(ent->id));
+                qWarning() << "Profile was not loaded because its stored id does not match its filename:" << id;
                 continue;
             }
             profiles[id] = ent;
@@ -58,8 +81,16 @@ namespace NekoGui {
         groupsTabOrder = {};
         for (auto id: groupsIdOrder) {
             auto ent = LoadGroup(QStringLiteral("groups/%1.json").arg(id));
-            if (ent == nullptr || ent->id != id) {
+            if (ent == nullptr) {
                 qWarning() << "Group was not loaded; original file is preserved:" << id;
+                continue;
+            }
+            if (ent->id != id) {
+                recordRecoveryIssue(
+                    ent->fn,
+                    ent->last_save_content,
+                    QStringLiteral("Group filename id %1 does not match stored id %2.").arg(id).arg(ent->id));
+                qWarning() << "Group was not loaded because its stored id does not match its filename:" << id;
                 continue;
             }
             // Ensure order contains every group
@@ -73,6 +104,53 @@ namespace NekoGui {
             if (groups.count(id)) {
                 groupsTabOrder << id;
             }
+        }
+        for (auto id: loadedOrder) {
+            if (!groups.count(id)) {
+                recordRecoveryIssue(
+                    fn,
+                    last_save_content,
+                    QStringLiteral("Group order references missing or unreadable group %1.").arg(id));
+            }
+        }
+        for (const auto &[id, profile]: profiles) {
+            if (!groups.count(profile->gid)) {
+                recordRecoveryIssue(
+                    profile->fn,
+                    profile->last_save_content,
+                    QStringLiteral("Profile %1 references missing or unreadable group %2.")
+                        .arg(id)
+                        .arg(profile->gid));
+            }
+        }
+        for (const auto &[id, group]: groups) {
+            QStringList missingOrderProfiles;
+            for (const auto profileId: group->order) {
+                if (!profiles.count(profileId)) missingOrderProfiles.append(QString::number(profileId));
+            }
+            if (!missingOrderProfiles.isEmpty()) {
+                recordRecoveryIssue(
+                    group->fn,
+                    group->last_save_content,
+                    QStringLiteral("Group %1 order references missing or unreadable profiles: %2.")
+                        .arg(id)
+                        .arg(missingOrderProfiles.join(", ")));
+            }
+            if (group->front_proxy_id >= 0 && !profiles.count(group->front_proxy_id)) {
+                recordRecoveryIssue(
+                    group->fn,
+                    group->last_save_content,
+                    QStringLiteral("Group %1 references missing front proxy profile %2.")
+                        .arg(id)
+                        .arg(group->front_proxy_id));
+            }
+        }
+        if (!groups.empty() && !groups.count(dataStore->current_group)) {
+            recordRecoveryIssue(
+                dataStore->fn,
+                dataStore->last_save_content,
+                QStringLiteral("Current group references missing or unreadable group %1.")
+                    .arg(dataStore->current_group));
         }
         // First setup
         if (groups.empty()) {
@@ -110,12 +188,18 @@ namespace NekoGui {
         if (validType) {
             ent = NewProxyEntity(type);
             validType = ent->bean->version != -114514;
+            if (!validType) {
+                recordRecoveryIssue(
+                    jsonPath,
+                    ent0.last_save_content,
+                    QStringLiteral("Unsupported or unknown profile type: %1.").arg(type));
+            }
         }
 
         if (validType) {
             ent->load_control_must = true;
             ent->fn = jsonPath;
-            ent->Load();
+            if (!ent->Load()) return nullptr;
         }
         return ent;
     }
@@ -360,7 +444,7 @@ namespace NekoGui {
     std::shared_ptr<Group> ProfileManager::LoadGroup(const QString &jsonPath) {
         auto ent = std::make_shared<Group>();
         ent->fn = jsonPath;
-        ent->Load();
+        if (!ent->Load()) return nullptr;
         return ent;
     }
 

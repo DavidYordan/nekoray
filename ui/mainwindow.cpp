@@ -3,6 +3,7 @@
 
 #include "fmt/includes.h"
 #include "fmt/Preset.hpp"
+#include "main/ConfigRecovery.hpp"
 #include "db/ProfileFilter.hpp"
 #include "db/ConfigBuilder.hpp"
 #include "sub/GroupUpdater.hpp"
@@ -138,10 +139,24 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWi
     // Load Manager
     NekoGui::profileManager->LoadManager();
     pruneAuxiliaryProfilePorts();
+    const auto recoveryNotices = NekoGui_ConfigRecovery::TakeRecoveryNotices();
 
     // Setup misc UI
     themeManager->ApplyTheme(NekoGui::dataStore->theme);
     ui->setupUi(this);
+    if (!recoveryNotices.isEmpty()) {
+        QTimer::singleShot(0, this, [recoveryNotices] {
+            QMessageBox::warning(
+                GetMainWindow(),
+                QObject::tr("Configuration recovery required"),
+                QObject::tr(
+                    "%1 configuration issue(s) were detected. Original files were not modified. "
+                    "Verified snapshots and audit metadata were written under:\n%2\n\n"
+                    "No automatic repair was attempted.")
+                    .arg(recoveryNotices.size())
+                    .arg(NekoGui_ConfigRecovery::RecoveryRootPath()));
+        });
+    }
     //
     connect(ui->menu_start, &QAction::triggered, this, [=]() { neko_start(); });
     connect(ui->menu_stop, &QAction::triggered, this, [=]() { neko_stop(); });

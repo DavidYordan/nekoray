@@ -100,6 +100,7 @@ remote.env
 /config/
 /groups/
 /routes_box/
+/recovery/
 
 # Logs, reports and disposable test output
 *.log

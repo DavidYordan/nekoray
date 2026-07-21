@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.5)
 
 project(nekobox VERSION 0.1 LANGUAGES CXX)
 
+include(CTest)
+
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -125,6 +127,7 @@ set(PROJECT_SOURCES
         main/main.cpp
         main/NekoGui.cpp
         main/NekoGui_Utils.cpp
+        main/ConfigRecovery.cpp
         main/HTTPRequestHelper.cpp
 
         3rdparty/base64.cpp
@@ -295,4 +298,21 @@ target_link_libraries(nekobox PRIVATE
 
 if (QT_VERSION_MAJOR EQUAL 6)
     qt_finalize_executable(nekobox)
+endif ()
+
+if (BUILD_TESTING)
+    add_executable(config_recovery_test
+            test/config_recovery_test.cpp
+            main/ConfigRecovery.cpp
+    )
+    target_link_libraries(config_recovery_test PRIVATE Qt${QT_VERSION_MAJOR}::Core)
+    add_test(NAME config_recovery_test COMMAND config_recovery_test)
+    set_tests_properties(config_recovery_test PROPERTIES TIMEOUT 15)
+    if (WIN32)
+        add_custom_command(TARGET config_recovery_test POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:Qt${QT_VERSION_MAJOR}::Core>
+                $<TARGET_FILE_DIR:config_recovery_test>
+        )
+    endif ()
 endif ()
