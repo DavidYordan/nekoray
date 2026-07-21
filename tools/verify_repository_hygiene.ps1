@@ -57,6 +57,25 @@ foreach ($pattern in $requiredIgnorePatterns) {
     }
 }
 
+$workflowFiles = @(
+    Get-ChildItem -LiteralPath (Join-Path $repoRoot ".github\workflows") -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Extension -in @(".yml", ".yaml") }
+)
+$actionReferences = 0
+foreach ($file in $workflowFiles) {
+    $content = [IO.File]::ReadAllText($file.FullName)
+    foreach ($match in [regex]::Matches($content, '(?m)^\s*uses:\s*([^#\s]+)')) {
+        $reference = $match.Groups[1].Value
+        if ($reference.StartsWith("./") -or $reference.StartsWith("docker://")) { continue }
+        $actionReferences++
+        $separator = $reference.LastIndexOf('@')
+        $selector = if ($separator -ge 0) { $reference.Substring($separator + 1) } else { "" }
+        if ($selector -notmatch '^[0-9a-fA-F]{40}$') {
+            Add-Failure "GitHub Action is not pinned to a full commit SHA in $($file.FullName): $reference"
+        }
+    }
+}
+
 $powershellFiles = @(
     Get-ChildItem -LiteralPath $repoRoot -File -Filter *.ps1
     Get-ChildItem -LiteralPath (Join-Path $repoRoot "test") -Recurse -File -Filter *.ps1 -ErrorAction SilentlyContinue
@@ -149,6 +168,7 @@ $result = [ordered]@{
     json_fixtures = $jsonFixtures.Count
     markdown_files = $markdownFiles.Count
     local_markdown_links = $linkCount
+    workflow_action_references = $actionReferences
     submodules = $submoduleStatus.Count
     failures = @($failures)
 }
