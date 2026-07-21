@@ -167,6 +167,89 @@ namespace {
         recoveryNotices.append(
             QStringLiteral("%1: %2 (snapshot: %3)").arg(sourcePath, reason, snapshotPath));
     }
+
+    NekoGui_ConfigRecovery::SnapshotResult recordEvidence(
+        const QString &category,
+        const QString &schema,
+        const QString &firstRecordedField,
+        const QString &sourcePath,
+        const QByteArray &sourceContent,
+        const QString &reason,
+        bool notifyUser) {
+        auto result = createSnapshot(category, QStringLiteral(".snapshot"), sourcePath, sourceContent);
+        if (!result.succeeded) return result;
+
+        QString relative;
+        if (!relativeSourcePath(sourcePath, &relative, &result.error)) {
+            result.succeeded = false;
+            return result;
+        }
+
+        const auto metadataPath = result.snapshotPath + QStringLiteral(".meta.json");
+        QJsonObject metadata;
+        QJsonArray reasons;
+        QByteArray existingMetadata;
+        if (QFileInfo::exists(metadataPath)) {
+            if (!readExact(metadataPath, &existingMetadata, &result.error)) {
+                result.succeeded = false;
+                return result;
+            }
+            QJsonParseError parseError{};
+            const auto document = QJsonDocument::fromJson(existingMetadata, &parseError);
+            if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
+                result.error = QStringLiteral("Invalid recovery metadata %1: %2")
+                                   .arg(metadataPath, parseError.errorString());
+                result.succeeded = false;
+                return result;
+            }
+            metadata = document.object();
+            if (metadata.value(QStringLiteral("schema")).toString() != schema ||
+                metadata.value(QStringLiteral("source_path")).toString() != relative ||
+                metadata.value(QStringLiteral("sha256")).toString().toLatin1() != result.sha256) {
+                result.error = QStringLiteral("Recovery metadata does not match its snapshot: %1").arg(metadataPath);
+                result.succeeded = false;
+                return result;
+            }
+            reasons = metadata.value(QStringLiteral("reasons")).toArray();
+        } else {
+            metadata.insert(QStringLiteral("schema"), schema);
+            metadata.insert(QStringLiteral("source_path"), relative);
+            metadata.insert(QStringLiteral("sha256"), QString::fromLatin1(result.sha256));
+            metadata.insert(QStringLiteral("size"), static_cast<double>(sourceContent.size()));
+            metadata.insert(
+                firstRecordedField,
+                QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
+            const QFileInfo sourceInfo(sourcePath);
+            if (sourceInfo.exists()) {
+                metadata.insert(
+                    QStringLiteral("source_last_modified_utc"),
+                    sourceInfo.lastModified().toUTC().toString(Qt::ISODateWithMs));
+            }
+        }
+
+        bool reasonExists = false;
+        for (const auto &value: reasons) {
+            if (value.toString() == reason) {
+                reasonExists = true;
+                break;
+            }
+        }
+        if (!reasonExists) {
+            reasons.append(reason);
+            metadata.insert(QStringLiteral("reasons"), reasons);
+            const auto serialized = QJsonDocument(metadata).toJson(QJsonDocument::Indented);
+            const auto metadataWritten = existingMetadata.isEmpty()
+                                           ? writeAtomicExact(metadataPath, serialized, &result.error)
+                                           : replaceAtomicExact(metadataPath, existingMetadata, serialized, &result.error);
+            if (!metadataWritten) {
+                result.succeeded = false;
+                return result;
+            }
+        }
+
+        if (notifyUser) addNotice(sourcePath, reason, result.snapshotPath);
+        return result;
+    }
 }
 
 namespace NekoGui_ConfigRecovery {
@@ -234,79 +317,60 @@ namespace NekoGui_ConfigRecovery {
         const QString &sourcePath,
         const QByteArray &sourceContent,
         const QString &reason) {
-        auto result = createSnapshot(
-            QStringLiteral("quarantine"), QStringLiteral(".snapshot"), sourcePath, sourceContent);
-        if (!result.succeeded) return result;
+        return recordEvidence(
+            QStringLiteral("quarantine"),
+            QStringLiteral("nekoray.recovery.quarantine.v1"),
+            QStringLiteral("first_observed_utc"),
+            sourcePath,
+            sourceContent,
+            reason,
+            true);
+    }
 
-        QString relative;
-        if (!relativeSourcePath(sourcePath, &relative, &result.error)) {
-            result.succeeded = false;
+    SnapshotResult RecordPreDeletion(
+        const QString &sourcePath,
+        const QByteArray &sourceContent,
+        const QString &reason) {
+        return recordEvidence(
+            QStringLiteral("deletions"),
+            QStringLiteral("nekoray.recovery.pre_delete.v1"),
+            QStringLiteral("first_prepared_utc"),
+            sourcePath,
+            sourceContent,
+            reason,
+            false);
+    }
+
+    DeletionPreparation PrepareDeletion(
+        const QString &sourcePath,
+        const QByteArray &loadedContent,
+        const QString &reason) {
+        DeletionPreparation result;
+        if (!QFileInfo::exists(sourcePath)) {
+            result.error = QStringLiteral("Refusing to delete a config whose source file is missing: %1")
+                               .arg(sourcePath);
+            return result;
+        }
+        if (loadedContent.isEmpty()) {
+            result.error = QStringLiteral("Refusing to delete a config that was not loaded by this store: %1")
+                               .arg(sourcePath);
             return result;
         }
 
-        const auto metadataPath = result.snapshotPath + QStringLiteral(".meta.json");
-        QJsonObject metadata;
-        QJsonArray reasons;
-        QByteArray existingMetadata;
-        if (QFileInfo::exists(metadataPath)) {
-            if (!readExact(metadataPath, &existingMetadata, &result.error)) {
-                result.succeeded = false;
-                return result;
-            }
-            QJsonParseError parseError{};
-            const auto document = QJsonDocument::fromJson(existingMetadata, &parseError);
-            if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
-                result.error = QStringLiteral("Invalid recovery metadata %1: %2")
-                                   .arg(metadataPath, parseError.errorString());
-                result.succeeded = false;
-                return result;
-            }
-            metadata = document.object();
-            if (metadata.value(QStringLiteral("schema")).toString() != "nekoray.recovery.quarantine.v1" ||
-                metadata.value(QStringLiteral("source_path")).toString() != relative ||
-                metadata.value(QStringLiteral("sha256")).toString().toLatin1() != result.sha256) {
-                result.error = QStringLiteral("Recovery metadata does not match its snapshot: %1").arg(metadataPath);
-                result.succeeded = false;
-                return result;
-            }
-            reasons = metadata.value(QStringLiteral("reasons")).toArray();
-        } else {
-            metadata.insert(QStringLiteral("schema"), QStringLiteral("nekoray.recovery.quarantine.v1"));
-            metadata.insert(QStringLiteral("source_path"), relative);
-            metadata.insert(QStringLiteral("sha256"), QString::fromLatin1(result.sha256));
-            metadata.insert(QStringLiteral("size"), static_cast<double>(sourceContent.size()));
-            metadata.insert(
-                QStringLiteral("first_observed_utc"),
-                QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
-            const QFileInfo sourceInfo(sourcePath);
-            if (sourceInfo.exists()) {
-                metadata.insert(
-                    QStringLiteral("source_last_modified_utc"),
-                    sourceInfo.lastModified().toUTC().toString(Qt::ISODateWithMs));
-            }
+        QString verificationError;
+        if (!CurrentContentMatches(sourcePath, loadedContent, &verificationError)) {
+            result.error = QStringLiteral("Refusing to delete a config changed outside this store: %1")
+                               .arg(verificationError);
+            return result;
         }
-
-        bool reasonExists = false;
-        for (const auto &value: reasons) {
-            if (value.toString() == reason) {
-                reasonExists = true;
-                break;
-            }
+        const auto deletion = RecordPreDeletion(sourcePath, loadedContent, reason);
+        if (!deletion.succeeded) {
+            result.error = QStringLiteral("Verified pre-deletion snapshot failed for %1: %2")
+                               .arg(sourcePath, deletion.error);
+            return result;
         }
-        if (!reasonExists) {
-            reasons.append(reason);
-            metadata.insert(QStringLiteral("reasons"), reasons);
-            const auto serialized = QJsonDocument(metadata).toJson(QJsonDocument::Indented);
-            const auto metadataWritten = existingMetadata.isEmpty()
-                                           ? writeAtomicExact(metadataPath, serialized, &result.error)
-                                           : replaceAtomicExact(metadataPath, existingMetadata, serialized, &result.error);
-            if (!metadataWritten) {
-                result.succeeded = false;
-                return result;
-            }
-        }
-
-        addNotice(sourcePath, reason, result.snapshotPath);
+        result.snapshotPath = deletion.snapshotPath;
+        result.ready = true;
         return result;
     }
 

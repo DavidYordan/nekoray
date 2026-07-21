@@ -112,6 +112,55 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    const auto deletion = NekoGui_ConfigRecovery::PrepareDeletion(
+        sourcePath, sourceContent, QStringLiteral("explicit test deletion"));
+    if (!require(deletion.ready, deletion.error) ||
+        !require(readFile(deletion.snapshotPath) == sourceContent,
+                 QStringLiteral("deletion snapshot content mismatch")) ||
+        !require(readFile(sourcePath) == sourceContent,
+                 QStringLiteral("preparation unexpectedly removed the source"))) {
+        return 1;
+    }
+    const auto deletionMetadata = QJsonDocument::fromJson(
+        readFile(deletion.snapshotPath + QStringLiteral(".meta.json"))).object();
+    if (!require(deletionMetadata.value(QStringLiteral("schema")).toString() ==
+                     "nekoray.recovery.pre_delete.v1",
+                 QStringLiteral("deletion schema mismatch")) ||
+        !require(!deletionMetadata.value(QStringLiteral("first_prepared_utc")).toString().isEmpty(),
+                 QStringLiteral("deletion preparation time missing")) ||
+        !require(deletionMetadata.value(QStringLiteral("reasons")).toArray().first().toString() ==
+                     "explicit test deletion",
+                 QStringLiteral("deletion reason mismatch"))) {
+        return 1;
+    }
+
+    const auto repeatedDeletion = NekoGui_ConfigRecovery::PrepareDeletion(
+        sourcePath, sourceContent, QStringLiteral("second deletion reason"));
+    const auto repeatedDeletionMetadata = QJsonDocument::fromJson(
+        readFile(deletion.snapshotPath + QStringLiteral(".meta.json"))).object();
+    if (!require(repeatedDeletion.ready, repeatedDeletion.error) ||
+        !require(repeatedDeletion.snapshotPath == deletion.snapshotPath,
+                 QStringLiteral("content-addressed deletion path changed")) ||
+        !require(repeatedDeletionMetadata.value(QStringLiteral("reasons")).toArray().size() == 2,
+                 QStringLiteral("deletion reasons were not merged"))) {
+        return 1;
+    }
+
+    const auto missingDeletion = NekoGui_ConfigRecovery::PrepareDeletion(
+        QStringLiteral("groups/missing.json"), sourceContent, QStringLiteral("must be refused"));
+    if (!require(!missingDeletion.ready, QStringLiteral("missing deletion source was accepted"))) return 1;
+
+    if (!require(writeFile(sourcePath, QByteArrayLiteral("changed before deletion")),
+                 QStringLiteral("cannot create deletion race fixture"))) {
+        return 1;
+    }
+    const auto deletionRace = NekoGui_ConfigRecovery::PrepareDeletion(
+        sourcePath, sourceContent, QStringLiteral("must be refused"));
+    if (!require(!deletionRace.ready, QStringLiteral("externally changed deletion source was accepted"))) {
+        return 1;
+    }
+    if (!require(writeFile(sourcePath, sourceContent), QStringLiteral("cannot restore deletion fixture"))) return 1;
+
     const auto outside = NekoGui_ConfigRecovery::CreateBackupBeforeOverwrite(
         labDir.absoluteFilePath(QStringLiteral("outside.json")), sourceContent);
     if (!require(!outside.succeeded, QStringLiteral("outside-config snapshot was not rejected"))) return 1;

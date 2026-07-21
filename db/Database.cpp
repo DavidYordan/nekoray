@@ -332,10 +332,49 @@ namespace NekoGui {
         return true;
     }
 
-    bool ProfileManager::DeleteProfile(int id) {
-        if (id < 0) return false;
-        if (dataStore->started_id == id) return false;
-        if (profiles.find(id) == profiles.end()) return false;
+    bool ProfileManager::DeleteProfile(int id, const QString &reason, QString *error) {
+        if (error != nullptr) error->clear();
+        auto fail = [&](const QString &message) {
+            if (error != nullptr) *error = message;
+            qCritical() << message;
+            return false;
+        };
+
+        if (id < 0) return fail(QStringLiteral("Profile deletion requires a non-negative id."));
+        if (dataStore->started_id == id) {
+            return fail(QStringLiteral("Profile %1 is running and cannot be deleted.").arg(id));
+        }
+        const auto profileIt = profiles.find(id);
+        if (profileIt == profiles.end()) {
+            return fail(QStringLiteral("Profile %1 is not loaded and cannot be deleted.").arg(id));
+        }
+        const auto profile = profileIt->second;
+
+        for (const auto &[groupId, group]: groups) {
+            if (group->front_proxy_id == id) {
+                return fail(
+                    QStringLiteral("Profile %1 is the front proxy of group %2; clear that reference explicitly first.")
+                        .arg(id)
+                        .arg(groupId));
+            }
+        }
+        for (const auto &[otherId, other]: profiles) {
+            if (otherId == id || other->type != "chain" || other->bean == nullptr) continue;
+            if (other->ChainBean()->list.contains(id)) {
+                return fail(
+                    QStringLiteral("Profile %1 is referenced by chain profile %2; edit the chain explicitly first.")
+                        .arg(id)
+                        .arg(otherId));
+            }
+        }
+
+        const auto profilePath = profile->fn;
+        const auto deletionReason = reason.trimmed().isEmpty()
+                                      ? QStringLiteral("Profile deletion requested by the application.")
+                                      : reason.trimmed();
+        const auto deletion = NekoGui_ConfigRecovery::PrepareDeletion(
+            profilePath, profile->last_save_content, deletionReason);
+        if (!deletion.ready) return fail(deletion.error);
 
         const auto previousAuxPorts = dataStore->aux_profile_ports;
         const auto previousAuxEntries = dataStore->aux_profile_port_entries;
@@ -345,14 +384,38 @@ namespace NekoGui {
             if (!dataStore->last_save_succeeded) {
                 dataStore->aux_profile_ports = previousAuxPorts;
                 dataStore->aux_profile_port_entries = previousAuxEntries;
-                qCritical() << "Profile deletion aborted because the auxiliary mapping could not be saved:" << id;
-                return false;
+                return fail(
+                    QStringLiteral("Profile %1 deletion aborted because its auxiliary mapping could not be saved.")
+                        .arg(id));
             }
         }
 
-        const auto profilePath = QStringLiteral("profiles/%1.json").arg(id);
-        if (QFile::exists(profilePath) && !QFile::remove(profilePath)) {
-            qCritical() << "Profile deletion could not remove its file; the profile remains loaded:" << profilePath;
+        const auto group = GetGroup(profile->gid);
+        const auto previousGroupOrder = group != nullptr ? group->order : QList<int>{};
+        const auto removedFromGroupOrder = group != nullptr && group->order.removeAll(id) > 0;
+        if (removedFromGroupOrder) {
+            group->Save();
+            if (!group->last_save_succeeded) {
+                group->order = previousGroupOrder;
+                if (removedAuxiliaryMapping) {
+                    dataStore->aux_profile_ports = previousAuxPorts;
+                    dataStore->aux_profile_port_entries = previousAuxEntries;
+                    dataStore->Save();
+                    if (!dataStore->last_save_succeeded) {
+                        qCritical() << "Could not roll back the persisted auxiliary mapping after group order save failed:"
+                                    << id;
+                    }
+                }
+                return fail(
+                    QStringLiteral("Profile %1 deletion aborted because its group order could not be saved.")
+                        .arg(id));
+            }
+        }
+
+        QString verificationError;
+        const auto sourceUnchanged = NekoGui_ConfigRecovery::CurrentContentMatches(
+            profilePath, profile->last_save_content, &verificationError);
+        if (!sourceUnchanged || !QFile::remove(profilePath)) {
             if (removedAuxiliaryMapping) {
                 dataStore->aux_profile_ports = previousAuxPorts;
                 dataStore->aux_profile_port_entries = previousAuxEntries;
@@ -361,10 +424,23 @@ namespace NekoGui {
                     qCritical() << "Could not roll back the persisted auxiliary mapping after profile file deletion failed:" << id;
                 }
             }
-            return false;
+            if (removedFromGroupOrder) {
+                group->order = previousGroupOrder;
+                group->Save();
+                if (!group->last_save_succeeded) {
+                    qCritical() << "Could not roll back group order after profile file deletion failed:" << id;
+                }
+            }
+            return fail(
+                sourceUnchanged
+                    ? QStringLiteral("Profile %1 file could not be removed; its loaded data was preserved.").arg(id)
+                    : QStringLiteral("Profile %1 changed before deletion and was preserved: %2")
+                          .arg(id)
+                          .arg(verificationError));
         }
         profiles.erase(id);
         profilesIdOrder.removeAll(id);
+        qInfo() << "Profile deletion recovery snapshot:" << deletion.snapshotPath;
         return true;
     }
 
@@ -487,19 +563,102 @@ namespace NekoGui {
         return true;
     }
 
-    void ProfileManager::DeleteGroup(int gid) {
-        if (groups.size() <= 1) return;
+    bool ProfileManager::DeleteGroup(int gid, const QString &reason, QString *error) {
+        if (error != nullptr) error->clear();
+        auto fail = [&](const QString &message) {
+            if (error != nullptr) *error = message;
+            qCritical() << message;
+            return false;
+        };
+
+        if (groups.size() <= 1) return fail(QStringLiteral("The last remaining group cannot be deleted."));
+        const auto groupIt = groups.find(gid);
+        if (groupIt == groups.end()) {
+            return fail(QStringLiteral("Group %1 is not loaded and cannot be deleted.").arg(gid));
+        }
+
         QList<int> toDelete;
         for (const auto &[id, profile]: profiles) {
             if (profile->gid == gid) toDelete += id; // map访问中，不能操作
         }
-        for (const auto &id: toDelete) {
-            DeleteProfile(id);
+        if (!toDelete.isEmpty()) {
+            return fail(
+                QStringLiteral(
+                    "Group %1 still contains %2 profile(s). Batch group deletion is blocked until the "
+                    "multi-file transaction is implemented; delete or move the profiles explicitly first.")
+                    .arg(gid)
+                    .arg(toDelete.size()));
         }
+
+        const auto group = groupIt->second;
+        const auto groupPath = group->fn;
+        const auto deletionReason = reason.trimmed().isEmpty()
+                                      ? QStringLiteral("Empty group deletion requested by the application.")
+                                      : reason.trimmed();
+        const auto deletion = NekoGui_ConfigRecovery::PrepareDeletion(
+            groupPath, group->last_save_content, deletionReason);
+        if (!deletion.ready) return fail(deletion.error);
+
+        const auto previousOrder = groupsTabOrder;
+        groupsTabOrder.removeAll(gid);
+        JsonStore::Save();
+        if (!last_save_succeeded) {
+            groupsTabOrder = previousOrder;
+            return fail(QStringLiteral("Group %1 deletion aborted because group order could not be saved.").arg(gid));
+        }
+
+        const auto previousCurrentGroup = dataStore->current_group;
+        const bool changesCurrentGroup = previousCurrentGroup == gid;
+        if (changesCurrentGroup) {
+            for (const auto &[candidateId, candidate]: groups) {
+                (void) candidate;
+                if (candidateId != gid) {
+                    dataStore->current_group = candidateId;
+                    break;
+                }
+            }
+            dataStore->Save();
+            if (!dataStore->last_save_succeeded) {
+                dataStore->current_group = previousCurrentGroup;
+                groupsTabOrder = previousOrder;
+                JsonStore::Save();
+                if (!last_save_succeeded) {
+                    qCritical() << "Could not roll back group order after current-group save failed:" << gid;
+                }
+                return fail(
+                    QStringLiteral("Group %1 deletion aborted because the replacement current group could not be saved.")
+                        .arg(gid));
+            }
+        }
+
+        QString verificationError;
+        const auto sourceUnchanged = NekoGui_ConfigRecovery::CurrentContentMatches(
+            groupPath, group->last_save_content, &verificationError);
+        if (!sourceUnchanged || !QFile::remove(groupPath)) {
+            if (changesCurrentGroup) {
+                dataStore->current_group = previousCurrentGroup;
+                dataStore->Save();
+                if (!dataStore->last_save_succeeded) {
+                    qCritical() << "Could not roll back current group after group file deletion failed:" << gid;
+                }
+            }
+            groupsTabOrder = previousOrder;
+            JsonStore::Save();
+            if (!last_save_succeeded) {
+                qCritical() << "Could not roll back group order after group file deletion failed:" << gid;
+            }
+            return fail(
+                sourceUnchanged
+                    ? QStringLiteral("Group %1 file could not be removed; its loaded data was preserved.").arg(gid)
+                    : QStringLiteral("Group %1 changed before deletion and was preserved: %2")
+                          .arg(gid)
+                          .arg(verificationError));
+        }
+
         groups.erase(gid);
         groupsIdOrder.removeAll(gid);
-        groupsTabOrder.removeAll(gid);
-        QFile(QStringLiteral("groups/%1.json").arg(gid)).remove();
+        qInfo() << "Group deletion recovery snapshot:" << deletion.snapshotPath;
+        return true;
     }
 
     std::shared_ptr<Group> ProfileManager::GetGroup(int id) {

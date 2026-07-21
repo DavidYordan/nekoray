@@ -786,14 +786,35 @@ namespace NekoGui_sub {
         // old profiles. Roll back new insertions if one is rejected before the
         // group commit begins.
         QList<std::shared_ptr<NekoGui::ProxyEntity>> committed;
+        bool rollbackIncomplete = false;
+        auto rollbackCommitted = [&](const QString &reason) {
+            bool complete = true;
+            for (const auto &added: committed) {
+                QString deletionError;
+                if (!NekoGui::profileManager->DeleteProfile(added->id, reason, &deletionError)) {
+                    complete = false;
+                    qCritical() << "Subscription rollback preserved profile" << added->id << deletionError;
+                }
+            }
+            if (createdGroup) {
+                QString deletionError;
+                if (!NekoGui::profileManager->DeleteGroup(_sub_gid, reason, &deletionError)) {
+                    complete = false;
+                    qCritical() << "Subscription rollback preserved group" << _sub_gid << deletionError;
+                }
+            }
+            if (!complete) {
+                rollbackIncomplete = true;
+                MW_show_log("<<<<<<<< " + QObject::tr(
+                    "Subscription rollback was incomplete; preserved files remain loaded for manual review."));
+            }
+            return complete;
+        };
         for (const auto &ent: rawUpdater->updated_order) {
             if (!NekoGui::profileManager->AddProfile(ent, rawUpdater->gid_add_to)) {
-                for (const auto &added: committed) {
-                    NekoGui::profileManager->DeleteProfile(added->id);
-                }
-                if (createdGroup) NekoGui::profileManager->DeleteGroup(_sub_gid);
+                rollbackCommitted(QStringLiteral("Rollback of an uncommitted subscription update."));
                 MW_show_log("<<<<<<<< " + QObject::tr("Subscription update aborted: failed to add all staged profiles."));
-                return createdGroup ? -1 : _sub_gid;
+                return createdGroup && !rollbackIncomplete ? -1 : _sub_gid;
             }
             committed += ent;
         }
@@ -824,16 +845,21 @@ namespace NekoGui_sub {
                 if (group->last_save_succeeded) return true;
 
                 groupSnapshot.Restore(group);
-                for (const auto &added: committed) {
-                    NekoGui::profileManager->DeleteProfile(added->id);
-                }
-                if (createdGroup) NekoGui::profileManager->DeleteGroup(_sub_gid);
+                rollbackCommitted(QStringLiteral("Rollback after subscription group metadata save failed."));
                 MW_show_log("<<<<<<<< " + QObject::tr(
                     "Subscription update aborted: group metadata could not be committed; old profiles were preserved."));
                 return false;
             };
 
             QString change_text;
+            int deletionFailures = 0;
+            auto deleteOldProfile = [&](const std::shared_ptr<NekoGui::ProxyEntity> &profile,
+                                        const QString &reason) {
+                QString deletionError;
+                if (NekoGui::profileManager->DeleteProfile(profile->id, reason, &deletionError)) return;
+                deletionFailures++;
+                qCritical() << "Subscription cleanup preserved profile" << profile->id << deletionError;
+            };
 
             if (NekoGui::dataStore->sub_clear) {
                 group->order.clear();
@@ -845,7 +871,8 @@ namespace NekoGui_sub {
 
                 MW_show_log(QObject::tr("Clearing servers..."));
                 for (const auto &profile: in) {
-                    NekoGui::profileManager->DeleteProfile(profile->id);
+                    deleteOldProfile(
+                        profile, QStringLiteral("Subscription clear removed an old profile."));
                 }
             } else {
                 // find and delete not updated profile by ProfileFilter
@@ -880,7 +907,8 @@ namespace NekoGui_sub {
                 // cleanup
                 for (const auto &ent: out_all) {
                     if (!group->order.contains(ent->id)) {
-                        NekoGui::profileManager->DeleteProfile(ent->id);
+                        deleteOldProfile(
+                            ent, QStringLiteral("Subscription refresh removed a superseded profile."));
                     }
                 }
 
@@ -890,6 +918,12 @@ namespace NekoGui_sub {
                                          .arg(only_in.length())
                                          .arg(notice_deleted);
                 if (only_out.length() + only_in.length() == 0) change_text = QObject::tr("Nothing");
+            }
+
+            if (deletionFailures > 0) {
+                change_text += "\n" + QObject::tr(
+                    "%1 old profile(s) could not be deleted and were preserved for manual review.")
+                                         .arg(deletionFailures);
             }
 
             MW_show_log("<<<<<<<< " + QObject::tr("Change of %1:").arg(group->name) + "\n" + change_text);

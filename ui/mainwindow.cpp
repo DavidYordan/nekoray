@@ -1364,7 +1364,8 @@ void MainWindow::on_menu_delete_triggered() {
         bool deleteFailed = false;
         for (const auto &ent: ents) {
             const auto wasAuxiliary = NekoGui::dataStore->aux_profile_ports.contains(ent->id);
-            if (NekoGui::profileManager->DeleteProfile(ent->id)) {
+            if (NekoGui::profileManager->DeleteProfile(
+                    ent->id, QStringLiteral("Explicit profile deletion confirmed in GUI."))) {
                 removedAuxiliary |= wasAuxiliary;
             } else {
                 deleteFailed = true;
@@ -1749,7 +1750,8 @@ void MainWindow::on_menu_delete_repeat_triggered() {
         bool deleteFailed = false;
         for (const auto &ent: out_del) {
             const auto wasAuxiliary = NekoGui::dataStore->aux_profile_ports.contains(ent->id);
-            if (NekoGui::profileManager->DeleteProfile(ent->id)) {
+            if (NekoGui::profileManager->DeleteProfile(
+                    ent->id, QStringLiteral("Explicit duplicate-profile deletion confirmed in GUI."))) {
                 removedAuxiliary |= wasAuxiliary;
             } else {
                 deleteFailed = true;
@@ -1805,7 +1807,8 @@ void MainWindow::on_menu_remove_unavailable_triggered() {
         bool deleteFailed = false;
         for (const auto &ent: out_del) {
             const auto wasAuxiliary = NekoGui::dataStore->aux_profile_ports.contains(ent->id);
-            if (NekoGui::profileManager->DeleteProfile(ent->id)) {
+            if (NekoGui::profileManager->DeleteProfile(
+                    ent->id, QStringLiteral("Explicit unavailable-profile deletion confirmed in GUI."))) {
                 removedAuxiliary |= wasAuxiliary;
             } else {
                 deleteFailed = true;

@@ -974,6 +974,14 @@ This needs to be run NekoBox with administrator privileges.</source>
         <translation>删除 %1 ?</translation>
     </message>
     <message>
+        <source>Group deletion failed</source>
+        <translation>删除分组失败</translation>
+    </message>
+    <message>
+        <source>The group was preserved. %1</source>
+        <translation>分组已保留。%1</translation>
+    </message>
+    <message>
         <source>Archive</source>
         <translation>归档</translation>
     </message>
@@ -1488,6 +1496,14 @@ Split by line.</source>
 </context>
 <context>
     <name>QObject</name>
+    <message>
+        <source>Subscription rollback was incomplete; preserved files remain loaded for manual review.</source>
+        <translation>订阅回滚未能完整完成；已保留的文件仍保持加载状态，请手动检查。</translation>
+    </message>
+    <message>
+        <source>%1 old profile(s) could not be deleted and were preserved for manual review.</source>
+        <translation>有 %1 个旧配置无法删除，现已保留以供手动检查。</translation>
+    </message>
     <message>
         <source>As link</source>
         <translation>作为链接</translation>

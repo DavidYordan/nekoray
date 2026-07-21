@@ -65,7 +65,7 @@ ctest --test-dir build-package-windows64 --output-on-failure
 
 直接运行增量 CMake 时必须让 MinGW `bin` 位于 `PATH`。否则 `cc1plus.exe` 可能因找不到运行库以 `0xC0000135` 退出，Ninja 只显示无编译诊断的 `code=1`；这不是源码编译错误。完整打包脚本会设置该环境。
 
-CTest 当前包含 1 项 `config_recovery_test`，验证备份/隔离基础设施；这不代表 ConfigBuilder、导入、GUI、TUN/WFP 或系统代理已有 C++ 自动验收。发布前还必须完成 [测试矩阵](../testing/TEST_MATRIX.md)。
+CTest 当前包含 1 项 `config_recovery_test`，验证覆盖备份、隔离证据与删除前快照 helper；这不代表 ProfileManager 多文件事务、ConfigBuilder、导入、GUI、TUN/WFP 或系统代理已有 C++ 自动验收。发布前还必须完成 [测试矩阵](../testing/TEST_MATRIX.md)。
 
 截至 2026-07-20，接管工作只重建并验证了 `build-package-windows64/` 中的 GUI/core；`deployment/windows64/` 仍是 2026-07-18 的旧产物。只有不带 `-SkipGoBuild`/`-SkipGuiBuild` 的完整打包成功，且 deployment/zip 的版本、hash 与 manifest 复核一致后，才能把 deployment 当作候选交付物；当前两处产物不得混用。
 

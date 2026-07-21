@@ -25,6 +25,12 @@ namespace NekoGui_ConfigRecovery {
         QString error;
     };
 
+    struct DeletionPreparation {
+        bool ready = false;
+        QString snapshotPath;
+        QString error;
+    };
+
     [[nodiscard]] OverwritePreparation PrepareOverwrite(
         const QString &sourcePath,
         const QByteArray &loadedContent,
@@ -42,6 +48,16 @@ namespace NekoGui_ConfigRecovery {
     [[nodiscard]] SnapshotResult RecordQuarantine(
         const QString &sourcePath,
         const QByteArray &sourceContent,
+        const QString &reason);
+
+    [[nodiscard]] SnapshotResult RecordPreDeletion(
+        const QString &sourcePath,
+        const QByteArray &sourceContent,
+        const QString &reason);
+
+    [[nodiscard]] DeletionPreparation PrepareDeletion(
+        const QString &sourcePath,
+        const QByteArray &loadedContent,
         const QString &reason);
 
     [[nodiscard]] QString RecoveryRootPath();

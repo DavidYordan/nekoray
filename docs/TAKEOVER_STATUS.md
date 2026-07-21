@@ -1,8 +1,8 @@
 # 接管状态
 
 状态：Alpha / 不可发布
-基线：NekoRay 4.0.1 `adef6cd` → `96f1166` + 未提交接管整改
-最后更新：2026-07-20
+基线：NekoRay 4.0.1 `adef6cd` → `96f1166`，现行接管分支 `agent/takeover-remediation`
+最后更新：2026-07-21
 
 ## 结论先行
 
@@ -54,8 +54,8 @@ OpenWrt `192.168.1.7` 使用同版本 `sing-box 1.13.12-routefluent-anytls-clien
 - 生成配置已移除 local fallback/probe；DoH endpoint 仍是域名且没有可审计 bootstrap 时明确构建失败，不再偷用 `local-system`。
 - 顶层 custom 合并前会捕获每个受管 Mixed 的完整生成 listener 和沿 detour 可达的全部 outbound 对象；合并后要求这些对象逐项相同、各 tag/port 唯一且精确无条件 route 绑定仍在所有可能改投/提前 resolve 规则之前。profile 级 `custom_outbound` 可在快照前修改普通字段，但不得新增或改变 detour。provider resolver 的 outbound → strict group → 精确 DoH server 也按生成对象锁定，并拒绝 RouteFluent fallback/local-only 字段。
 - 辅助端口 map 不再因 stop/restart/crash/exit 或 UI 刷新被清空；字段类型错误、非字符串、损坏或重复项会使既有主配置原件保持不变并中止启动。显式启停/删除映射只有在原子保存成功后才继续 reload，失败会回滚内存。
-- 配置文件改用禁止 direct-write fallback 的 `QSaveFile` 原子替换；损坏/未知 profile 原件保留且 ID 不复用，危险 reorder 已禁止。
-- 订阅刷新恢复为 parse/stage-before-mutate；解析失败、空响应、坏结构与零支持节点不写入。
+- 配置文件改用禁止 direct-write fallback 的 `QSaveFile` 原子替换；覆盖前建立可验证备份，损坏/未知 profile 原件保留并生成 quarantine，且 ID 不复用，危险 reorder 已禁止。单 profile 与空 group 显式删除前也会建立可验证快照；外部修改、引用关系或快照失败时拒绝删除，非空 group 的旧半删除路径已整体禁用。
+- 订阅刷新恢复为 parse/stage-before-mutate；解析失败、空响应、坏结构与零支持节点不写入。清理/回滚删除失败会保留对象并明确记录，但成功候选仍未形成跨文件崩溃一致事务。
 - Go helper 在无有效 sing-box instance 时不再回落系统 TCP/UDP/HTTP 网络。
 - Windows legacy 外置 TUN 因无精确 PID/句柄且曾按映像名批量 `taskkill`，现已安全禁用；配置数据保留，默认内部 TUN不受此项删除。
 - Windows 内部 TUN 生成配置现强制 `strict_route=true` 并同时覆盖 IPv4/IPv6；这只收紧活动期，仍不能覆盖 worker/GUI 消失窗口。
@@ -71,25 +71,25 @@ OpenWrt `192.168.1.7` 使用同版本 `sing-box 1.13.12-routefluent-anytls-clien
 - 普通 GUI 通过 localhost、每次启动随机令牌的 gRPC 控制 core。独立 `nekobox_core run/check` 是构建与隔离测试显式使用的高级入口，可直接读取 sing-box 配置；Go 层尚未重复 C++ 的产品策略校验，属于需要补齐的纵深防御边界，而不是普通 GUI 可随意绕过 guard 的证据。
 - 本轮 GUI/core 只重建到 `build-package-windows64/` 并用于接管验证；`deployment/windows64/` 仍是 2026-07-18 的旧产物，未完成正式全量打包，不可交付。
 
-## 2026-07-20 最终无侵入回归快照
+## 2026-07-21 最终无侵入回归快照
 
 - 当前源码的 Windows GUI 增量构建成功；两个 Go 模块普通测试通过，本轮较早也用仓库 MinGW、`CGO_ENABLED=1` 通过两个模块的 race 测试，随后已重建 `build-package-windows64/nekobox_core.exe`。
-- 本轮构建目录快照：`nekobox.exe` SHA-256 `1461350861798D076D39A5BF0A5AD195E4943202C6C948495E6A859D01CD75B1`；`nekobox_core.exe` SHA-256 `D2D532E72CEE65791D5A098D688FB6C9A9F0133C2C79B847070627E595656E92`。这只是接管审计证据，不是 release manifest。
+- 本轮构建目录快照：`nekobox.exe` SHA-256 `590EE605D2817FE303A3D6B5B89359124C11D80A168D6CDAF1744EFC5D83780F`；`nekobox_core.exe` SHA-256 `D2D532E72CEE65791D5A098D688FB6C9A9F0133C2C79B847070627E595656E92`。这只是接管审计证据，不是 release manifest。
 - `test_final_config_guards.ps1` 10/10，`test_config_preservation.ps1` 7/7，`config_recovery_test` 1/1，OpenWrt helper Python 单测 19/19。
 - 本地 Mixed fixture 7/7；额外 listener、系统代理、禁用日志和 loopback origin 清理均保持预期。
 - runtime connectivity 的 expected 204 场景通过，HTTP 与 SOCKS5h 均为 204；expected 200 场景按预期报告 2 项 mismatch 并返回失败。系统代理、fixture 端口和 origin 清理均通过。
-- 本轮已执行 `ctest --test-dir build-package-windows64 --output-on-failure`；命令退出 0，但明确输出 `No tests were found!!!`，即实际执行 0 项测试，不能写成 C++ 测试通过。以上证据均不覆盖 Windows TUN/WFP/退出/切线，也不改变 Alpha/不可发布判断。
+- 本轮已执行 `ctest --test-dir build-package-windows64 --output-on-failure`，`config_recovery_test` 为 1/1；它覆盖恢复 helper，不覆盖 ProfileManager 多文件事务或 ConfigBuilder golden。远端 Windows quality CI 已通过。以上证据均不覆盖 Windows TUN/WFP/退出/切线，也不改变 Alpha/不可发布判断。
 
 ## 仍然阻断发布
 
-1. external-core/Naive 与误删格式兼容尚未恢复；未知数据已保留并生成 quarantine，单文件覆盖已有备份，但恢复 UI 与多文件事务仍缺。
-2. 单文件原子保存已落地，订阅也已先 stage；跨 profile/group 的提交仍不是完整事务，缺故障注入。
+1. external-core/Naive 与误删格式兼容尚未恢复；未知数据已保留并生成 quarantine，覆盖和显式删除已有恢复证据，但恢复 UI 与多文件事务仍缺，非空 group 删除因此暂时拒绝。
+2. 单文件原子保存与删除前快照已落地，订阅也已先 stage 并报告删除失败；跨 profile/group/主配置的提交仍不是完整事务，缺故障注入。
 3. 最终 Mixed、strict resolver 与 TUN/系统代理副作用不变量校验已落地，并新增 `test/test_final_config_guards.ps1` 覆盖部分导出拒绝分支；完整 C++ 配置生成 golden/负向回归仍未完成，不能只凭脚本存在判定通过。
 4. AnyTLS + Trojan detour 仍失败。
 5. 当前 Go wrapper 没有原地热重载；内部 TUN 与单个 Box 同生共死，WFP kill-switch/持久 Runtime Service 尚不存在。
 6. Windows 下主+多辅助真实不同出口、TUN 切线、worker/GUI 崩溃窗口与 IPv4/IPv6/DNS 防泄漏尚未验收；当前 guard 仍违反“开 TUN 时可切线”。
 7. 精准系统代理 broker 尚未实现，产品内切换暂禁；旧 WinINet helper 不得重新接回 UI。
 8. Go core 仍缺产品策略的第二层校验，以及统一保护 `Start`/`Stop`/stats/全局 instance 的 lifecycle mutex/generation；localhost 随机令牌只保护 RPC 调用，不解决配置授权和并发状态机。
-9. Windows-only CI、干净 Qt/MinGW/C++ 依赖工具链和真实交付二进制 manifest 尚未建立；libneko 已锁定为仓内子模块，当前 `deployment/windows64/` 仍是旧产物。
+9. Windows-only CI 已建立并通过，但干净 Qt/MinGW/C++ 依赖工具链和真实交付二进制 manifest 尚未完成；libneko 已锁定为仓内子模块，当前 `deployment/windows64/` 仍是旧产物。
 
 本分支不得部署到 `D:\Program Files\nekoray`。后续顺序见 [推进路线](ROADMAP.md)。
