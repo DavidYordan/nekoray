@@ -1,5 +1,10 @@
 # MultiMapper 精简 YAML 对接契约与实现说明
 
+> 状态：历史评估，不是已接受的输出契约。
+> 归档日期：2026-07-20
+> 替代文档：[产品边界](../../PRODUCT.md)、[最小分支 ADR](../../architecture/decisions/0002-minimal-fork-boundary.md) 与 [范围偏离审计](../audits/2026-07-20-scope-deviation-audit.md)。
+> 已知错误：正文把 MultiMapper 导出当作应继续演进的产品功能；该结论已撤销。
+
 日期：2026-07-18
 
 本文记录 Nekoray 到 MultiMapper 的剪贴板导出契约。2026-07-18 用户已确认：主格式从独立 JSON 包切换为“精简 Clash-compatible YAML + `x-nekoray` 扩展元数据”。当前代码路径为 `sub/MultiMapperExport.cpp::BuildMultiMapperExport()`；启用 `yaml-cpp` 时输出 YAML，禁用 YAML 构建时保留旧 JSON fallback。

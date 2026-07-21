@@ -1,12 +1,18 @@
 # MultiMapper 导出配合与多线路运行整改调查
 
+> 状态：历史实现计划，不能作为当前 MultiMapper 契约。
+> 归档日期：2026-07-20
+> 替代文档：[产品边界](../../PRODUCT.md)、[最小分支 ADR](../../architecture/decisions/0002-minimal-fork-boundary.md) 与 [范围偏离审计](../audits/2026-07-20-scope-deviation-audit.md)。
+> 已知错误：MultiMapper 产品化、自动恢复网络模式和以 guard 代替 TUN 切换均已被推翻；正文不代表当前需求或验收结果。
+> 其中启动时自动恢复系统代理/TUN、要求先关闭 TUN 或把死端口黑洞视为完成的段落，均已由 ADR 0004、0007、0008 推翻。
+
 日期：2026-07-16
 
 ## 调查范围
 
 本次只做调查和规划，不改业务代码。已阅读：
 
-- 本项目 `docs/ANYTLS_CLASH_IMPORT_AND_RESOLVE_REWORK_2026-07-16.md`。
+- 同目录历史计划 `2026-07-16-anytls-clash-import-rework.md`。
 - 本项目导入、导出、启动、系统代理、TUN、配置生成相关源码：
   - `sub/GroupUpdater.cpp`
   - `fmt/AbstractBean.cpp`
@@ -17,14 +23,14 @@
   - `db/ConfigBuilder.cpp`
   - `main/NekoGui_DataStore.hpp`
 - MultiMapper 当前顶层文档：
-  - `D:\python\MultiMapper\docs\README.md`
-  - `D:\python\MultiMapper\docs\HANDOFF_FOR_DEVELOPERS_2026-07-14.md`
-  - `D:\python\MultiMapper\docs\CURRENT_RUNTIME_STATE.md`
+  - `<multimapper-repo>\docs\README.md`
+  - `<multimapper-repo>\docs\HANDOFF_FOR_DEVELOPERS_2026-07-14.md`
+  - `<multimapper-repo>\docs\CURRENT_RUNTIME_STATE.md`
 - MultiMapper 相关源码：
-  - `D:\python\MultiMapper\base_tab.py`
-  - `D:\python\MultiMapper\routing_tab.py`
-  - `D:\python\MultiMapper\singbox_config.py`
-  - `D:\python\MultiMapper\anytls_client.py`
+  - `<multimapper-repo>\base_tab.py`
+  - `<multimapper-repo>\routing_tab.py`
+  - `<multimapper-repo>\singbox_config.py`
+  - `<multimapper-repo>\anytls_client.py`
 
 ## 结论先行
 
@@ -233,7 +239,7 @@ UI 建议：
 
 ## MultiMapper 侧后续配合点
 
-本次不向 `D:\python\MultiMapper\docs` 写文档，待审核后再单独出具给 MultiMapper 开发者的接口文档。
+本次不向 `<multimapper-repo>\docs` 写文档，待审核后再单独出具给 MultiMapper 开发者的接口文档。
 
 后续建议 MultiMapper 增加：
 
@@ -430,7 +436,7 @@ TUN 整改建议：
 
 阶段 2：给 MultiMapper 出接口文档。
 
-- 待本文审核后，在 `D:\python\MultiMapper\docs` 新增对接文档。
+- 待本文审核后，在 `<multimapper-repo>\docs` 新增对接文档。
 - 明确 JSON schema、导入行为、DoH 冲突策略、AnyTLS client 默认策略。
 - 不直接改 MultiMapper 代码，除非后续明确授权。
 - 2026-07-18 用户已明确：MultiMapper 侧配合开发先暂停，等那边开发好后再实测配合；当前继续推进 Nekoray 侧其它未完成项。
@@ -446,7 +452,7 @@ TUN 整改建议：
 - [x] 内部 TUN 正运行时，启动/停止辅助端口会被阻断，因为应用辅助端口需要 stop/start 整个 sing-box，可能造成 TUN 短暂卸载。
 - [x] 辅助端口已支持可配置端口池和持久化运行意图：启动/停止辅助端口会写入配置，显式停止主代理会清空辅助端口；程序恢复主线路时会随主配置恢复仍有效的辅助端口。
 - [x] 删除正在作为辅助端口运行的线路时，会同步移除持久化辅助状态并重载主配置；内部 TUN 正运行时阻断该删除路径，避免隐式卸载 TUN。
-- [x] 增加 Windows 运行态连通性脚本 `tools/verify_runtime_connectivity.ps1`，用于只读验证主端口、辅助端口、Clash API、系统代理指向和 curl 连通性；使用方法见 `docs/Windows_Runtime_Connectivity_Verification.md`。
+- [x] 增加 Windows 运行态连通性脚本 `tools/verify_runtime_connectivity.ps1`，用于只读验证主端口、辅助端口、Clash API、系统代理指向和 curl 连通性；旧文档已归并为 `docs/testing/RUNTIME_CONNECTIVITY.md`。
 
 阶段 4：无偷跑重启。
 
@@ -456,7 +462,7 @@ TUN 整改建议：
 - [x] 辅助端口变更在内部 TUN 正运行时默认阻断，避免这类非显式 TUN 操作触发 stop/start 造成默认出口窗口。
 - [x] 外部 TUN 在程序退出/重启/更新过程中保持运行，用户明确关闭 TUN 时才停止。
 - [x] 内部 TUN 运行态使用实际加载成功的配置标记，而不是只看设置项。
-- [x] 增加 Windows 本机验证脚本 `tools/verify_fail_closed_restart.ps1`，检查重启期间系统代理注册表、外部 TUN core、TUN 类网卡和默认路由没有被错误撤销；使用方法见 `docs/Windows_Fail_Closed_Verification.md`。
+- [x] 增加 Windows 本机验证脚本 `tools/verify_fail_closed_restart.ps1`，检查重启期间系统代理注册表、外部 TUN core、TUN 类网卡和默认路由没有被错误撤销；旧文档已归并为 `docs/testing/FAIL_CLOSED.md`。
 - [ ] 如未来需要内部 TUN 下无中断切换主线路/路由，再设计并验证 Windows kill-switch；当前策略是阻断隐式 stop/start。
 
 ## 验收建议

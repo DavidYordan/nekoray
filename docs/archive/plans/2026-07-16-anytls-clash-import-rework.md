@@ -1,5 +1,11 @@
 # Clash 订阅、AnyTLS Client 与域名解析整改
 
+> 状态：历史实现计划，完成勾选不代表已验收。
+> 归档日期：2026-07-20
+> 替代文档：[订阅导入](../../reference/SUBSCRIPTION_IMPORT.md)、[已知问题](../../KNOWN_ISSUES.md)。
+> 注意：历史路径可能失效，正文不代表当前需求或验收结果。
+> 其中任何“关闭既有 TUN”“强制绕过 TUN”或自动恢复系统网络模式的建议，均已由 ADR 0004、0007、0008 推翻。
+
 日期：2026-07-16
 
 ## 目标
@@ -187,8 +193,8 @@
 - [x] 系统代理自动重启路径已改为 fail-closed：程序重启、更新器重启、管理员提权重启不清空 Windows 系统代理。
 - [x] 外部 TUN 自动重启/退出路径已改为 fail-closed：不主动停止外部 TUN，只有用户明确关闭 TUN 时才停止。
 - [x] 内部 TUN 使用实际运行态标记，普通线路切换、重启代理、路由重载、辅助端口变更、程序重启/更新会被阻断，要求先明确关闭 TUN。
-- [x] Windows 无偷跑采样脚本已新增：`tools/verify_fail_closed_restart.ps1`，文档见 `docs/Windows_Fail_Closed_Verification.md`。
-- [x] Windows 运行态连通性脚本已新增：`tools/verify_runtime_connectivity.ps1`，文档见 `docs/Windows_Runtime_Connectivity_Verification.md`。
+- [x] Windows 无偷跑采样脚本已新增：`tools/verify_fail_closed_restart.ps1`；旧文档已归并为 `docs/testing/FAIL_CLOSED.md`。
+- [x] Windows 运行态连通性脚本已新增：`tools/verify_runtime_connectivity.ps1`；旧文档已归并为 `docs/testing/RUNTIME_CONNECTIVITY.md`。
 
 待整改：
 

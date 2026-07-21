@@ -1,8 +1,13 @@
 # MultiMapper 剪贴板 JSON 导出历史契约
 
+> 状态：已被替代的历史契约。
+> 归档日期：2026-07-20
+> 替代文档：[产品边界](../../PRODUCT.md)、[最小分支 ADR](../../architecture/decisions/0002-minimal-fork-boundary.md) 与 [范围偏离审计](../audits/2026-07-20-scope-deviation-audit.md)。
+> 已知错误：正文把 MultiMapper 描述为现行产品能力；该范围已撤销，正文仅用于历史追溯。
+
 日期：2026-07-17
 
-本文记录 Nekoray 早期实现过的 MultiMapper 精简 JSON 导出格式。2026-07-18 用户已确认主格式切换为“精简 Clash-compatible YAML + `x-nekoray` 扩展”，详见 [MULTIMAPPER_COMPACT_YAML_EXPORT_EVALUATION_2026-07-18.md](./MULTIMAPPER_COMPACT_YAML_EXPORT_EVALUATION_2026-07-18.md)。当前 `Copy to MultiMapper` 默认输出 YAML；本文仅用于历史兼容和无 `yaml-cpp` 构建 fallback。
+本文记录 Nekoray 早期实现过的 MultiMapper 精简 JSON 导出格式。2026-07-18 的实现记录将主格式切换为“精简 Clash-compatible YAML + `x-nekoray` 扩展”，详见 [历史 YAML 评估](./2026-07-18-multimapper-yaml-evaluation.md)。当前 `Copy to MultiMapper` 默认输出 YAML；本文仅用于历史兼容和无 `yaml-cpp` 构建 fallback。
 
 ## 入口
 

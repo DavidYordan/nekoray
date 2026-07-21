@@ -1,5 +1,10 @@
 # AnyTLS 运行时审计记录
 
+> 状态：历史、未完成验收。该环境受到另一套 TUN 默认路由影响，不能作为当前 Mixed/AnyTLS 结论。
+> 归档日期：2026-07-20
+> 替代文档：[Mixed 排障](../../operations/TROUBLESHOOT_MIXED.md)、[已知问题](../../KNOWN_ISSUES.md)、[测试矩阵](../../testing/TEST_MATRIX.md)。
+> 注意：历史路径和编号已经脱敏或可能失效，正文不代表当前需求或验收结果。
+
 日期：2026-07-18
 
 ## 结论
@@ -17,10 +22,10 @@
 
 ## 已验证项
 
-使用新增脚本导出 profile 66 的最终运行配置：
+使用新增脚本导出 `<anytls-profile-id>` 的最终运行配置：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\export_profile_core_config.ps1 -ProfileId 66 -Check
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\export_profile_core_config.ps1 -ProfileId <anytls-profile-id> -Check
 ```
 
 结果：
@@ -29,9 +34,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\export_profile_core_
 - inbounds：1。
 - outbounds：4。
 - `proxy` outbound：`type=anytls`，`client=mihomo/1.19.28`，带 `domain_resolver`。
-- 当前分组存在前置代理，因此 `proxy` outbound 还有 `detour=g-2`。
+- 当前分组存在前置代理，因此 `proxy` outbound 还有 `detour=<front-proxy-tag>`。
 
-使用同样方式导出 Trojan 基线 profile 2：
+使用同样方式导出 Trojan 基线 `<trojan-profile-id>`：
 
 - core check：通过。
 - 纯 core 运行后，通过 `socks5h://127.0.0.1:12080` 请求 `http://cp.cloudflare.com/` 成功。
@@ -67,7 +72,7 @@ missing route.default_domain_resolver or domain_resolver in dial fields
 "default_domain_resolver": { "server": "dns-direct" }
 ```
 
-重新导出 profile 66 的 `-ForTest` 配置后，`nekobox_core.exe check -c` 返回 0。
+重新导出 `<anytls-profile-id>` 的 `-ForTest` 配置后，`nekobox_core.exe check -c` 返回 0。
 
 ## 下一步建议
 
