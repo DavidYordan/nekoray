@@ -1,4 +1,5 @@
 #include "main/ConfigRecovery.hpp"
+#include "main/ConfigTransaction.hpp"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -6,6 +7,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QLockFile>
 #include <QTemporaryDir>
 #include <QTextStream>
 
@@ -171,6 +173,116 @@ int main(int argc, char **argv) {
     }
     const auto collision = NekoGui_ConfigRecovery::CreateBackupBeforeOverwrite(sourcePath, sourceContent);
     if (!require(!collision.succeeded, QStringLiteral("tampered existing backup was accepted"))) return 1;
+
+    const auto replacePath = QStringLiteral("groups/20.json");
+    const auto deletePath = QStringLiteral("groups/21.json");
+    const auto createPath = QStringLiteral("groups/22.json");
+    const QByteArray replaceBefore = R"({"id":20,"name":"before"})";
+    const QByteArray replaceAfter = R"({"id":20,"name":"after"})";
+    const QByteArray deleteBefore = R"({"id":21,"name":"delete"})";
+    const QByteArray createAfter = R"({"id":22,"name":"create"})";
+    if (!require(writeFile(replacePath, replaceBefore), QStringLiteral("cannot create replace fixture")) ||
+        !require(writeFile(deletePath, deleteBefore), QStringLiteral("cannot create delete fixture"))) {
+        return 1;
+    }
+
+    const auto committedTransaction = NekoGui_ConfigTransaction::Execute(
+        QStringLiteral("successful test transaction"),
+        {
+            {replacePath, {true, replaceBefore}, {true, replaceAfter}},
+            {deletePath, {true, deleteBefore}, {false, {}}},
+            {createPath, {false, {}}, {true, createAfter}},
+        });
+    if (!require(committedTransaction.succeeded(), committedTransaction.error) ||
+        !require(readFile(replacePath) == replaceAfter, QStringLiteral("transaction replacement mismatch")) ||
+        !require(!QFileInfo::exists(deletePath), QStringLiteral("transaction deletion did not occur")) ||
+        !require(readFile(createPath) == createAfter, QStringLiteral("transaction creation mismatch")) ||
+        !require(NekoGui_ConfigTransaction::BlockingTransactionIssues().isEmpty(),
+                 QStringLiteral("committed transaction was reported as blocking"))) {
+        return 1;
+    }
+    const auto committedManifest = QJsonDocument::fromJson(
+        readFile(QDir(committedTransaction.transactionPath).absoluteFilePath(QStringLiteral("manifest.json"))))
+                                       .object();
+    if (!require(committedManifest.value(QStringLiteral("state")).toString() == "committed",
+                 QStringLiteral("transaction commit marker missing")) ||
+        !require(committedManifest.value(QStringLiteral("entries")).toArray().size() == 3,
+                 QStringLiteral("transaction manifest entries missing"))) {
+        return 1;
+    }
+
+    const auto rollbackReplacePath = QStringLiteral("groups/30.json");
+    const auto rollbackDeletePath = QStringLiteral("groups/31.json");
+    const QByteArray rollbackReplaceBefore = R"({"id":30,"name":"before"})";
+    const QByteArray rollbackReplaceAfter = R"({"id":30,"name":"after"})";
+    const QByteArray rollbackDeleteBefore = R"({"id":31,"name":"preserve"})";
+    if (!require(writeFile(rollbackReplacePath, rollbackReplaceBefore),
+                 QStringLiteral("cannot create rollback replace fixture")) ||
+        !require(writeFile(rollbackDeletePath, rollbackDeleteBefore),
+                 QStringLiteral("cannot create rollback delete fixture"))) {
+        return 1;
+    }
+
+    NekoGui_ConfigTransaction::SetApplyFailureAfterForTest(1);
+    const auto rolledBackTransaction = NekoGui_ConfigTransaction::Execute(
+        QStringLiteral("rollback test transaction"),
+        {
+            {rollbackReplacePath, {true, rollbackReplaceBefore}, {true, rollbackReplaceAfter}},
+            {rollbackDeletePath, {true, rollbackDeleteBefore}, {false, {}}},
+        });
+    NekoGui_ConfigTransaction::SetApplyFailureAfterForTest(-1);
+    if (!require(rolledBackTransaction.outcome == NekoGui_ConfigTransaction::Outcome::RolledBack,
+                 rolledBackTransaction.error) ||
+        !require(readFile(rollbackReplacePath) == rollbackReplaceBefore,
+                 QStringLiteral("transaction rollback did not restore replacement")) ||
+        !require(readFile(rollbackDeletePath) == rollbackDeleteBefore,
+                 QStringLiteral("transaction rollback unexpectedly removed untouched file")) ||
+        !require(NekoGui_ConfigTransaction::BlockingTransactionIssues().isEmpty(),
+                 QStringLiteral("rolled-back transaction was reported as blocking"))) {
+        return 1;
+    }
+
+    const auto lockedPath = QStringLiteral("groups/40.json");
+    const QByteArray lockedBefore = R"({"id":40,"name":"locked"})";
+    const QByteArray lockedAfter = R"({"id":40,"name":"must-not-change"})";
+    if (!require(writeFile(lockedPath, lockedBefore), QStringLiteral("cannot create lock fixture"))) return 1;
+    QLockFile competingLock(
+        QDir(NekoGui_ConfigRecovery::RecoveryRootPath())
+            .absoluteFilePath(QStringLiteral("transactions/active.lock")));
+    if (!require(competingLock.tryLock(0), QStringLiteral("cannot acquire competing transaction lock"))) return 1;
+    const auto activeLockIssues = NekoGui_ConfigTransaction::BlockingTransactionIssues();
+    const auto lockedTransaction = NekoGui_ConfigTransaction::Execute(
+        QStringLiteral("lock contention test"),
+        {{lockedPath, {true, lockedBefore}, {true, lockedAfter}}});
+    competingLock.unlock();
+    if (!require(activeLockIssues.size() == 1, QStringLiteral("active transaction lock did not block startup")) ||
+        !require(lockedTransaction.outcome == NekoGui_ConfigTransaction::Outcome::PreparationFailed,
+                 QStringLiteral("competing transaction lock was ignored")) ||
+        !require(readFile(lockedPath) == lockedBefore,
+                 QStringLiteral("lock contention changed its target"))) {
+        return 1;
+    }
+
+    const auto pendingDirectory = QDir(NekoGui_ConfigRecovery::RecoveryRootPath())
+                                      .absoluteFilePath(QStringLiteral("transactions/pending-test"));
+    if (!require(QDir().mkpath(pendingDirectory), QStringLiteral("cannot create pending transaction fixture"))) {
+        return 1;
+    }
+    QJsonObject pendingManifest;
+    pendingManifest.insert(QStringLiteral("schema"), QStringLiteral("nekoray.config_transaction.v1"));
+    pendingManifest.insert(QStringLiteral("id"), QStringLiteral("pending-test"));
+    pendingManifest.insert(QStringLiteral("operation"), QStringLiteral("interrupted test"));
+    pendingManifest.insert(QStringLiteral("state"), QStringLiteral("prepared"));
+    pendingManifest.insert(QStringLiteral("entries"), QJsonArray{});
+    if (!require(
+            writeFile(
+                QDir(pendingDirectory).absoluteFilePath(QStringLiteral("manifest.json")),
+                QJsonDocument(pendingManifest).toJson(QJsonDocument::Indented)),
+            QStringLiteral("cannot create pending transaction manifest")) ||
+        !require(NekoGui_ConfigTransaction::BlockingTransactionIssues().size() == 1,
+                 QStringLiteral("pending transaction did not block startup"))) {
+        return 1;
+    }
 
     return 0;
 }

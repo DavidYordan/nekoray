@@ -34,6 +34,8 @@ namespace NekoGui {
 
         static QStringList List();
 
+        [[nodiscard]] static bool IsSafeName(const QString &name);
+
         static bool SetToActive(const QString &name);
     };
 

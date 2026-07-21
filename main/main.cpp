@@ -13,6 +13,7 @@
 #include <QTextStream>
 
 #include "3rdparty/RunGuard.hpp"
+#include "main/ConfigTransaction.hpp"
 #include "main/NekoGui.hpp"
 #include "db/ConfigBuilder.hpp"
 #include "db/Database.hpp"
@@ -246,11 +247,24 @@ int main(int argc, char* argv[]) {
     if (!wd.exists()) wd.mkpath(wd.absolutePath());
     if (!wd.exists("config")) wd.mkdir("config");
     QDir::setCurrent(wd.absoluteFilePath("config"));
-    QDir("temp").removeRecursively();
 
     // init QApplication
     delete preQApp;
     QApplication a(argc, argv);
+
+    const auto transactionIssues = NekoGui_ConfigTransaction::BlockingTransactionIssues();
+    if (!transactionIssues.isEmpty()) {
+        const auto message = QStringLiteral(
+                                 "Configuration startup is blocked because an interrupted multi-file transaction "
+                                 "requires explicit recovery. No configuration file was modified during this check.\n\n%1")
+                                 .arg(transactionIssues.join(QStringLiteral("\n")));
+        writeStderr(message);
+        if (!profileConfigExportOptions.enabled) {
+            QMessageBox::critical(nullptr, QStringLiteral("Configuration recovery required"), message);
+        }
+        return 1;
+    }
+    QDir("temp").removeRecursively();
 
     // dispatchers
     DS_cores = new QThread;

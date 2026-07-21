@@ -54,7 +54,8 @@ OpenWrt `192.168.1.7` 使用同版本 `sing-box 1.13.12-routefluent-anytls-clien
 - 生成配置已移除 local fallback/probe；DoH endpoint 仍是域名且没有可审计 bootstrap 时明确构建失败，不再偷用 `local-system`。
 - 顶层 custom 合并前会捕获每个受管 Mixed 的完整生成 listener 和沿 detour 可达的全部 outbound 对象；合并后要求这些对象逐项相同、各 tag/port 唯一且精确无条件 route 绑定仍在所有可能改投/提前 resolve 规则之前。profile 级 `custom_outbound` 可在快照前修改普通字段，但不得新增或改变 detour。provider resolver 的 outbound → strict group → 精确 DoH server 也按生成对象锁定，并拒绝 RouteFluent fallback/local-only 字段。
 - 辅助端口 map 不再因 stop/restart/crash/exit 或 UI 刷新被清空；字段类型错误、非字符串、损坏或重复项会使既有主配置原件保持不变并中止启动。显式启停/删除映射只有在原子保存成功后才继续 reload，失败会回滚内存。
-- 配置文件改用禁止 direct-write fallback 的 `QSaveFile` 原子替换；覆盖前建立可验证备份，损坏/未知 profile 原件保留并生成 quarantine，且 ID 不复用，危险 reorder 已禁止。单 profile 与空 group 显式删除前也会建立可验证快照；外部修改、引用关系或快照失败时拒绝删除，非空 group 的旧半删除路径已整体禁用。
+- 配置文件改用禁止 direct-write fallback 的 `QSaveFile` 原子替换；覆盖前建立可验证备份，损坏/未知 profile 原件保留并生成 quarantine，且 ID 不复用，危险 reorder 已禁止。单 profile/空 group 删除和 profile 跨组移动已接入带 before/after 清单、进程/跨进程串行锁和失败逆序回滚的事务层；未完成状态会阻断当前保存和下次启动。外部修改、引用关系或证据失败时拒绝删除，非空 group 的旧半删除路径仍整体禁用。
+- route 名现限制为安全 Windows 单文件名，非法 `active_routing` 保留主配置原件并中止加载；非活动 route 使用事务删除，活动 route 必须先显式切换，不再直接删除后尝试补救。
 - 订阅刷新恢复为 parse/stage-before-mutate；解析失败、空响应、坏结构与零支持节点不写入。清理/回滚删除失败会保留对象并明确记录，但成功候选仍未形成跨文件崩溃一致事务。
 - Go helper 在无有效 sing-box instance 时不再回落系统 TCP/UDP/HTTP 网络。
 - Windows legacy 外置 TUN 因无精确 PID/句柄且曾按映像名批量 `taskkill`，现已安全禁用；配置数据保留，默认内部 TUN不受此项删除。
@@ -74,16 +75,16 @@ OpenWrt `192.168.1.7` 使用同版本 `sing-box 1.13.12-routefluent-anytls-clien
 ## 2026-07-21 最终无侵入回归快照
 
 - 当前源码的 Windows GUI 增量构建成功；两个 Go 模块普通测试通过，本轮较早也用仓库 MinGW、`CGO_ENABLED=1` 通过两个模块的 race 测试，随后已重建 `build-package-windows64/nekobox_core.exe`。
-- 本轮构建目录快照：`nekobox.exe` SHA-256 `590EE605D2817FE303A3D6B5B89359124C11D80A168D6CDAF1744EFC5D83780F`；`nekobox_core.exe` SHA-256 `D2D532E72CEE65791D5A098D688FB6C9A9F0133C2C79B847070627E595656E92`。这只是接管审计证据，不是 release manifest。
-- `test_final_config_guards.ps1` 10/10，`test_config_preservation.ps1` 7/7，`config_recovery_test` 1/1，OpenWrt helper Python 单测 19/19。
+- 本轮构建目录快照：`nekobox.exe` SHA-256 `E9D62A125390D7C28552727FBC9494FF5A19FAACDFD0F7595264AD666E868E12`；`nekobox_core.exe` SHA-256 `D2D532E72CEE65791D5A098D688FB6C9A9F0133C2C79B847070627E595656E92`。这只是接管审计证据，不是 release manifest。
+- `test_final_config_guards.ps1` 10/10，`test_config_preservation.ps1` 9/9，`config_recovery_test` 1/1，OpenWrt helper Python 单测 19/19。
 - 本地 Mixed fixture 7/7；额外 listener、系统代理、禁用日志和 loopback origin 清理均保持预期。
 - runtime connectivity 的 expected 204 场景通过，HTTP 与 SOCKS5h 均为 204；expected 200 场景按预期报告 2 项 mismatch 并返回失败。系统代理、fixture 端口和 origin 清理均通过。
-- 本轮已执行 `ctest --test-dir build-package-windows64 --output-on-failure`，`config_recovery_test` 为 1/1；它覆盖恢复 helper，不覆盖 ProfileManager 多文件事务或 ConfigBuilder golden。远端 Windows quality CI 已通过。以上证据均不覆盖 Windows TUN/WFP/退出/切线，也不改变 Alpha/不可发布判断。
+- 本轮已执行 `ctest --test-dir build-package-windows64 --output-on-failure`，`config_recovery_test` 为 1/1；它覆盖事务基础的提交、模拟回滚、锁和 pending 阻断，不覆盖订阅/非空 group 或 ConfigBuilder golden。远端 Windows quality CI 已通过。以上证据均不覆盖 Windows TUN/WFP/退出/切线，也不改变 Alpha/不可发布判断。
 
 ## 仍然阻断发布
 
-1. external-core/Naive 与误删格式兼容尚未恢复；未知数据已保留并生成 quarantine，覆盖和显式删除已有恢复证据，但恢复 UI 与多文件事务仍缺，非空 group 删除因此暂时拒绝。
-2. 单文件原子保存与删除前快照已落地，订阅也已先 stage 并报告删除失败；跨 profile/group/主配置的提交仍不是完整事务，缺故障注入。
+1. external-core/Naive 与误删格式兼容尚未恢复；未知数据已保留并生成 quarantine，覆盖和显式删除已有恢复证据，但恢复 UI 仍缺，非空 group 删除因此暂时拒绝。
+2. 单文件原子保存与删除事务基础已落地，订阅也已先 stage 并报告删除失败；订阅成功候选仍未接入事务层，也缺真实进程中断/磁盘故障和人工恢复验收。
 3. 最终 Mixed、strict resolver 与 TUN/系统代理副作用不变量校验已落地，并新增 `test/test_final_config_guards.ps1` 覆盖部分导出拒绝分支；完整 C++ 配置生成 golden/负向回归仍未完成，不能只凭脚本存在判定通过。
 4. AnyTLS + Trojan detour 仍失败。
 5. 当前 Go wrapper 没有原地热重载；内部 TUN 与单个 Box 同生共死，WFP kill-switch/持久 Runtime Service 尚不存在。

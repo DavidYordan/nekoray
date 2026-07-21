@@ -1343,8 +1343,17 @@ void MainWindow::on_menu_move_triggered() {
                                    items, 0, false, &ok);
     if (!ok) return;
     auto gid = SubStrBefore(a, " ").toInt();
+    bool moveFailed = false;
     for (const auto &ent: ents) {
-        NekoGui::profileManager->MoveProfile(ent, gid);
+        QString error;
+        if (!NekoGui::profileManager->MoveProfile(ent, gid, &error)) {
+            moveFailed = true;
+        }
+    }
+    if (moveFailed) {
+        MessageBoxWarning(
+            software_name,
+            tr("One or more profiles could not be moved; their original group data was preserved."));
     }
     refresh_proxy_list();
 }

@@ -32,7 +32,10 @@ namespace NekoGui {
 
         [[nodiscard]] bool DeleteProfile(int id, const QString &reason = {}, QString *error = nullptr);
 
-        void MoveProfile(const std::shared_ptr<ProxyEntity> &ent, int gid);
+        [[nodiscard]] bool MoveProfile(
+            const std::shared_ptr<ProxyEntity> &ent,
+            int gid,
+            QString *error = nullptr);
 
         std::shared_ptr<ProxyEntity> GetProfile(int id);
 

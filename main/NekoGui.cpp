@@ -1,5 +1,6 @@
 #include "NekoGui.hpp"
 #include "ConfigRecovery.hpp"
+#include "ConfigTransaction.hpp"
 #include "fmt/Preset.hpp"
 
 #include <QFile>
@@ -202,6 +203,11 @@ namespace NekoGui_ConfigItem {
 
     bool JsonStore::Save() {
         last_save_succeeded = false;
+        const auto transactionBlock = NekoGui_ConfigTransaction::RuntimeMutationBlockReason();
+        if (!transactionBlock.isEmpty()) {
+            qCritical() << "Refusing config save while transaction recovery is required:" << fn << transactionBlock;
+            return false;
+        }
         if (callback_before_save != nullptr) {
             const auto validationError = callback_before_save();
             if (!validationError.isEmpty()) {
@@ -367,6 +373,11 @@ namespace NekoGui {
         _add(new configItem("core_box_underlying_dns", &core_box_underlying_dns, itemType::string));
         _add(new configItem("vpn_internal_tun", &vpn_internal_tun, itemType::boolean));
         callback_validate_load = [this](const QJsonObject &object) {
+            const auto routingValue = object.value(QStringLiteral("active_routing"));
+            if (!routingValue.isUndefined() &&
+                (!routingValue.isString() || !Routing::IsSafeName(routingValue.toString()))) {
+                return QStringLiteral("active_routing must be a safe Windows file name without a path.");
+            }
             return ValidateAuxiliaryProfilePortEntries(object);
         };
         callback_after_load = [this] { LoadAuxiliaryProfilePorts(); };
@@ -452,6 +463,9 @@ namespace NekoGui {
 
     QString DataStore::StoreAuxiliaryProfilePorts() {
         NormalizeAuxiliaryPortSettings();
+        if (!Routing::IsSafeName(active_routing)) {
+            return QStringLiteral("active_routing must be a safe Windows file name without a path.");
+        }
         if (!aux_profile_ports_load_error.isEmpty()) return aux_profile_ports_load_error;
 
         QStringList serializedEntries;
@@ -552,10 +566,37 @@ namespace NekoGui {
 
     QStringList Routing::List() {
         QDir dr(ROUTES_PREFIX);
-        return dr.entryList(QDir::Files);
+        QStringList safeEntries;
+        for (const auto &name: dr.entryList(QDir::Files)) {
+            if (IsSafeName(name)) safeEntries.append(name);
+        }
+        return safeEntries;
+    }
+
+    bool Routing::IsSafeName(const QString &name) {
+        if (name.isEmpty() || name.size() > 128 || name.trimmed() != name ||
+            name == "." || name == ".." || name.startsWith('.') || name.endsWith('.')) {
+            return false;
+        }
+        static const QString forbidden = QStringLiteral("<>:\"/\\|?*");
+        for (const auto character: name) {
+            if (character.unicode() < 0x20 || forbidden.contains(character)) return false;
+        }
+
+        const auto stem = name.section('.', 0, 0).toUpper();
+        static const QSet<QString> reserved{
+            QStringLiteral("CON"), QStringLiteral("PRN"), QStringLiteral("AUX"), QStringLiteral("NUL"),
+            QStringLiteral("COM1"), QStringLiteral("COM2"), QStringLiteral("COM3"), QStringLiteral("COM4"),
+            QStringLiteral("COM5"), QStringLiteral("COM6"), QStringLiteral("COM7"), QStringLiteral("COM8"),
+            QStringLiteral("COM9"), QStringLiteral("LPT1"), QStringLiteral("LPT2"), QStringLiteral("LPT3"),
+            QStringLiteral("LPT4"), QStringLiteral("LPT5"), QStringLiteral("LPT6"), QStringLiteral("LPT7"),
+            QStringLiteral("LPT8"), QStringLiteral("LPT9"),
+        };
+        return !reserved.contains(stem);
     }
 
     bool Routing::SetToActive(const QString &name) {
+        if (!IsSafeName(name)) return false;
         NekoGui::dataStore->routing = std::make_unique<Routing>();
         NekoGui::dataStore->routing->load_control_must = true;
         NekoGui::dataStore->routing->fn = ROUTES_PREFIX + name;

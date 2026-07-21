@@ -591,6 +591,42 @@
         <translation>删除路由: %1</translation>
     </message>
     <message>
+        <source>Routing deletion failed</source>
+        <translation>删除路由失败</translation>
+    </message>
+    <message>
+        <source>The active routing profile was preserved. Load and confirm another profile before deleting this one.</source>
+        <translation>活动路由配置已保留。请先加载并确认另一个路由配置，再删除此配置。</translation>
+    </message>
+    <message>
+        <source>The routing profile was preserved because its source could not be loaded safely.</source>
+        <translation>无法安全加载源文件，路由配置已保留。</translation>
+    </message>
+    <message>
+        <source>The routing profile was preserved. %1</source>
+        <translation>路由配置已保留。%1</translation>
+    </message>
+    <message>
+        <source>Invalid routing profile name</source>
+        <translation>路由配置名称无效</translation>
+    </message>
+    <message>
+        <source>Use a Windows file name without path separators or reserved device names.</source>
+        <translation>请使用不含路径分隔符或保留设备名的 Windows 文件名。</translation>
+    </message>
+    <message>
+        <source>Routing save failed</source>
+        <translation>保存路由失败</translation>
+    </message>
+    <message>
+        <source>The existing routing profile was preserved because it could not be loaded safely.</source>
+        <translation>无法安全加载现有路由配置，原件已保留。</translation>
+    </message>
+    <message>
+        <source>The routing profile could not be saved; existing data was preserved.</source>
+        <translation>无法保存路由配置，现有数据已保留。</translation>
+    </message>
+    <message>
         <source>Mange route set</source>
         <translation>管理路由规则</translation>
     </message>
@@ -1039,6 +1075,14 @@ This needs to be run NekoBox with administrator privileges.</source>
 </context>
 <context>
     <name>MainWindow</name>
+    <message>
+        <source>One or more profiles could not be moved; their original group data was preserved.</source>
+        <translation>一个或多个配置无法移动，原分组数据已保留。</translation>
+    </message>
+    <message>
+        <source>One or more profiles could not be deleted; their data was preserved.</source>
+        <translation>一个或多个配置无法删除，其数据已保留。</translation>
+    </message>
     <message>
         <source>Program</source>
         <translation>程序</translation>

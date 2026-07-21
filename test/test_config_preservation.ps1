@@ -156,6 +156,40 @@ Add-InvalidAuxiliaryMappingCase `
     -Name "wrong_type_auxiliary_mapping_field" `
     -InvalidAuxJson '{"bad":1}'
 
+$unsafeRoutingLab = New-TestLab
+try {
+    $firstRun = Invoke-Export $unsafeRoutingLab
+    $mainConfig = Join-Path $unsafeRoutingLab "config\groups\nekobox.json"
+    if (-not [IO.File]::Exists($mainConfig)) {
+        throw "Initial isolated config creation did not produce the main config. Exit=$($firstRun.exit_code) stderr=$($firstRun.stderr)"
+    }
+    $configObject = Get-Content -LiteralPath $mainConfig -Raw -Encoding UTF8 | ConvertFrom-Json
+    $configObject | Add-Member -NotePropertyName "active_routing" -NotePropertyValue "..\groups\escape.json" -Force
+    [IO.File]::WriteAllText($mainConfig, ($configObject | ConvertTo-Json -Depth 50), $utf8NoBom)
+
+    $before = (Get-FileHash -LiteralPath $mainConfig -Algorithm SHA256).Hash
+    $secondRun = Invoke-Export $unsafeRoutingLab
+    $after = (Get-FileHash -LiteralPath $mainConfig -Algorithm SHA256).Hash
+    $quarantineVerified = Test-QuarantineEvidence `
+        -Lab $unsafeRoutingLab `
+        -RelativeSource "groups\nekobox.json" `
+        -ExpectedHash $before `
+        -ExpectedReasonPattern "active_routing"
+    $cases += [ordered]@{
+        name = "unsafe_active_routing_path_rejected"
+        passed = ($firstRun.exit_code -ne 0 -and
+                  $secondRun.exit_code -ne 0 -and
+                  -not $secondRun.output_created -and
+                  $before -eq $after -and
+                  $quarantineVerified)
+        exit_code = $secondRun.exit_code
+        hash_unchanged = ($before -eq $after)
+        quarantine_verified = $quarantineVerified
+    }
+} finally {
+    Remove-TestLab $unsafeRoutingLab
+}
+
 $invalidRouteLab = New-TestLab
 try {
     $firstRun = Invoke-Export $invalidRouteLab
@@ -232,6 +266,43 @@ Add-ProfileRecoveryCase `
     -Name "dangling_profile_group_quarantined" `
     -ProfileJson '{"type":"socks","id":7,"gid":99,"bean":{}}' `
     -ExpectedReasonPattern "missing or unreadable group 99"
+
+$pendingTransactionLab = New-TestLab
+try {
+    $firstRun = Invoke-Export $pendingTransactionLab
+    $mainConfig = Join-Path $pendingTransactionLab "config\groups\nekobox.json"
+    if (-not [IO.File]::Exists($mainConfig)) {
+        throw "Initial isolated config creation did not produce the main config. Exit=$($firstRun.exit_code) stderr=$($firstRun.stderr)"
+    }
+    $before = (Get-FileHash -LiteralPath $mainConfig -Algorithm SHA256).Hash
+
+    $transactionDir = Join-Path $pendingTransactionLab "config\recovery\transactions\pending-test"
+    [IO.Directory]::CreateDirectory($transactionDir) | Out-Null
+    $manifest = [ordered]@{
+        schema = "nekoray.config_transaction.v1"
+        id = "pending-test"
+        operation = "interrupted integration test"
+        state = "prepared"
+        entries = @()
+    } | ConvertTo-Json -Depth 5
+    [IO.File]::WriteAllText((Join-Path $transactionDir "manifest.json"), $manifest, $utf8NoBom)
+
+    $secondRun = Invoke-Export $pendingTransactionLab
+    $after = (Get-FileHash -LiteralPath $mainConfig -Algorithm SHA256).Hash
+    $cases += [ordered]@{
+        name = "pending_transaction_blocks_startup"
+        passed = ($firstRun.exit_code -ne 0 -and
+                  $secondRun.exit_code -ne 0 -and
+                  -not $secondRun.output_created -and
+                  $before -eq $after -and
+                  $secondRun.stderr -match "interrupted multi-file transaction")
+        exit_code = $secondRun.exit_code
+        hash_unchanged = ($before -eq $after)
+        recovery_block_reported = ($secondRun.stderr -match "interrupted multi-file transaction")
+    }
+} finally {
+    Remove-TestLab $pendingTransactionLab
+}
 
 $result = [ordered]@{
     passed = (@($cases | Where-Object { -not $_.passed }).Count -eq 0)

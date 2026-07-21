@@ -128,6 +128,7 @@ set(PROJECT_SOURCES
         main/NekoGui.cpp
         main/NekoGui_Utils.cpp
         main/ConfigRecovery.cpp
+        main/ConfigTransaction.cpp
         main/HTTPRequestHelper.cpp
 
         3rdparty/base64.cpp
@@ -304,7 +305,9 @@ if (BUILD_TESTING)
     add_executable(config_recovery_test
             test/config_recovery_test.cpp
             main/ConfigRecovery.cpp
+            main/ConfigTransaction.cpp
     )
+    target_compile_definitions(config_recovery_test PRIVATE NEKORAY_CONFIG_TRANSACTION_TESTING)
     target_link_libraries(config_recovery_test PRIVATE Qt${QT_VERSION_MAJOR}::Core)
     add_test(NAME config_recovery_test COMMAND config_recovery_test)
     set_tests_properties(config_recovery_test PROPERTIES TIMEOUT 15)
