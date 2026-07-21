@@ -91,9 +91,10 @@ namespace {
             if (expectedToken != nullptr && speedtestingCancelToken != expectedToken) return false;
             if (speedtestingCancelToken != nullptr) speedtestingCancelToken->store(true);
             threadsToStop = speedtestingThreads;
-            speedtesting = false;
-            speedtestingThreads.clear();
-            speedtestingCancelToken.reset();
+            // Cancellation is only a request. A worker can still be blocked in
+            // gRPC/core teardown, so keep the test marked active until every
+            // worker reaches finishSpeedtesting(). Otherwise TUN could be
+            // enabled while a temporary Box still owns live sockets.
         }
         for (auto *thread: threadsToStop) {
             if (thread == nullptr) continue;
@@ -136,7 +137,21 @@ namespace {
         runningLabelUrlTesting = false;
         return true;
     }
+
+    bool isRunningLabelUrlTest(quint64 generation) {
+        QMutexLocker locker(&runningLabelUrlTestMutex);
+        return runningLabelUrlTesting && runningLabelUrlTestGeneration == generation;
+    }
 } // namespace
+
+bool MainWindow::hasActiveIsolatedTest() {
+    {
+        QMutexLocker locker(&speedtestingMutex);
+        if (speedtesting) return true;
+    }
+    QMutexLocker locker(&runningLabelUrlTestMutex);
+    return runningLabelUrlTesting;
+}
 
 void MainWindow::speedtest_current_group(int mode, bool test_group) {
     // menu_stop_testing
@@ -152,6 +167,21 @@ void MainWindow::speedtest_current_group(int mode, bool test_group) {
     if (profiles.isEmpty()) return;
     auto group = NekoGui::profileManager->CurrentGroup();
     if (group->archive) return;
+    if (NekoGui::dataStore->spmode_vpn || isInternalTunActive()) {
+        MessageBoxWarning(
+            software_name,
+            tr("Isolated profile tests are disabled while this project's Tun is requested or its worker is active because the temporary test socket could be captured and measured through the wrong line."));
+        return;
+    }
+
+#ifndef NKR_NO_GRPC
+    if (mode == libcore::TcpPing) {
+        MessageBoxWarning(
+            software_name,
+            tr("TCP Ping is disabled because it uses a direct system socket and does not test the selected proxy line. Use URL Test instead."));
+        return;
+    }
+#endif
 
 #ifndef NKR_NO_GRPC
     QStringList full_test_flags;
@@ -190,6 +220,14 @@ void MainWindow::speedtest_current_group(int mode, bool test_group) {
         if (full_test_flags.isEmpty()) return;
     }
     std::shared_ptr<std::atomic_bool> cancelToken;
+    // Full Test options run a nested dialog. Re-check after it closes so a
+    // TUN transition cannot slip between the first guard and test creation.
+    if (NekoGui::dataStore->spmode_vpn || isInternalTunActive()) {
+        MessageBoxWarning(
+            software_name,
+            tr("Isolated profile tests are disabled while this project's Tun is requested or its worker is active."));
+        return;
+    }
     if (!beginSpeedtesting(&cancelToken)) {
         MessageBoxWarning(software_name, QObject::tr("The last speed test did not exit completely, please wait. If it persists, use Stop Testing."));
         return;
@@ -204,7 +242,7 @@ void MainWindow::speedtest_current_group(int mode, bool test_group) {
     const int watchdogMs = std::clamp(batches * perBatchTimeoutSeconds * 1000, 30000, 10 * 60 * 1000);
     setTimeout([cancelToken] {
         if (cancelSpeedtesting(cancelToken)) {
-            MW_show_log(QObject::tr("Speedtest timed out and its busy state was reset."));
+            MW_show_log(QObject::tr("Speedtest timed out; cancellation was requested. Tun remains blocked until every test worker exits."));
         }
     }, this, watchdogMs);
 
@@ -317,6 +355,23 @@ void MainWindow::speedtest_current_group(int mode, bool test_group) {
 
 void MainWindow::speedtest_current() {
 #ifndef NKR_NO_GRPC
+    if (NekoGui::dataStore->spmode_vpn || isInternalTunActive()) {
+        MessageBoxWarning(
+            software_name,
+            tr("URL Test is disabled while this project's Tun is requested or its worker is active because an isolated test could be captured and measured through the wrong line."));
+        return;
+    }
+    if (running == nullptr) {
+        MessageBoxWarning(software_name, tr("No running profile to test."));
+        return;
+    }
+    const auto testConfig = BuildConfig(running, true, false);
+    if (testConfig == nullptr || !testConfig->error.isEmpty()) {
+        MessageBoxWarning(
+            "BuildConfig return error",
+            testConfig == nullptr ? tr("Unknown test config error.") : testConfig->error);
+        return;
+    }
     const auto generation = beginRunningLabelUrlTest();
     if (generation == 0) {
         MW_show_log(tr("UrlTest is already running."));
@@ -325,10 +380,10 @@ void MainWindow::speedtest_current() {
     last_test_time = QTime::currentTime();
     ui->label_running->setText(tr("Testing"));
     setTimeout([this, generation] {
-        if (!finishRunningLabelUrlTest(generation)) return;
+        if (!isRunningLabelUrlTest(generation)) return;
         last_test_time = QTime::currentTime();
         ui->label_running->setText(tr("Test Result") + ": " + tr("Unavailable"));
-        MW_show_log(tr("UrlTest timed out."));
+        MW_show_log(tr("UrlTest timed out; Tun remains blocked until the test RPC exits."));
     }, this, 15000);
 
     runOnNewThread([=] {
@@ -336,6 +391,9 @@ void MainWindow::speedtest_current() {
         req.set_mode(libcore::UrlTest);
         req.set_timeout(10 * 1000);
         req.set_url(NekoGui::dataStore->test_latency_url.toStdString());
+        auto config = new libcore::LoadConfigReq;
+        config->set_core_config(QJsonObject2QString(testConfig->coreConfig, false).toStdString());
+        req.set_allocated_config(config);
 
         bool rpcOK;
         auto result = defaultClient->Test(&rpcOK, req);
@@ -385,6 +443,13 @@ void MainWindow::neko_start(int _id, CoreStartReason reason) {
 
     auto group = NekoGui::profileManager->GetGroup(ent->gid);
     if (group == nullptr || group->archive) return;
+    if (group->front_proxy_id >= 0) {
+        auto frontProxy = NekoGui::profileManager->GetProfile(group->front_proxy_id);
+        show_log_impl(tr("Group front proxy active: %1")
+                          .arg(frontProxy == nullptr || frontProxy->bean == nullptr
+                                   ? QStringLiteral("#%1").arg(group->front_proxy_id)
+                                   : frontProxy->bean->DisplayTypeAndName()));
+    }
 
     if (internalTunWouldBeInterrupted() &&
         reason != CoreStartReason::EnableInternalTun &&
@@ -405,9 +470,6 @@ void MainWindow::neko_start(int _id, CoreStartReason reason) {
     if (!result->error.isEmpty()) {
         MessageBoxWarning("BuildConfig return error", result->error);
         return;
-    }
-    if (NekoGui::dataStore->aux_profile_ports.remove(ent->id) > 0) {
-        NekoGui::dataStore->Save();
     }
 
     auto neko_start_stage2 = [=] {
@@ -560,17 +622,17 @@ void MainWindow::neko_stop(bool crash, bool sem, CoreStopReason reason) {
         }
 #endif
 
-        const auto clearedAuxProfiles = !sem && !crash && !NekoGui::dataStore->aux_profile_ports.isEmpty();
-        if (clearedAuxProfiles) NekoGui::dataStore->aux_profile_ports.clear();
+        // Auxiliary port bindings are persistent user configuration. Stopping,
+        // restarting, crashing or exiting the current line must not silently
+        // delete them; only an explicit mapping edit may change this state.
         NekoGui::dataStore->UpdateStartedId(-1919);
-        if (clearedAuxProfiles) NekoGui::dataStore->Save();
         NekoGui::dataStore->need_keep_vpn_off = false;
         running_internal_tun = false;
         running = nullptr;
 
         runOnUiThread([=] {
             refresh_status();
-            refresh_proxy_list(clearedAuxProfiles ? -1 : id);
+            refresh_proxy_list(id);
         });
 
         return true;
@@ -605,67 +667,7 @@ void MainWindow::neko_stop(bool crash, bool sem, CoreStopReason reason) {
 }
 
 void MainWindow::CheckUpdate() {
-    // on new thread...
-#ifndef NKR_NO_GRPC
-    bool ok;
-    libcore::UpdateReq request;
-    request.set_action(libcore::UpdateAction::Check);
-    request.set_check_pre_release(NekoGui::dataStore->check_include_pre);
-    auto response = NekoGui_rpc::defaultClient->Update(&ok, request);
-    if (!ok) return;
-
-    auto err = response.error();
-    if (!err.empty()) {
-        runOnUiThread([=] {
-            MessageBoxWarning(QObject::tr("Update"), err.c_str());
-        });
-        return;
-    }
-
-    if (response.release_download_url() == nullptr) {
-        runOnUiThread([=] {
-            MessageBoxInfo(QObject::tr("Update"), QObject::tr("No update"));
-        });
-        return;
-    }
-
     runOnUiThread([=] {
-        auto allow_updater = !NekoGui::dataStore->flag_use_appdata;
-        auto note_pre_release = response.is_pre_release() ? " (Pre-release)" : "";
-        QMessageBox box(QMessageBox::Question, QObject::tr("Update") + note_pre_release,
-                        QObject::tr("Update found: %1\nRelease note:\n%2").arg(response.assets_name().c_str(), response.release_note().c_str()));
-        //
-        QAbstractButton *btn1 = nullptr;
-        if (allow_updater) {
-            btn1 = box.addButton(QObject::tr("Update"), QMessageBox::AcceptRole);
-        }
-        QAbstractButton *btn2 = box.addButton(QObject::tr("Open in browser"), QMessageBox::AcceptRole);
-        box.addButton(QObject::tr("Close"), QMessageBox::RejectRole);
-        box.exec();
-        //
-        if (btn1 == box.clickedButton() && allow_updater) {
-            // Download Update
-            runOnNewThread([=] {
-                bool ok2;
-                libcore::UpdateReq request2;
-                request2.set_action(libcore::UpdateAction::Download);
-                auto response2 = NekoGui_rpc::defaultClient->Update(&ok2, request2);
-                runOnUiThread([=] {
-                    if (response2.error().empty()) {
-                        auto q = QMessageBox::question(nullptr, QObject::tr("Update"),
-                                                       QObject::tr("Update is ready, restart to install?"));
-                        if (q == QMessageBox::StandardButton::Yes) {
-                            this->exit_reason = 1;
-                            on_menu_exit_triggered();
-                        }
-                    } else {
-                        MessageBoxWarning(QObject::tr("Update"), response2.error().c_str());
-                    }
-                });
-            });
-        } else if (btn2 == box.clickedButton()) {
-            QDesktopServices::openUrl(QUrl(response.release_url().c_str()));
-        }
+        MessageBoxInfo(QObject::tr("Update"), QObject::tr("Online update is disabled in this private build."));
     });
-#endif
 }

@@ -9,12 +9,19 @@ namespace NekoGui_sub {
 
         void update(const QString &str);
 
-        int gid_add_to = -1; // 导入到指定组 -1 为当前选中组
+        int gid_add_to = -1; // Import into the selected group when negative.
 
-        QList<std::shared_ptr<NekoGui::ProxyEntity>> updated_order; // 新增的配置，按照导入时处理的先后排序
+        // Parsing only stages entities here. GroupUpdater commits them after
+        // the complete input has parsed successfully and yielded at least one
+        // supported profile.
+        QList<std::shared_ptr<NekoGui::ProxyEntity>> updated_order;
+
+        bool parse_failed = false;
+        QString parse_error;
 
         QString detected_source_type;
         QStringList detected_doh_upstreams;
+        QStringList detected_invalid_doh_upstreams;
     };
 
     class GroupUpdater : public QObject {
@@ -23,7 +30,8 @@ namespace NekoGui_sub {
     public:
         void AsyncUpdate(const QString &str, int _sub_gid = -1, const std::function<void()> &finish = nullptr);
 
-        void Update(const QString &_str, int _sub_gid = -1, bool _not_sub_as_url = false);
+        int Update(const QString &_str, int _sub_gid = -1, bool _not_sub_as_url = false,
+                   bool _create_new_group = false);
 
     signals:
 

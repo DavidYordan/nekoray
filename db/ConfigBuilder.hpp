@@ -2,13 +2,27 @@
 
 #include "ProxyEntity.hpp"
 
+#include <QMap>
+
 namespace NekoGui {
     struct ResolverBindingRequest {
         int outboundIndex = -1;
         QString outboundTag;
         QString server;
         QStringList dohUpstreams;
-        bool allowLocalFallback = true;
+    };
+
+    struct ManagedMixedBinding {
+        QString inboundTag;
+        int listenPort = -1;
+        QString outboundTag;
+        bool allowResolveBeforeTerminal = false;
+        QJsonObject expectedInbound;
+        // Snapshot after all profile-level/custom_outbound generation, but
+        // before top-level custom_config is merged.  Every reachable outbound
+        // (including its detour) must be identical so one managed port cannot
+        // be redirected or silently rewritten into a different managed line.
+        QMap<QString, QJsonObject> expectedOutbounds;
     };
 
     class BuildConfigResult {
@@ -49,6 +63,7 @@ namespace NekoGui {
         QJsonArray inbounds;
         QJsonArray outbounds;
         QList<ResolverBindingRequest> resolverBindingRequests;
+        QList<ManagedMixedBinding> managedMixedBindings;
     };
 
     std::shared_ptr<BuildConfigResult> BuildConfig(const std::shared_ptr<ProxyEntity> &ent, bool forTest, bool forExport);

@@ -524,10 +524,9 @@
      </property>
      <addaction name="menu_qr"/>
      <addaction name="menu_export_config"/>
-     <addaction name="separator"/>
-     <addaction name="menu_copy_links"/>
-     <addaction name="menu_copy_links_nkr"/>
-     <addaction name="menu_copy_links_multimapper"/>
+      <addaction name="separator"/>
+      <addaction name="menu_copy_links"/>
+      <addaction name="menu_copy_links_nkr"/>
     </widget>
     <widget class="QMenu" name="menuCurrent_Group">
      <property name="title">
@@ -823,11 +822,6 @@
    </property>
    <property name="shortcut">
     <string notr="true">Ctrl+N</string>
-   </property>
-  </action>
-  <action name="menu_copy_links_multimapper">
-   <property name="text">
-    <string>Copy to MultiMapper</string>
    </property>
   </action>
   <action name="actionfake_2">

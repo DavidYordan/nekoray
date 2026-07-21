@@ -152,7 +152,6 @@ set(PROJECT_SOURCES
         fmt/ChainBean.hpp # translate
 
         sub/GroupUpdater.cpp
-        sub/MultiMapperExport.cpp
 
         sys/CoreProcess.cpp
         sys/AutoRun.cpp

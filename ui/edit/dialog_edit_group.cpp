@@ -3,7 +3,6 @@
 
 #include "db/Database.hpp"
 #include "fmt/AnyTLSBean.hpp"
-#include "sub/MultiMapperExport.hpp"
 #include "ui/mainwindow_interface.h"
 
 #include <QClipboard>
@@ -73,6 +72,9 @@ DialogEditGroup::DialogEditGroup(const std::shared_ptr<NekoGui::Group> &ent, QWi
     ui->default_server_resolver_auto->setChecked(ent->DefaultResolverManagedBySubscription());
     ui->default_server_resolver_doh->setPlainText(ent->default_server_resolver_doh);
     ui->default_server_resolver_fallback->setChecked(ent->default_server_resolver_allow_local_fallback);
+    // Retain the serialized value for compatibility, but do not expose a
+    // control that weakens strict provider DNS into local fallback.
+    ui->default_server_resolver_fallback->setVisible(false);
     ui->type->setCurrentIndex(ent->url.isEmpty() ? 0 : 1);
     ui->type->currentIndexChanged(ui->type->currentIndex());
     ui->manually_column_width->setChecked(ent->manually_column_width);
@@ -145,10 +147,6 @@ DialogEditGroup::DialogEditGroup(const std::shared_ptr<NekoGui::Group> &ent, QWi
         QApplication::clipboard()->setText(links.join("\n"));
         MessageBoxInfo(software_name, tr("Copied"));
     });
-    connect(ui->copy_links_multimapper, &QPushButton::clicked, this, [=] {
-        QApplication::clipboard()->setText(NekoGui_sub::BuildMultiMapperExport(ent->ProfilesWithOrder()));
-        MessageBoxInfo(software_name, tr("Copied"));
-    });
     connect(ui->apply_client_to_profiles, &QPushButton::clicked, this, [=] { reset_profiles_to_inherit_defaults(true, false); });
     connect(ui->apply_resolver_to_profiles, &QPushButton::clicked, this, [=] { reset_profiles_to_inherit_defaults(false, true); });
     connect(ui->reset_profiles_inherit_defaults, &QPushButton::clicked, this, [=] { reset_profiles_to_inherit_defaults(true, true); });
@@ -196,7 +194,6 @@ bool DialogEditGroup::save_subscription_defaults_from_ui() {
     ent->SetDefaultResolverManagedBySubscription(resolverAuto);
     if (!resolverAuto) {
         ent->default_server_resolver_doh = parseDohUpstreams(ui->default_server_resolver_doh->toPlainText()).join("\n");
-        ent->default_server_resolver_allow_local_fallback = ui->default_server_resolver_fallback->isChecked();
     }
     return true;
 }
@@ -266,7 +263,6 @@ void DialogEditGroup::reset_profiles_to_inherit_defaults(bool resetClient, bool 
         if (resetResolver) {
             profile->bean->inheritSubscriptionResolver = true;
             profile->bean->serverResolverDohUpstreams.clear();
-            profile->bean->serverResolverAllowLocalFallback = ent->default_server_resolver_allow_local_fallback;
             profileChanged = true;
         }
         if (!profileChanged) continue;

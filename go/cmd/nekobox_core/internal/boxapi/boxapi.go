@@ -2,6 +2,7 @@ package boxapi
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"sync"
@@ -16,6 +17,8 @@ import (
 	"github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
 )
+
+var ErrNoActiveInstance = errors.New("no active sing-box instance; direct network fallback is disabled")
 
 type SbStatsService struct {
 	createdAt time.Time
@@ -61,6 +64,9 @@ func NewSbStatsService(options StatsServiceOptions) *SbStatsService {
 }
 
 func DialContext(ctx context.Context, instance *box.Box, tracker adapter.ConnectionTracker, network, addr string) (net.Conn, error) {
+	if instance == nil {
+		return nil, ErrNoActiveInstance
+	}
 	defOutboundTag := instance.Outbound().Default().Tag()
 	conn, err := dialer.NewDetour(instance.Outbound(), defOutboundTag, true).DialContext(ctx, network, metadata.ParseSocksaddr(addr))
 	if err != nil {
@@ -78,10 +84,8 @@ func CreateProxyHttpClient(instance *box.Box, tracker adapter.ConnectionTracker)
 		ResponseHeaderTimeout: time.Second * 3,
 	}
 
-	if instance != nil {
-		transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-			return DialContext(ctx, instance, tracker, network, addr)
-		}
+	transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		return DialContext(ctx, instance, tracker, network, addr)
 	}
 
 	return &http.Client{

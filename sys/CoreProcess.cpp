@@ -68,9 +68,18 @@ namespace NekoGui_sys {
                     coreRestartTimer.start();
                 }
 
-                // Restart
-                start_profile_when_core_is_up = NekoGui::dataStore->started_id;
-                MW_show_log("[Error] " + QObject::tr("Core exited, restarting."));
+                // Restarting the empty control daemon is not an OS-network
+                // mode change.  Recreating a profile that requested Tun is:
+                // after a crash it must therefore remain stopped until the
+                // user explicitly starts it again.
+                if (NekoGui::dataStore->spmode_vpn) {
+                    start_profile_when_core_is_up = -1;
+                    MW_show_log("[Error] " + QObject::tr(
+                                    "Core exited while Tun was requested. Restarting the empty core only; the profile and Tun will not be restored automatically."));
+                } else {
+                    start_profile_when_core_is_up = NekoGui::dataStore->started_id;
+                    MW_show_log("[Error] " + QObject::tr("Core exited, restarting."));
+                }
                 setTimeout([=] { Restart(); }, this, 1000);
             }
         });

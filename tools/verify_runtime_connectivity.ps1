@@ -2,6 +2,8 @@ param(
     [string] $PackageDir = "",
     [string] $TestUrl = "",
     [int] $TimeoutSeconds = 10,
+    [ValidateRange(100, 599)]
+    [int] $ExpectedHttpStatus = 204,
     [switch] $ExpectRunning,
     [switch] $ExpectSystemProxy,
     [switch] $ExpectAuxiliary,
@@ -57,7 +59,7 @@ function Read-ProjectConfig([string] $Dir) {
     $raw = Read-JsonFile $configPath
     $inboundPort = [int](Get-PropertyValue $raw "inbound_socks_port" 12080)
     $inboundAddress = [string](Get-PropertyValue $raw "inbound_address" "127.0.0.1")
-    $clashApi = [int](Get-PropertyValue $raw "core_box_clash_api" -19090)
+    $clashApi = [int](Get-PropertyValue $raw "core_box_clash_api" -9090)
     $configuredTestUrl = [string](Get-PropertyValue $raw "test_url" "http://cp.cloudflare.com/")
     $auxEntries = @()
     $entries = Get-PropertyValue $raw "aux_profile_ports" @()
@@ -162,22 +164,6 @@ function Get-ProcessInfosUnder([string] $Dir) {
         })
 }
 
-function Test-TcpPort([string] $HostName, [int] $Port, [int] $TimeoutMs) {
-    $client = New-Object System.Net.Sockets.TcpClient
-    try {
-        $async = $client.BeginConnect($HostName, $Port, $null, $null)
-        if (!$async.AsyncWaitHandle.WaitOne($TimeoutMs, $false)) {
-            return $false
-        }
-        $client.EndConnect($async)
-        return $true
-    } catch {
-        return $false
-    } finally {
-        $client.Close()
-    }
-}
-
 function Get-PortOwner([int] $Port) {
     try {
         $conn = Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction Stop |
@@ -201,7 +187,7 @@ function Get-PortOwner([int] $Port) {
     }
 }
 
-function Invoke-Curl([string[]] $Arguments) {
+function Invoke-Curl([string[]] $Arguments, [int] $ExpectedStatus = 0) {
     if (!(Get-Command curl.exe -ErrorAction SilentlyContinue)) {
         return [pscustomobject]@{
             skipped = $true
@@ -212,15 +198,29 @@ function Invoke-Curl([string[]] $Arguments) {
         }
     }
     $output = @()
+    $previousErrorActionPreference = $ErrorActionPreference
+    $previousNoProxy = [Environment]::GetEnvironmentVariable("NO_PROXY", "Process")
+    $previousNoProxyLower = [Environment]::GetEnvironmentVariable("no_proxy", "Process")
     try {
+        $ErrorActionPreference = "Continue"
+        [Environment]::SetEnvironmentVariable("NO_PROXY", "", "Process")
+        [Environment]::SetEnvironmentVariable("no_proxy", "", "Process")
         $output = & curl.exe @Arguments 2>&1
         $exitCode = $LASTEXITCODE
+        $joinedOutput = $output -join "`n"
+        $httpCode = $null
+        if ($joinedOutput -match "http=(\d{3})") {
+            $httpCode = [int]$Matches[1]
+        }
+        $statusMatches = $ExpectedStatus -le 0 -or $httpCode -eq $ExpectedStatus
+        $ok = $exitCode -eq 0 -and $statusMatches
         return [pscustomobject]@{
             skipped = $false
-            ok = ($exitCode -eq 0)
-            error = if ($exitCode -eq 0) { "" } else { ($output -join "`n") }
+            ok = $ok
+            error = if ($ok) { "" } elseif ($exitCode -ne 0) { $joinedOutput } else { "Expected HTTP $ExpectedStatus, received $httpCode." }
             exit_code = $exitCode
-            output = ($output -join "`n")
+            http_code = $httpCode
+            output = $joinedOutput
         }
     } catch {
         return [pscustomobject]@{
@@ -228,21 +228,26 @@ function Invoke-Curl([string[]] $Arguments) {
             ok = $false
             error = $_.Exception.Message
             exit_code = $null
+            http_code = $null
             output = ($output -join "`n")
         }
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+        [Environment]::SetEnvironmentVariable("NO_PROXY", $previousNoProxy, "Process")
+        [Environment]::SetEnvironmentVariable("no_proxy", $previousNoProxyLower, "Process")
     }
 }
 
-function Test-ProxyPort([string] $Name, [int] $Port, [string] $Url, [int] $TimeoutSeconds, [switch] $SkipCurl) {
-    $listen = Test-TcpPort "127.0.0.1" $Port 1500
+function Test-ProxyPort([string] $Name, [int] $Port, [string] $Url, [int] $TimeoutSeconds, [int] $ExpectedStatus, [switch] $SkipCurl) {
     $owner = Get-PortOwner $Port
+    $listen = $null -ne $owner
     $socks = $null
     $http = $null
     if (!$SkipCurl -and $listen) {
         $writeOut = "http=%{http_code} time=%{time_total} remote=%{remote_ip}"
         $baseArgs = @("--silent", "--show-error", "--max-time", [string]$TimeoutSeconds, "--connect-timeout", [string][Math]::Min(5, $TimeoutSeconds), "--output", "NUL", "--write-out", $writeOut)
-        $socks = Invoke-Curl (@("--proxy", "socks5h://127.0.0.1:$Port") + $baseArgs + @($Url))
-        $http = Invoke-Curl (@("--proxy", "http://127.0.0.1:$Port") + $baseArgs + @($Url))
+        $socks = Invoke-Curl (@("--proxy", "socks5h://127.0.0.1:$Port") + $baseArgs + @($Url)) $ExpectedStatus
+        $http = Invoke-Curl (@("--proxy", "http://127.0.0.1:$Port") + $baseArgs + @($Url)) $ExpectedStatus
     }
     return [pscustomobject]@{
         name = $Name
@@ -255,16 +260,16 @@ function Test-ProxyPort([string] $Name, [int] $Port, [string] $Url, [int] $Timeo
 }
 
 function Test-ClashApi([int] $Port, [string] $Secret, [int] $TimeoutSeconds, [switch] $SkipCurl) {
-    $listen = Test-TcpPort "127.0.0.1" $Port 1500
     $owner = Get-PortOwner $Port
+    $listen = $null -ne $owner
     $version = $null
     if (!$SkipCurl -and $listen) {
-        $args = @("--silent", "--show-error", "--max-time", [string]$TimeoutSeconds, "--connect-timeout", [string][Math]::Min(5, $TimeoutSeconds))
+        $args = @("--silent", "--show-error", "--max-time", [string]$TimeoutSeconds, "--connect-timeout", [string][Math]::Min(5, $TimeoutSeconds), "--write-out", "`nhttp=%{http_code}")
         if (![string]::IsNullOrEmpty($Secret)) {
             $args += @("-H", "Authorization: Bearer $Secret")
         }
         $args += @("http://127.0.0.1:$Port/version")
-        $version = Invoke-Curl $args
+        $version = Invoke-Curl $args 200
     }
     return [pscustomobject]@{
         port = $Port
@@ -295,7 +300,7 @@ if ([string]::IsNullOrWhiteSpace($TestUrl)) {
 $processes = @(Get-ProcessInfosUnder $PackageDir)
 $systemProxy = Get-SystemProxySnapshot
 $ports = @()
-$ports += Test-ProxyPort "main" $config.inbound_socks_port $TestUrl $TimeoutSeconds -SkipCurl:$SkipCurl
+$ports += Test-ProxyPort "main" $config.inbound_socks_port $TestUrl $TimeoutSeconds $ExpectedHttpStatus -SkipCurl:$SkipCurl
 $auxProfilePorts = @($config.aux_profile_ports)
 foreach ($aux in $auxProfilePorts) {
     $profile = $null
@@ -307,7 +312,7 @@ foreach ($aux in $auxProfilePorts) {
     } else {
         "aux #$($aux.profile_id) $($profile.name)"
     }
-    $ports += Test-ProxyPort $name ([int]$aux.port) $TestUrl $TimeoutSeconds -SkipCurl:$SkipCurl
+    $ports += Test-ProxyPort $name ([int]$aux.port) $TestUrl $TimeoutSeconds $ExpectedHttpStatus -SkipCurl:$SkipCurl
 }
 
 $clashApi = $null
@@ -322,6 +327,12 @@ $failures = New-Object System.Collections.Generic.List[string]
 
 if ($processes.Count -eq 0) {
     $warnings.Add("No project process was found under $PackageDir.")
+}
+foreach ($portResult in $ports) {
+    if ($portResult.listen -and $null -ne $portResult.owner -and
+        @($processes | Where-Object { $_.pid -eq $portResult.owner.pid }).Count -eq 0) {
+        $failures.Add("$($portResult.name) port $($portResult.port) is owned by PID $($portResult.owner.pid), not a process under the requested package directory.")
+    }
 }
 if ($ExpectRunning -and !$ports[0].listen) {
     $failures.Add("Main proxy port $($config.inbound_socks_port) is not listening.")
@@ -349,6 +360,10 @@ if ($ExpectSystemProxy -and !(SystemProxyTargetsPort $systemProxy $config.inboun
 if ($config.clash_api_enabled -and $null -ne $clashApi -and !$clashApi.listen) {
     $warnings.Add("Clash API is enabled in config but port $($config.clash_api_port) is not listening.")
 }
+if ($null -ne $clashApi -and $clashApi.listen -and $null -ne $clashApi.owner -and
+    @($processes | Where-Object { $_.pid -eq $clashApi.owner.pid }).Count -eq 0) {
+    $failures.Add("Clash API port $($config.clash_api_port) is not owned by a process under the requested package directory.")
+}
 if (!$SkipCurl) {
     foreach ($portResult in $ports) {
         if ($portResult.listen) {
@@ -371,6 +386,7 @@ $report = [ordered]@{
     timestamp = (Get-Date).ToString("o")
     package_dir = $PackageDir
     test_url = $TestUrl
+    expected_http_status = $ExpectedHttpStatus
     status = $status
     config = $config
     system_proxy = $systemProxy

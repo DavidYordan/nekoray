@@ -10,7 +10,6 @@ import (
 
 	"github.com/matsuridayo/libneko/neko_common"
 	"github.com/matsuridayo/libneko/speedtest"
-	box "github.com/sagernet/sing-box"
 
 	"log"
 
@@ -93,30 +92,29 @@ func (s *server) Test(ctx context.Context, in *gen.TestReq) (out *gen.TestResp, 
 	}()
 
 	if in.Mode == gen.TestMode_UrlTest {
-		var i *box.Box
-		var cancel context.CancelFunc
-		if in.Config != nil {
-			// Test instance
-			i, cancel, err = CreateSingBox([]byte(in.Config.CoreConfig), nekoPlatformWriter{})
-			if i != nil {
-				defer i.Close()
-				defer cancel()
-			}
-			if err != nil {
-				return
-			}
-		} else {
-			// Test running instance
-			i = instance
-			if i == nil {
-				return
-			}
+		if in.Config == nil {
+			err = errors.New("URL Test requires an explicit bounded test configuration")
+			return
+		}
+		// Test instance
+		i, cancel, createErr := CreateSingBox([]byte(in.Config.CoreConfig), nekoPlatformWriter{})
+		err = createErr
+		if i != nil {
+			defer i.Close()
+			defer cancel()
+		}
+		if err != nil {
+			return
 		}
 		// Latency
 		out.Ms, err = speedtest.UrlTest(boxapi.CreateProxyHttpClient(i, nil), in.Url, in.Timeout, speedtest.UrlTestStandard_RTT)
 	} else if in.Mode == gen.TestMode_TcpPing {
-		out.Ms, err = speedtest.TcpPing(in.Address, in.Timeout)
+		err = errors.New("TCP Ping is disabled because it opens a direct system socket instead of using the selected outbound")
 	} else if in.Mode == gen.TestMode_FullTest {
+		if in.Config == nil {
+			err = errors.New("Full Test requires an explicit bounded test configuration")
+			return
+		}
 		i, cancel, err := CreateSingBox([]byte(in.Config.CoreConfig), nekoPlatformWriter{})
 		if i != nil {
 			defer i.Close()

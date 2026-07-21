@@ -66,7 +66,9 @@ DialogEditProfile::DialogEditProfile(const QString &_type, int profileOrGroupId,
     ui->serverResolverMode->setToolTip(resolverHelp);
     ui->serverResolverDohUpstreams_l->setToolTip(tr("HTTPS DoH upstreams, one per line. Used for this profile's server address only."));
     ui->serverResolverDohUpstreams->setToolTip(tr("HTTPS DoH upstreams, one per line. Used only when this profile overrides with doh mode."));
-    ui->serverResolverAllowLocalFallback->setToolTip(tr("Allow local system resolver if provider DoH is unavailable at runtime."));
+    // Legacy data is retained for compatibility, but local DNS fallback is
+    // outside the fail-closed product contract and must not be user-selectable.
+    ui->serverResolverAllowLocalFallback->setVisible(false);
     connect(ui->serverResolverMode, &QComboBox::currentTextChanged, this, [=](const QString &txt) {
         const auto enableDoh = txt == "doh";
         ui->serverResolverDohUpstreams->setEnabled(enableDoh);
@@ -252,7 +254,7 @@ void DialogEditProfile::typeSelected(const QString &newType) {
     ui->serverResolverMode_l->setVisible(showAddressPort);
     ui->serverResolverDohUpstreams->setVisible(showAddressPort);
     ui->serverResolverDohUpstreams_l->setVisible(showAddressPort);
-    ui->serverResolverAllowLocalFallback->setVisible(showAddressPort);
+    ui->serverResolverAllowLocalFallback->setVisible(false);
 
     // 右边 stream
     auto stream = GetStreamSettings(ent->bean.get());
@@ -402,7 +404,6 @@ bool DialogEditProfile::onEnd() {
     ent->bean->serverPort = ui->port->text().toInt();
     ent->bean->serverResolverDohUpstreams = "";
     ent->bean->inheritSubscriptionResolver = ui->serverResolverMode->currentText() == "subscription";
-    ent->bean->serverResolverAllowLocalFallback = ui->serverResolverAllowLocalFallback->isChecked();
     if (ui->serverResolverMode->currentText() == "doh" && !IsIpAddress(ent->bean->serverAddress)) {
         ent->bean->inheritSubscriptionResolver = false;
         auto upstreams = parseResolverDohUpstreamsForUi(ui->serverResolverDohUpstreams->toPlainText());
@@ -533,7 +534,6 @@ void DialogEditProfile::on_apply_to_group_clicked() {
         apply_to_group_ui[ui->certificate_edit] = new FloatCheckBox(ui->certificate_edit, this);
         apply_to_group_ui[ui->serverResolverMode] = new FloatCheckBox(ui->serverResolverMode, this);
         apply_to_group_ui[ui->serverResolverDohUpstreams] = new FloatCheckBox(ui->serverResolverDohUpstreams, this);
-        apply_to_group_ui[ui->serverResolverAllowLocalFallback] = new FloatCheckBox(ui->serverResolverAllowLocalFallback, this);
         apply_to_group_ui[ui->custom_config_edit] = new FloatCheckBox(ui->custom_config_edit, this);
         apply_to_group_ui[ui->custom_outbound_edit] = new FloatCheckBox(ui->custom_outbound_edit, this);
         ui->apply_to_group->setText(tr("Confirm"));
@@ -613,8 +613,6 @@ void DialogEditProfile::do_apply_to_group(const std::shared_ptr<NekoGui::Group> 
         copyStream(&stream->certificate);
     } else if (key == ui->serverResolverMode || key == ui->serverResolverDohUpstreams) {
         copyServerResolver();
-    } else if (key == ui->serverResolverAllowLocalFallback) {
-        copyBean(&ent->bean->serverResolverAllowLocalFallback);
     } else if (key == ui->custom_config_edit) {
         copyBean(&ent->bean->custom_config);
     } else if (key == ui->custom_outbound_edit) {

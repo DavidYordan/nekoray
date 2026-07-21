@@ -8,6 +8,22 @@
         <translation>基本设置</translation>
     </message>
     <message>
+        <source>Invalid port</source>
+        <translation>端口无效</translation>
+    </message>
+    <message>
+        <source>Mixed listen port must be between 1 and 65535.</source>
+        <translation>Mixed 监听端口必须在 1 到 65535 之间。</translation>
+    </message>
+    <message>
+        <source>Invalid port range</source>
+        <translation>端口范围无效</translation>
+    </message>
+    <message>
+        <source>Auxiliary port range must be between 1 and 65535, and the start must not exceed the end.</source>
+        <translation>辅助端口范围必须在 1 到 65535 之间，且起始端口不能大于结束端口。</translation>
+    </message>
+    <message>
         <source>Enable</source>
         <translation>启用</translation>
     </message>
@@ -1346,6 +1362,14 @@ End: %2</source>
         <translation>未启动</translation>
     </message>
     <message>
+        <source>Group front proxy active: %1</source>
+        <translation>分组前置代理已启用：%1</translation>
+    </message>
+    <message>
+        <source>Online update is disabled in this private build.</source>
+        <translation>此私人版本已禁用在线更新。</translation>
+    </message>
+    <message>
         <source>Current server is incompatible with Tun. Please stop the server first, enable Tun Mode, and then restart.</source>
         <translation>当前服务器与 Tun 不兼容。请先停止服务器，打开 Tun 模式后再启动。</translation>
     </message>
@@ -1545,6 +1569,10 @@ Release note:
     <message>
         <source>Requesting subscription: %1</source>
         <translation>正在请求订阅: %1</translation>
+    </message>
+    <message>
+        <source>Subscription refresh is temporarily disabled because a failed or empty response can delete existing profiles.</source>
+        <translation>订阅刷新已临时禁用，因为失败或空响应可能删除现有配置。</translation>
     </message>
     <message>
         <source>Requesting subscription %1 error: %2</source>

@@ -6,6 +6,8 @@
 #include <QDir>
 #include <QColor>
 
+#include <limits>
+
 namespace NekoGui {
 
     ProfileManager *profileManager = new ProfileManager();
@@ -40,27 +42,24 @@ namespace NekoGui {
         profilesIdOrder = filterIntJsonFile("profiles");
         groupsIdOrder = filterIntJsonFile("groups");
         // Load Proxys
-        QList<int> delProfile;
         for (auto id: profilesIdOrder) {
             auto ent = LoadProxyEntity(QStringLiteral("profiles/%1.json").arg(id));
-            // Corrupted profile?
-            if (ent == nullptr || ent->bean == nullptr || ent->bean->version == -114514) {
-                delProfile << id;
+            // Preserve unreadable and unknown profiles on disk. A later version
+            // may understand them, and silently deleting user data is never a
+            // valid compatibility strategy.
+            if (ent == nullptr || ent->bean == nullptr || ent->bean->version == -114514 || ent->id != id) {
+                qWarning() << "Profile was not loaded; original file is preserved:" << id;
                 continue;
             }
             profiles[id] = ent;
-        }
-        // Clear Corrupted profile
-        for (auto id: delProfile) {
-            DeleteProfile(id);
         }
         // Load Groups
         auto loadedOrder = groupsTabOrder;
         groupsTabOrder = {};
         for (auto id: groupsIdOrder) {
             auto ent = LoadGroup(QStringLiteral("groups/%1.json").arg(id));
-            // Corrupted group?
-            if (ent->id != id) {
+            if (ent == nullptr || ent->id != id) {
+                qWarning() << "Group was not loaded; original file is preserved:" << id;
                 continue;
             }
             // Ensure order contains every group
@@ -79,59 +78,17 @@ namespace NekoGui {
         if (groups.empty()) {
             auto defaultGroup = NekoGui::ProfileManager::NewGroup();
             defaultGroup->name = QObject::tr("Default");
-            NekoGui::profileManager->AddGroup(defaultGroup);
+            if (NekoGui::profileManager->AddGroup(defaultGroup)) {
+                dataStore->current_group = defaultGroup->id;
+            }
         }
         //
         if (dataStore->flag_reorder) {
-            {
-                // remove all (contains orphan)
-                for (const auto &profile: profiles) {
-                    QFile::remove(profile.second->fn);
-                }
-            }
-            std::map<int, int> gidOld2New;
-            {
-                int i = 0;
-                int ii = 0;
-                QList<int> newProfilesIdOrder;
-                std::map<int, std::shared_ptr<ProxyEntity>> newProfiles;
-                for (auto gid: groupsTabOrder) {
-                    auto group = GetGroup(gid);
-                    gidOld2New[gid] = ii++;
-                    for (auto const &profile: group->ProfilesWithOrder()) {
-                        auto oldId = profile->id;
-                        auto newId = i++;
-                        profile->id = newId;
-                        profile->gid = gidOld2New[gid];
-                        profile->fn = QStringLiteral("profiles/%1.json").arg(newId);
-                        profile->Save();
-                        newProfiles[newId] = profile;
-                        newProfilesIdOrder << newId;
-                    }
-                    group->order = {};
-                    group->Save();
-                }
-                profiles = newProfiles;
-                profilesIdOrder = newProfilesIdOrder;
-            }
-            {
-                QList<int> newGroupsIdOrder;
-                std::map<int, std::shared_ptr<Group>> newGroups;
-                for (auto oldGid: groupsTabOrder) {
-                    auto newId = gidOld2New[oldGid];
-                    auto group = groups[oldGid];
-                    QFile::remove(group->fn);
-                    group->id = newId;
-                    group->fn = QStringLiteral("groups/%1.json").arg(newId);
-                    group->Save();
-                    newGroups[newId] = group;
-                    newGroupsIdOrder << newId;
-                }
-                groups = newGroups;
-                groupsIdOrder = newGroupsIdOrder;
-                groupsTabOrder = newGroupsIdOrder;
-            }
-            MessageBoxInfo(software_name, "Profiles and groups reorder complete.");
+            qCritical() << "Unsafe legacy profile reorder was blocked; no file was changed.";
+            MessageBoxWarning(
+                software_name,
+                "Profile reorder is disabled because the legacy implementation deletes files before replacement. "
+                "No profile or group file was changed.");
         }
     }
 
@@ -251,11 +208,13 @@ namespace NekoGui {
     // Profile
 
     int ProfileManager::NewProfileID() const {
-        if (profiles.empty()) {
+        // profilesIdOrder also contains preserved, currently unreadable files.
+        // Never reuse their IDs and overwrite them.
+        if (profilesIdOrder.empty()) {
             return 0;
-        } else {
-            return profilesIdOrder.last() + 1;
         }
+        if (profilesIdOrder.last() == std::numeric_limits<int>::max()) return -1;
+        return profilesIdOrder.last() + 1;
     }
 
     bool ProfileManager::AddProfile(const std::shared_ptr<ProxyEntity> &ent, int gid) {
@@ -263,23 +222,66 @@ namespace NekoGui {
             return false;
         }
 
+        const auto previousGid = ent->gid;
+        const auto previousFn = ent->fn;
+        const auto newId = NewProfileID();
+        if (newId < 0) {
+            qCritical() << "Cannot allocate a profile ID without overwriting preserved data.";
+            return false;
+        }
+
         ent->gid = gid < 0 ? dataStore->current_group : gid;
-        ent->id = NewProfileID();
+        ent->id = newId;
         profiles[ent->id] = ent;
         profilesIdOrder.push_back(ent->id);
 
         ent->fn = QStringLiteral("profiles/%1.json").arg(ent->id);
         ent->Save();
+        if (!ent->last_save_succeeded) {
+            profiles.erase(ent->id);
+            profilesIdOrder.removeAll(ent->id);
+            ent->id = -1;
+            ent->gid = previousGid;
+            ent->fn = previousFn;
+            return false;
+        }
         return true;
     }
 
-    void ProfileManager::DeleteProfile(int id) {
-        if (id < 0) return;
-        if (dataStore->started_id == id) return;
-        if (dataStore->aux_profile_ports.remove(id) > 0) dataStore->Save();
+    bool ProfileManager::DeleteProfile(int id) {
+        if (id < 0) return false;
+        if (dataStore->started_id == id) return false;
+        if (profiles.find(id) == profiles.end()) return false;
+
+        const auto previousAuxPorts = dataStore->aux_profile_ports;
+        const auto previousAuxEntries = dataStore->aux_profile_port_entries;
+        const auto removedAuxiliaryMapping = dataStore->aux_profile_ports.remove(id) > 0;
+        if (removedAuxiliaryMapping) {
+            dataStore->Save();
+            if (!dataStore->last_save_succeeded) {
+                dataStore->aux_profile_ports = previousAuxPorts;
+                dataStore->aux_profile_port_entries = previousAuxEntries;
+                qCritical() << "Profile deletion aborted because the auxiliary mapping could not be saved:" << id;
+                return false;
+            }
+        }
+
+        const auto profilePath = QStringLiteral("profiles/%1.json").arg(id);
+        if (QFile::exists(profilePath) && !QFile::remove(profilePath)) {
+            qCritical() << "Profile deletion could not remove its file; the profile remains loaded:" << profilePath;
+            if (removedAuxiliaryMapping) {
+                dataStore->aux_profile_ports = previousAuxPorts;
+                dataStore->aux_profile_port_entries = previousAuxEntries;
+                dataStore->Save();
+                if (!dataStore->last_save_succeeded) {
+                    qCritical() << "Could not roll back the persisted auxiliary mapping after profile file deletion failed:" << id;
+                }
+            }
+            return false;
+        }
         profiles.erase(id);
         profilesIdOrder.removeAll(id);
-        QFile(QStringLiteral("profiles/%1.json").arg(id)).remove();
+        return true;
     }
 
     void ProfileManager::MoveProfile(const std::shared_ptr<ProxyEntity> &ent, int gid) {
@@ -363,11 +365,12 @@ namespace NekoGui {
     }
 
     int ProfileManager::NewGroupID() const {
-        if (groups.empty()) {
+        // groupsIdOrder also contains preserved, currently unreadable files.
+        if (groupsIdOrder.empty()) {
             return 0;
-        } else {
-            return groupsIdOrder.last() + 1;
         }
+        if (groupsIdOrder.last() == std::numeric_limits<int>::max()) return -1;
+        return groupsIdOrder.last() + 1;
     }
 
     bool ProfileManager::AddGroup(const std::shared_ptr<Group> &ent) {
@@ -375,13 +378,28 @@ namespace NekoGui {
             return false;
         }
 
-        ent->id = NewGroupID();
+        const auto previousFn = ent->fn;
+        const auto newId = NewGroupID();
+        if (newId < 0) {
+            qCritical() << "Cannot allocate a group ID without overwriting preserved data.";
+            return false;
+        }
+
+        ent->id = newId;
         groups[ent->id] = ent;
         groupsIdOrder.push_back(ent->id);
         groupsTabOrder.push_back(ent->id);
 
         ent->fn = QStringLiteral("groups/%1.json").arg(ent->id);
         ent->Save();
+        if (!ent->last_save_succeeded) {
+            groups.erase(ent->id);
+            groupsIdOrder.removeAll(ent->id);
+            groupsTabOrder.removeAll(ent->id);
+            ent->id = -1;
+            ent->fn = previousFn;
+            return false;
+        }
         return true;
     }
 

@@ -51,10 +51,11 @@ public:
 
     bool isInternalTunActive() const;
 
+    bool hasActiveIsolatedTest();
+
     enum class CoreStartReason {
         UserAction,
         ProfileReload,
-        StartupRestore,
         EnableInternalTun,
         DisableInternalTun,
         CoreCrashRecovery,
@@ -71,8 +72,6 @@ public:
 
     enum class ProxyModeChangeReason {
         UserAction,
-        StartupRestore,
-        AppRestart,
         VpnProcessExit,
     };
 
@@ -142,8 +141,6 @@ private slots:
 
     void on_menu_copy_links_nkr_triggered();
 
-    void on_menu_copy_links_multimapper_triggered();
-
     void on_menu_export_config_triggered();
 
     void display_qr_link(bool nkrFormat = false);
@@ -195,8 +192,6 @@ private:
     QMutex mu_exit;
     QSemaphore sem_stopped;
     int exit_reason = 0;
-    bool exit_had_system_proxy = false;
-    bool exit_had_vpn = false;
     int exit_had_profile_id = -1919;
     bool running_internal_tun = false;
 

@@ -3,7 +3,7 @@ param(
     [string] $QtDir = "",
     [string] $MingwDir = "",
     [string] $DepsDir = "",
-    [string] $ReferenceDir = "D:\Program Files\nekoray",
+    [string] $ReferenceDir = "",
     [switch] $RefreshGeodata,
     [switch] $SkipGoBuild,
     [switch] $SkipGuiBuild,
@@ -113,50 +113,22 @@ function Get-PackageProcessInfos([string] $PackageDir) {
         })
 }
 
-function Stop-PackageProcesses([string] $PackageDir) {
+function Assert-PackageNotRunning([string] $PackageDir) {
     $processInfos = @(Get-PackageProcessInfos $PackageDir)
     if ($processInfos.Count -eq 0) {
         return
     }
 
-    Write-Step "Close running package instance"
+    Write-Step "Running package instance detected"
     $processInfos |
         Select-Object @{Name = "ProcessName"; Expression = { $_.Name } }, ProcessId, ExecutablePath |
         Format-Table -AutoSize
-
-    foreach ($info in $processInfos) {
-        try {
-            $p = Get-Process -Id $info.ProcessId -ErrorAction Stop
-            if ($p.MainWindowHandle -ne 0) {
-                [void] $p.CloseMainWindow()
-            }
-        } catch {
-            Write-Warning "Could not request graceful close for process $($info.ProcessId): $($_.Exception.Message)"
-        }
-    }
-
-    $deadline = (Get-Date).AddSeconds(5)
-    do {
-        Start-Sleep -Milliseconds 250
-        $remaining = @(Get-PackageProcessInfos $PackageDir)
-    } while ($remaining.Count -gt 0 -and (Get-Date) -lt $deadline)
-
-    if ($remaining.Count -gt 0) {
-        Write-Warning "Package instance did not exit after close request; forcing only processes under $PackageDir."
-        foreach ($info in $remaining) {
-            Stop-Process -Id $info.ProcessId -Force -ErrorAction SilentlyContinue
-        }
-    }
-
-    $deadline = (Get-Date).AddSeconds(10)
-    do {
-        Start-Sleep -Milliseconds 250
-        $remaining = @(Get-PackageProcessInfos $PackageDir)
-    } while ($remaining.Count -gt 0 -and (Get-Date) -lt $deadline)
-
-    if ($remaining.Count -gt 0) {
-        Fail "Could not stop package process(es): $($remaining.ProcessId -join ', ')"
-    }
+    Fail (
+        "Refusing to build over a running package instance. " +
+        "The build script never closes GUI/core processes because that could change proxy/TUN state. " +
+        "Stop the exact package instance manually, then rerun the build. PID(s): " +
+        ($processInfos.ProcessId -join ', ')
+    )
 }
 
 function Backup-PackageConfig([string] $PackageConfigDir, [string] $PackageConfigBackupDir, [string] $DeployRoot) {
@@ -297,8 +269,12 @@ function Download-Or-Fallback {
         if (Test-Path -LiteralPath $tmp) {
             Remove-Item -LiteralPath $tmp -Force
         }
-        $fallback = Join-Path $FallbackDir $Name
-        if (![string]::IsNullOrWhiteSpace($FallbackDir) -and (Test-Path -LiteralPath $fallback)) {
+        $fallback = if ([string]::IsNullOrWhiteSpace($FallbackDir)) {
+            ""
+        } else {
+            Join-Path $FallbackDir $Name
+        }
+        if (![string]::IsNullOrWhiteSpace($fallback) -and (Test-Path -LiteralPath $fallback -PathType Leaf)) {
             Write-Warning "Download failed for $Name, using reference copy: $fallback"
             Copy-Item -LiteralPath $fallback -Destination $target -Force
             return
@@ -430,7 +406,7 @@ try {
     $env:CGO_ENABLED = "0"
 
     New-Item -ItemType Directory -Force -Path $DeployRoot | Out-Null
-    Stop-PackageProcesses $PackageDir
+    Assert-PackageNotRunning $PackageDir
     Backup-PackageConfig $PackageConfigDir $PackageConfigBackupDir $DeployRoot
     if ($SkipGoBuild) {
         Backup-PackageBinaries $PackageDir $PackageBinaryBackupDir $DeployRoot
@@ -509,7 +485,12 @@ try {
 
     New-Item -ItemType Directory -Force -Path $PublicResDir | Out-Null
     Copy-Item -Path (Join-Path $Root "res\public\*") -Destination $PublicResDir -Force
-    $fallback = if (Test-Path -LiteralPath $ReferenceDir -PathType Container) { $ReferenceDir } else { "" }
+    $fallback = if (![string]::IsNullOrWhiteSpace($ReferenceDir) -and
+                    (Test-Path -LiteralPath $ReferenceDir -PathType Container)) {
+        (Resolve-Path -LiteralPath $ReferenceDir).Path
+    } else {
+        ""
+    }
     Download-Or-Fallback "geoip.db" "https://github.com/SagerNet/sing-geoip/releases/latest/download/geoip.db" $PublicResDir $fallback -Refresh:$RefreshGeodata
     Download-Or-Fallback "geosite.db" "https://github.com/SagerNet/sing-geosite/releases/latest/download/geosite.db" $PublicResDir $fallback -Refresh:$RefreshGeodata
     Copy-Item -Path (Join-Path $PublicResDir "*") -Destination $PackageDir -Force -Exclude @("geoip.dat", "geosite.dat")

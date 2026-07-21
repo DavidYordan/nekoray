@@ -67,7 +67,6 @@ namespace NekoGui {
         int imported_count = 0;
         bool refreshing_group_list = false;
         bool refreshing_group = false;
-        int resolve_count = 0;
 
         // Flags
         QStringList argv = {};
@@ -75,8 +74,6 @@ namespace NekoGui {
         bool flag_many = false;
         bool flag_tray = false;
         bool flag_debug = false;
-        bool flag_restart_tun_on = false;
-        bool flag_restart_system_proxy_on = false;
         int flag_restart_profile_id = -1919;
         bool flag_reorder = false;
 
@@ -127,6 +124,7 @@ namespace NekoGui {
         int aux_port_pool_start = 12100;
         int aux_port_pool_end = 12299;
         QStringList aux_profile_port_entries = {};
+        QString aux_profile_ports_load_error = "";
         InboundAuthorization *inbound_auth = new InboundAuthorization;
         QString custom_inbound = "{\"inbounds\": []}";
 
@@ -139,9 +137,9 @@ namespace NekoGui {
         bool vpn_internal_tun = true;
         int vpn_implementation = 0;
         int vpn_mtu = 9000;
-        bool vpn_ipv6 = false;
+        bool vpn_ipv6 = true;
         bool vpn_hide_console = true;
-        bool vpn_strict_route = false;
+        bool vpn_strict_route = true;
         bool vpn_rule_white = false;
         QString vpn_rule_process = "";
         QString vpn_rule_cidr = "";
@@ -153,7 +151,7 @@ namespace NekoGui {
         QString hotkey_system_proxy_menu = "";
 
         // Core
-        int core_box_clash_api = -19090;
+        int core_box_clash_api = -9090;
         QString core_box_clash_api_secret = "";
         QString core_box_underlying_dns = "";
 
@@ -165,7 +163,9 @@ namespace NekoGui {
 
         void LoadAuxiliaryProfilePorts();
 
-        void StoreAuxiliaryProfilePorts();
+        [[nodiscard]] QString ValidateAuxiliaryProfilePortEntries(const QJsonObject &object) const;
+
+        [[nodiscard]] QString StoreAuxiliaryProfilePorts();
 
         void NormalizeAuxiliaryPortSettings();
 

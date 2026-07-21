@@ -30,13 +30,17 @@ namespace NekoGui_ConfigItem {
     public:
         QMap<QString, std::shared_ptr<configItem>> _map;
 
+        std::function<QString(const QJsonObject &)> callback_validate_load = nullptr;
         std::function<void()> callback_after_load = nullptr;
-        std::function<void()> callback_before_save = nullptr;
+        std::function<QString()> callback_before_save = nullptr;
 
         QString fn;
         bool load_control_must = false; // must load from file
         bool save_control_compact = false;
         bool save_control_no_save = false;
+        bool load_failed_existing = false;
+        bool last_save_succeeded = false;
+        QString last_load_error;
         QByteArray last_save_content;
 
         JsonStore() = default;
@@ -59,7 +63,7 @@ namespace NekoGui_ConfigItem {
 
         void FromJson(QJsonObject object);
 
-        void FromJsonBytes(const QByteArray &data);
+        bool FromJsonBytes(const QByteArray &data);
 
         bool Save();
 

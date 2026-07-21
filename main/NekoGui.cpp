@@ -2,6 +2,7 @@
 #include "fmt/Preset.hpp"
 
 #include <QFile>
+#include <QSaveFile>
 #include <QDir>
 #include <QApplication>
 #include <QFileInfo>
@@ -172,31 +173,68 @@ namespace NekoGui_ConfigItem {
         if (callback_after_load != nullptr) callback_after_load();
     }
 
-    void JsonStore::FromJsonBytes(const QByteArray &data) {
+    bool JsonStore::FromJsonBytes(const QByteArray &data) {
+        last_load_error.clear();
         QJsonParseError error{};
         auto document = QJsonDocument::fromJson(data, &error);
 
-        if (error.error != error.NoError) {
-            qDebug() << "QJsonParseError" << error.errorString();
-            return;
+        if (error.error != QJsonParseError::NoError || !document.isObject()) {
+            last_load_error = error.error != QJsonParseError::NoError
+                                  ? error.errorString()
+                                  : QStringLiteral("The JSON root must be an object.");
+            qWarning() << "Invalid JSON object:" << last_load_error;
+            return false;
         }
 
-        FromJson(document.object());
+        const auto object = document.object();
+        if (callback_validate_load != nullptr) {
+            last_load_error = callback_validate_load(object);
+            if (!last_load_error.isEmpty()) {
+                qWarning() << "Config validation failed before load:" << last_load_error;
+                return false;
+            }
+        }
+
+        FromJson(object);
+        return true;
     }
 
     bool JsonStore::Save() {
-        if (callback_before_save != nullptr) callback_before_save();
+        last_save_succeeded = false;
+        if (callback_before_save != nullptr) {
+            const auto validationError = callback_before_save();
+            if (!validationError.isEmpty()) {
+                qCritical() << "Refusing to save invalid config:" << fn << validationError;
+                return false;
+            }
+        }
         if (save_control_no_save) return false;
+        if (load_failed_existing) {
+            qCritical() << "Refusing to overwrite an existing config that failed to load:" << fn;
+            return false;
+        }
 
         auto save_content = ToJsonBytes();
-        auto changed = last_save_content != save_content;
-        last_save_content = save_content;
+        const auto changed = last_save_content != save_content;
 
-        QFile file;
-        file.setFileName(fn);
-        file.open(QIODevice::ReadWrite | QIODevice::Truncate);
-        file.write(save_content);
-        file.close();
+        QSaveFile file(fn);
+        file.setDirectWriteFallback(false);
+        if (!file.open(QIODevice::WriteOnly)) {
+            qWarning() << "Cannot open config for atomic save:" << fn << file.errorString();
+            return false;
+        }
+        if (file.write(save_content) != save_content.size()) {
+            qWarning() << "Cannot write complete config:" << fn << file.errorString();
+            file.cancelWriting();
+            return false;
+        }
+        if (!file.commit()) {
+            qWarning() << "Cannot commit config atomically:" << fn << file.errorString();
+            return false;
+        }
+
+        last_save_content = save_content;
+        last_save_succeeded = true;
 
         return changed;
     }
@@ -206,15 +244,24 @@ namespace NekoGui_ConfigItem {
         file.setFileName(fn);
 
         if (!file.exists() && !load_control_must) {
+            load_failed_existing = false;
             return false;
         }
 
         bool ok = file.open(QIODevice::ReadOnly);
         if (!ok) {
+            load_failed_existing = file.exists();
             MessageBoxWarning("error", "can not open config " + fn + "\n" + file.errorString());
         } else {
-            last_save_content = file.readAll();
-            FromJsonBytes(last_save_content);
+            const auto load_content = file.readAll();
+            if (!FromJsonBytes(load_content)) {
+                qWarning() << "Cannot load invalid config; original file is preserved:" << fn;
+                load_failed_existing = true;
+                ok = false;
+            } else {
+                load_failed_existing = false;
+                last_save_content = load_content;
+            }
         }
 
         file.close();
@@ -288,8 +335,11 @@ namespace NekoGui {
         _add(new configItem("core_box_clash_api_secret", &core_box_clash_api_secret, itemType::string));
         _add(new configItem("core_box_underlying_dns", &core_box_underlying_dns, itemType::string));
         _add(new configItem("vpn_internal_tun", &vpn_internal_tun, itemType::boolean));
+        callback_validate_load = [this](const QJsonObject &object) {
+            return ValidateAuxiliaryProfilePortEntries(object);
+        };
         callback_after_load = [this] { LoadAuxiliaryProfilePorts(); };
-        callback_before_save = [this] { StoreAuxiliaryProfilePorts(); };
+        callback_before_save = [this] { return StoreAuxiliaryProfilePorts(); };
     }
 
     void DataStore::NormalizeAuxiliaryPortSettings() {
@@ -301,29 +351,97 @@ namespace NekoGui {
     void DataStore::LoadAuxiliaryProfilePorts() {
         NormalizeAuxiliaryPortSettings();
         aux_profile_ports.clear();
+        aux_profile_ports_load_error.clear();
         QSet<int> seenPorts;
+        QSet<int> seenProfileIds;
+        int invalidEntries = 0;
         for (const auto &entry: aux_profile_port_entries) {
             const auto parts = entry.split(":");
-            if (parts.size() != 2) continue;
+            if (parts.size() != 2) {
+                invalidEntries++;
+                continue;
+            }
             bool idOk = false;
             bool portOk = false;
             const auto profileId = parts.at(0).trimmed().toInt(&idOk);
             const auto port = parts.at(1).trimmed().toInt(&portOk);
-            if (!idOk || !portOk || profileId < 0 || !IsValidPort(port) || seenPorts.contains(port)) continue;
+            if (!idOk || !portOk || profileId < 0 || !IsValidPort(port) ||
+                seenPorts.contains(port) || seenProfileIds.contains(profileId)) {
+                invalidEntries++;
+                continue;
+            }
             aux_profile_ports.insert(profileId, port);
             seenPorts.insert(port);
+            seenProfileIds.insert(profileId);
+        }
+        if (invalidEntries > 0) {
+            aux_profile_ports_load_error = QStringLiteral(
+                "Auxiliary Mixed mappings contain %1 malformed or duplicate persisted entr%2. "
+                "The config is blocked from runtime use and saving; repair it explicitly.")
+                                               .arg(invalidEntries)
+                                               .arg(invalidEntries == 1 ? "y" : "ies");
         }
     }
 
-    void DataStore::StoreAuxiliaryProfilePorts() {
+    QString DataStore::ValidateAuxiliaryProfilePortEntries(const QJsonObject &object) const {
+        const auto value = object.value(QStringLiteral("aux_profile_ports"));
+        if (value.isUndefined()) return {};
+        if (!value.isArray()) {
+            return QStringLiteral("aux_profile_ports must be an array of 'profile-id:port' strings.");
+        }
+
+        QSet<int> seenPorts;
+        QSet<int> seenProfileIds;
+        const auto entries = value.toArray();
+        for (int index = 0; index < entries.size(); ++index) {
+            const auto item = entries.at(index);
+            if (!item.isString()) {
+                return QStringLiteral("aux_profile_ports entry %1 must be a string.").arg(index);
+            }
+
+            const auto parts = item.toString().split(":");
+            bool idOk = false;
+            bool portOk = false;
+            const auto profileId = parts.size() == 2 ? parts.at(0).trimmed().toInt(&idOk) : -1;
+            const auto port = parts.size() == 2 ? parts.at(1).trimmed().toInt(&portOk) : -1;
+            if (parts.size() != 2 || !idOk || !portOk || profileId < 0 || !IsValidPort(port)) {
+                return QStringLiteral("aux_profile_ports entry %1 is not a valid 'profile-id:port' mapping.").arg(index);
+            }
+            if (seenProfileIds.contains(profileId)) {
+                return QStringLiteral("aux_profile_ports contains duplicate profile id %1.").arg(profileId);
+            }
+            if (seenPorts.contains(port)) {
+                return QStringLiteral("aux_profile_ports contains duplicate port %1.").arg(port);
+            }
+            seenProfileIds.insert(profileId);
+            seenPorts.insert(port);
+        }
+        return {};
+    }
+
+    QString DataStore::StoreAuxiliaryProfilePorts() {
         NormalizeAuxiliaryPortSettings();
-        aux_profile_port_entries.clear();
+        if (!aux_profile_ports_load_error.isEmpty()) return aux_profile_ports_load_error;
+
+        QStringList serializedEntries;
         QSet<int> seenPorts;
         for (auto it = aux_profile_ports.constBegin(); it != aux_profile_ports.constEnd(); ++it) {
-            if (it.key() < 0 || !IsValidPort(it.value()) || seenPorts.contains(it.value())) continue;
-            aux_profile_port_entries << QStringLiteral("%1:%2").arg(it.key()).arg(it.value());
+            if (it.key() < 0) {
+                return QStringLiteral("Auxiliary Mixed mapping contains an invalid profile id: %1.").arg(it.key());
+            }
+            if (!IsValidPort(it.value())) {
+                return QStringLiteral("Auxiliary Mixed mapping for profile %1 contains an invalid port: %2.")
+                    .arg(it.key())
+                    .arg(it.value());
+            }
+            if (seenPorts.contains(it.value())) {
+                return QStringLiteral("Auxiliary Mixed mappings contain duplicate port %1.").arg(it.value());
+            }
+            serializedEntries << QStringLiteral("%1:%2").arg(it.key()).arg(it.value());
             seenPorts.insert(it.value());
         }
+        aux_profile_port_entries = serializedEntries;
+        return {};
     }
 
     void DataStore::UpdateStartedId(int id) {

@@ -23,12 +23,15 @@
 #include "sys/windows/MiniDump.h"
 #endif
 
+#ifndef Q_OS_WIN
 void signal_handler(int signum) {
+    Q_UNUSED(signum);
     if (qApp) {
         GetMainWindow()->on_commitDataRequest();
         qApp->exit();
     }
 }
+#endif
 
 QTranslator* trans = nullptr;
 QTranslator* trans_qt = nullptr;
@@ -41,11 +44,27 @@ namespace {
         int profileId = kNoProfileId;
         QString outputPath;
         bool forTest = false;
-        bool forExport = false;
+        bool forExport = true;
     };
 
     void writeStderr(const QString &message) {
         QTextStream(stderr) << message << Qt::endl;
+    }
+
+    bool loadOrCreateStore(JsonStore *store) {
+        const bool existed = QFileInfo::exists(store->fn);
+        if (store->Load()) return true;
+        if (existed) {
+            writeStderr("Existing config could not be loaded and was preserved: " + store->fn);
+            return false;
+        }
+
+        store->Save();
+        if (!store->last_save_succeeded || !QFileInfo::exists(store->fn)) {
+            writeStderr("New config could not be created: " + store->fn);
+            return false;
+        }
+        return true;
     }
 
     ProfileConfigExportOptions parseProfileConfigExportOptions(const QStringList &argv) {
@@ -63,10 +82,10 @@ namespace {
             options.outputPath = argv.at(exportIndex + 2);
         }
         options.forTest = argv.contains("-flag_export_profile_config_for_test");
-        options.forExport = argv.contains("-flag_export_profile_config_for_share");
-        if (options.forTest && options.forExport) {
-            options.forExport = false;
-        }
+        // Every file export is side-effect-free and omits product TUN state.
+        // The legacy "for_share" spelling is retained as an explicit alias;
+        // there is no CLI path that exports a live OS-mode configuration.
+        options.forExport = !options.forTest;
         return options;
     }
 
@@ -81,17 +100,11 @@ namespace {
 
     bool loadRuntimeStores() {
         NekoGui::dataStore->fn = "groups/nekobox.json";
-        auto isLoaded = NekoGui::dataStore->Load();
-        if (!isLoaded) {
-            NekoGui::dataStore->Save();
-        }
+        if (!loadOrCreateStore(NekoGui::dataStore)) return false;
 
         NekoGui::dataStore->routing = std::make_unique<NekoGui::Routing>();
         NekoGui::dataStore->routing->fn = ROUTES_PREFIX + NekoGui::dataStore->active_routing;
-        isLoaded = NekoGui::dataStore->routing->Load();
-        if (!isLoaded) {
-            NekoGui::dataStore->routing->Save();
-        }
+        if (!loadOrCreateStore(NekoGui::dataStore->routing.get())) return false;
 
         NekoGui::profileManager->LoadManager();
         return true;
@@ -113,7 +126,7 @@ namespace {
             writeStderr("No permission to create config subdirectories.");
             return 1;
         }
-        loadRuntimeStores();
+        if (!loadRuntimeStores()) return 1;
 
         const auto profile = NekoGui::profileManager->GetProfile(options.profileId);
         if (profile == nullptr || profile->bean == nullptr) {
@@ -206,8 +219,6 @@ int main(int argc, char* argv[]) {
     }
     if (NekoGui::dataStore->argv.contains("-tray")) NekoGui::dataStore->flag_tray = true;
     if (NekoGui::dataStore->argv.contains("-debug")) NekoGui::dataStore->flag_debug = true;
-    if (NekoGui::dataStore->argv.contains("-flag_restart_tun_on")) NekoGui::dataStore->flag_restart_tun_on = true;
-    if (NekoGui::dataStore->argv.contains("-flag_restart_system_proxy_on")) NekoGui::dataStore->flag_restart_system_proxy_on = true;
     const auto restartProfileIndex = NekoGui::dataStore->argv.indexOf("-flag_restart_profile_id");
     if (restartProfileIndex >= 0 && NekoGui::dataStore->argv.size() > restartProfileIndex + 1) {
         bool ok = false;
@@ -308,9 +319,12 @@ int main(int argc, char* argv[]) {
 
     // Load dataStore
     NekoGui::dataStore->fn = "groups/nekobox.json";
-    auto isLoaded = NekoGui::dataStore->Load();
-    if (!isLoaded) {
-        NekoGui::dataStore->Save();
+    if (!loadOrCreateStore(NekoGui::dataStore)) {
+        QMessageBox::critical(
+            nullptr,
+            "Error",
+            "An existing configuration could not be loaded. The original file was preserved; startup is aborted.");
+        return 1;
     }
 
     // Datastore & Flags
@@ -319,9 +333,12 @@ int main(int argc, char* argv[]) {
     // load routing
     NekoGui::dataStore->routing = std::make_unique<NekoGui::Routing>();
     NekoGui::dataStore->routing->fn = ROUTES_PREFIX + NekoGui::dataStore->active_routing;
-    isLoaded = NekoGui::dataStore->routing->Load();
-    if (!isLoaded) {
-        NekoGui::dataStore->routing->Save();
+    if (!loadOrCreateStore(NekoGui::dataStore->routing.get())) {
+        QMessageBox::critical(
+            nullptr,
+            "Error",
+            "An existing routing configuration could not be loaded. The original file was preserved; startup is aborted.");
+        return 1;
     }
 
     // Translate
@@ -344,9 +361,17 @@ int main(int argc, char* argv[]) {
     QGuiApplication::tr("QT_LAYOUT_DIRECTION");
     loadTranslate(locale);
 
-    // Signals
-    signal(SIGTERM, signal_handler);
-    signal(SIGINT, signal_handler);
+    // The CRT signal callback cannot safely call Qt, and the legacy callback
+    // bypassed the guarded exit path.  On Windows, ignore console termination
+    // signals so an internal TUN cannot be dropped through this side door.
+    // Normal user exits continue through MainWindow::on_menu_exit_triggered().
+#ifdef Q_OS_WIN
+    std::signal(SIGTERM, SIG_IGN);
+    std::signal(SIGINT, SIG_IGN);
+#else
+    std::signal(SIGTERM, signal_handler);
+    std::signal(SIGINT, signal_handler);
+#endif
 
     // QLocalServer
     QLocalServer server;
