@@ -199,6 +199,12 @@ bool DialogEditGroup::save_subscription_defaults_from_ui() {
 }
 
 void DialogEditGroup::accept() {
+    if (NekoGui::dataStore->core_transition_depth.load() > 0) {
+        MessageBoxWarning(
+            software_name,
+            tr("Groups cannot be changed while a core transition is in progress. Wait for it to finish and try again."));
+        return;
+    }
     if (ent->id >= 0) { // already a group
         if (!ent->url.isEmpty() && ui->url->text().isEmpty()) {
             MessageBoxWarning(tr("Warning"), tr("Please input URL"));
@@ -221,6 +227,12 @@ void DialogEditGroup::refresh_front_proxy() {
 }
 
 void DialogEditGroup::reset_profiles_to_inherit_defaults(bool resetClient, bool resetResolver) {
+    if (NekoGui::dataStore->core_transition_depth.load() > 0) {
+        MessageBoxWarning(
+            software_name,
+            tr("Group defaults cannot be applied while a core transition is in progress. Wait for it to finish and try again."));
+        return;
+    }
     if (ent->id < 0 || (!resetClient && !resetResolver)) return;
     if (!save_subscription_defaults_from_ui()) return;
     ent->Save();

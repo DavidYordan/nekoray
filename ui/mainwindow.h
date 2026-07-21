@@ -2,7 +2,10 @@
 
 #include <QMainWindow>
 
+#include <cstdint>
+
 #include "main/NekoGui.hpp"
+#include "main/RuntimeTransition.hpp"
 
 #ifndef MW_INTERFACE
 
@@ -16,11 +19,16 @@
 #include <QSemaphore>
 #include <QMutex>
 
+#include <atomic>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <set>
+
 #include "GroupSort.hpp"
 
 #include "db/ProxyEntity.hpp"
 #include "main/GuiUtils.hpp"
-
 #endif
 
 namespace NekoGui_sys {
@@ -75,9 +83,16 @@ public:
         VpnProcessExit,
     };
 
-    void neko_start(int _id = -1, CoreStartReason reason = CoreStartReason::UserAction);
+    void neko_start(int _id = -1, CoreStartReason reason = CoreStartReason::UserAction,
+                    std::uint64_t expectedDaemonGeneration = 0,
+                    std::uint64_t expectedRequestGeneration = 0);
 
-    void neko_stop(bool crash = false, bool sem = false, CoreStopReason reason = CoreStopReason::UserAction);
+    void neko_stop(bool crash = false, bool sem = false,
+                   CoreStopReason reason = CoreStopReason::UserAction,
+                   bool nestedTransition = false,
+                   const std::shared_ptr<std::atomic_bool>& completionResult = {},
+                   const NekoGui_Runtime::TransitionTicket& ownerTransition = {},
+                   std::uint64_t expectedCrashDaemonGeneration = 0);
 
     void neko_set_spmode_system_proxy(bool enable, bool save = true, ProxyModeChangeReason reason = ProxyModeChangeReason::UserAction);
 
@@ -187,19 +202,44 @@ private:
     //
     int proxy_last_order = -1;
     bool select_mode = false;
-    QMutex mu_starting;
-    QMutex mu_stopping;
     QMutex mu_exit;
     QSemaphore sem_stopped;
+    NekoGui_Runtime::TransitionCoordinator runtime_transition;
+    std::mutex pending_core_crash_mutex;
+    std::set<std::uint64_t> pending_core_crash_generations;
+    std::mutex pending_profile_start_mutex;
+    std::optional<NekoGui_Runtime::DaemonProfileStartRequest> pending_profile_start;
+    bool pending_profile_start_dispatch_queued = false;
     int exit_reason = 0;
     int exit_had_profile_id = -1919;
     bool running_internal_tun = false;
+    std::uint64_t running_generation = 0;
+    std::uint64_t running_daemon_generation = 0;
+    QByteArray running_config_sha256;
+    bool runtime_state_indeterminate = false;
+    QString runtime_state_indeterminate_reason;
 
     QList<std::shared_ptr<NekoGui::ProxyEntity>> get_now_selected_list();
 
     QList<std::shared_ptr<NekoGui::ProxyEntity>> get_selected_or_group();
 
     void dialog_message_impl(const QString &sender, const QString &info);
+
+    void finish_runtime_transition(const NekoGui_Runtime::TransitionTicket& transition);
+
+    void queue_core_crash_cleanup(std::uint64_t daemonGeneration);
+
+    void dispatch_core_crash_cleanup(
+        const NekoGui_Runtime::TransitionTicket& transition,
+        std::set<std::uint64_t> daemonGenerations);
+
+    void queue_daemon_profile_start(
+        const NekoGui_Runtime::DaemonProfileStartRequest& request);
+
+    void dispatch_pending_daemon_profile_start();
+
+    void clear_pending_daemon_profile_start(
+        const NekoGui_Runtime::DaemonProfileStartRequest& request);
 
     void refresh_proxy_list_impl(const int &id = -1, GroupSortAction groupSortAction = {});
 

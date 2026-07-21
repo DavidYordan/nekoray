@@ -18,9 +18,14 @@ namespace NekoGui_sys {
                 if (log.contains("grpc server listening")) {
                     // The core really started
                     NekoGui::dataStore->core_running = true;
-                    if (start_profile_when_core_is_up >= 0) {
-                        MW_dialog_message("CoreProcess", "CoreStarted," + Int2String(start_profile_when_core_is_up));
-                        start_profile_when_core_is_up = -1;
+                    const auto request = daemonGeneration.MarkProcessReady();
+                    if (request.valid) {
+                        MW_dialog_message(
+                            "CoreProcess",
+                            QStringLiteral("CoreStarted,%1,%2,%3")
+                                .arg(request.daemonGeneration)
+                                .arg(request.requestGeneration)
+                                .arg(request.profileId));
                     }
                 } else if (log.contains("failed to serve")) {
                     // The core failed to start
@@ -47,15 +52,19 @@ namespace NekoGui_sys {
             }
         });
         connect(this, &QProcess::stateChanged, this, [&](QProcess::ProcessState state) {
+            std::uint64_t stoppedGeneration = 0;
             if (state == QProcess::NotRunning) {
                 NekoGui::dataStore->core_running = false;
+                stoppedGeneration = daemonGeneration.MarkProcessStopped();
             }
 
             if (!NekoGui::dataStore->prepare_exit && state == QProcess::NotRunning) {
                 if (failed_to_start) return; // no retry
                 if (restarting) return;
 
-                MW_dialog_message("CoreProcess", "CoreCrashed");
+                MW_dialog_message(
+                    "CoreProcess",
+                    QStringLiteral("CoreCrashed,%1").arg(stoppedGeneration));
 
                 // Retry rate limit
                 if (coreRestartTimer.isValid()) {
@@ -72,15 +81,20 @@ namespace NekoGui_sys {
                 // mode change.  Recreating a profile that requested Tun is:
                 // after a crash it must therefore remain stopped until the
                 // user explicitly starts it again.
-                if (NekoGui::dataStore->spmode_vpn) {
-                    start_profile_when_core_is_up = -1;
-                    MW_show_log("[Error] " + QObject::tr(
-                                    "Core exited while Tun was requested. Restarting the empty core only; the profile and Tun will not be restored automatically."));
-                } else {
-                    start_profile_when_core_is_up = NekoGui::dataStore->started_id;
-                    MW_show_log("[Error] " + QObject::tr("Core exited, restarting."));
-                }
-                setTimeout([=] { Restart(); }, this, 1000);
+                (void) daemonGeneration.CancelQueuedProfile();
+                MW_show_log("[Error] " + QObject::tr(
+                                "Core exited. Restarting the empty control core only; the profile, system proxy, and Tun will not be restored automatically."));
+                const auto crashGeneration = daemonGeneration.CrashRestartToken();
+                setTimeout(
+                    [=] {
+                        if (!daemonGeneration.CanRunCrashRestart(crashGeneration) ||
+                            this->state() != QProcess::NotRunning || NekoGui::dataStore->prepare_exit) {
+                            return;
+                        }
+                        Restart();
+                    },
+                    this,
+                    1000);
             }
         });
     }
@@ -88,7 +102,9 @@ namespace NekoGui_sys {
     void CoreProcess::Start() {
         if (started) return;
         started = true;
+        failed_to_start = false;
         show_stderr = false;
+        (void) daemonGeneration.BeginProcessStart();
         // cwd: same as GUI, at ./config
         QProcess::setEnvironment(env);
         QProcess::start(program, arguments);
@@ -102,6 +118,39 @@ namespace NekoGui_sys {
         started = false;
         Start();
         restarting = false;
+    }
+
+    void CoreProcess::EnsureStarted() {
+        if (state() == QProcess::NotRunning) Restart();
+    }
+
+    NekoGui_Runtime::DaemonProfileStartRequest
+    CoreProcess::QueueProfileStartWhenCoreIsUp(int profileId) {
+        return daemonGeneration.QueueProfileForNextStart(profileId);
+    }
+
+    bool CoreProcess::CancelQueuedProfileStart() {
+        return daemonGeneration.CancelQueuedProfile();
+    }
+
+    bool CoreProcess::ConsumeQueuedProfileStart(
+        std::uint64_t daemonGenerationValue,
+        std::uint64_t requestGeneration,
+        int profileId) {
+        return daemonGeneration.ConsumeReadyProfile({
+            daemonGenerationValue,
+            requestGeneration,
+            profileId,
+            true,
+        });
+    }
+
+    std::uint64_t CoreProcess::CurrentDaemonGeneration() const {
+        return daemonGeneration.CurrentGeneration();
+    }
+
+    bool CoreProcess::IsDaemonReady(std::uint64_t daemonGenerationValue) const {
+        return daemonGeneration.IsReady(daemonGenerationValue);
     }
 
 } // namespace NekoGui_sys

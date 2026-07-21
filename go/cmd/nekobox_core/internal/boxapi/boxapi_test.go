@@ -3,6 +3,8 @@ package boxapi
 import (
 	"context"
 	"errors"
+	"net"
+	"net/http"
 	"testing"
 )
 
@@ -26,5 +28,18 @@ func TestHTTPClientRejectsNilInstanceWithoutSystemFallback(t *testing.T) {
 	}
 	if !errors.Is(err, ErrNoActiveInstance) {
 		t.Fatalf("expected ErrNoActiveInstance, got %v", err)
+	}
+}
+
+func TestGenerationBoundHTTPClientDisablesConnectionReuse(t *testing.T) {
+	client := CreateGenerationBoundHTTPClient(func(context.Context, string, string) (net.Conn, error) {
+		return nil, ErrNoActiveInstance
+	})
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("unexpected transport type %T", client.Transport)
+	}
+	if !transport.DisableKeepAlives {
+		t.Fatal("generation-bound HTTP client may reuse a connection after generation invalidation")
 	}
 }

@@ -846,9 +846,12 @@ namespace NekoGui {
                 const auto object = value.toObject();
                 for (const auto &field: forbiddenBindFields) {
                     if (object.contains(field)) {
+                        auto objectName = object["tag"].toString();
+                        if (objectName.isEmpty()) objectName = object["action"].toString();
+                        if (objectName.isEmpty()) objectName = QStringLiteral("<unnamed>");
                         return QStringLiteral(
                                    "Managed internal Tun forbids %1.%2 on '%3' because it disables the generated interface auto-detection policy.")
-                            .arg(section, field, object["tag"].toString());
+                            .arg(section, field, objectName);
                     }
                 }
             }
@@ -858,6 +861,31 @@ namespace NekoGui {
         if (bindError.isEmpty()) bindError = validateNoBindOverride(config["endpoints"].toArray(), "endpoints");
         if (bindError.isEmpty() && config["dns"].isObject()) {
             bindError = validateNoBindOverride(config["dns"].toObject()["servers"].toArray(), "dns.servers");
+        }
+        if (bindError.isEmpty() && config["ntp"].isObject()) {
+            bindError = validateNoBindOverride(QJsonArray{config["ntp"]}, "ntp");
+        }
+        const auto validateRouteRuleBindOverrides =
+            [&](auto&& self, const QJsonArray& rules, const QString& section) -> QString {
+            auto error = validateNoBindOverride(rules, section);
+            if (!error.isEmpty()) return error;
+            for (int index = 0; index < rules.size(); ++index) {
+                if (!rules[index].isObject()) continue;
+                const auto nestedRules = rules[index].toObject()["rules"];
+                if (!nestedRules.isArray()) continue;
+                error = self(
+                    self,
+                    nestedRules.toArray(),
+                    QStringLiteral("%1[%2].rules").arg(section).arg(index));
+                if (!error.isEmpty()) return error;
+            }
+            return {};
+        };
+        if (bindError.isEmpty()) {
+            bindError = validateRouteRuleBindOverrides(
+                validateRouteRuleBindOverrides,
+                route["rules"].toArray(),
+                QStringLiteral("route.rules"));
         }
         if (!bindError.isEmpty()) return bindError;
         return {};
@@ -872,6 +900,8 @@ namespace NekoGui {
         status->result = result;
         status->forTest = forTest;
         status->forExport = forExport;
+        const auto managedInternalTunExpected =
+            !forTest && !forExport && dataStore->vpn_internal_tun && dataStore->spmode_vpn;
 
         if (!forTest && !forExport && !dataStore->aux_profile_ports_load_error.isEmpty()) {
             result->error = dataStore->aux_profile_ports_load_error;
@@ -918,7 +948,7 @@ namespace NekoGui {
         if (result->error.isEmpty()) {
             result->error = ValidateManagedTunConfig(
                 result->coreConfig,
-                !forTest && !forExport && dataStore->vpn_internal_tun && dataStore->spmode_vpn);
+                managedInternalTunExpected);
         }
 
         // custom_config is intentionally powerful, but it must not be able to
@@ -929,6 +959,10 @@ namespace NekoGui {
         }
         if (!isInternalFull && result->error.isEmpty()) {
             result->error = ValidateManagedResolverBindings(result->coreConfig, status->resolverBindingRequests);
+        }
+
+        if (result->error.isEmpty()) {
+            result->managedInternalTun = managedInternalTunExpected;
         }
 
         return result;
@@ -986,9 +1020,11 @@ namespace NekoGui {
 
         // Chain and auxiliary ent traffic stat
         if (ents.length() > 1 || chainId != 0) {
-            status->ent->traffic_data->id = status->ent->id;
-            status->ent->traffic_data->tag = chainTagOut.toStdString();
-            status->result->outboundStats += status->ent->traffic_data;
+            status->result->outboundStats += NekoGui_traffic::TrafficBinding{
+                status->ent->id,
+                chainTagOut.toStdString(),
+                status->ent->traffic_data,
+            };
         }
 
         return chainTagOut;
@@ -1122,9 +1158,11 @@ namespace NekoGui {
 
             // outbound misc
             outbound["tag"] = tagOut;
-            ent->traffic_data->id = ent->id;
-            ent->traffic_data->tag = tagOut.toStdString();
-            status->result->outboundStats += ent->traffic_data;
+            status->result->outboundStats += NekoGui_traffic::TrafficBinding{
+                ent->id,
+                tagOut.toStdString(),
+                ent->traffic_data,
+            };
 
             // mux common
             auto needMux = ent->type == "vmess" || ent->type == "trojan" || ent->type == "vless";
@@ -1607,10 +1645,12 @@ namespace NekoGui {
         auto routeObj = QJsonObject{
             {"rules", routingRules},
             // Preserve NekoRay's product-TUN behavior (internal or companion
-            // process). Mixed-only mode follows the Windows routing table.
-            // Test-machine or dual-NekoRay exceptions must never be encoded
-            // here as an unconditional interface-selection policy.
-            {"auto_detect_interface", dataStore->spmode_vpn && !status->forTest && !status->forExport}};
+            // process), including its bounded test configuration semantics.
+            // Mixed-only mode follows the Windows routing table. Test-machine
+            // or dual-NekoRay exceptions must never be encoded here as an
+            // unconditional interface-selection policy. Export still removes
+            // this process-local field below, as it did upstream.
+            {"auto_detect_interface", dataStore->spmode_vpn}};
         if (!status->forTest && !status->forExport) {
             routeObj["geoip"] = QJsonObject{{"path", geoip}};
             routeObj["geosite"] = QJsonObject{{"path", geosite}};

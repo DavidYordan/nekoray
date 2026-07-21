@@ -58,8 +58,11 @@ namespace NekoGui {
         int started_id = -1919;
         std::atomic_int core_transition_depth = 0;
         QMap<int, int> aux_profile_ports = {};
-        bool core_running = false;
-        bool prepare_exit = false;
+        // Written/read across the dedicated CoreProcess, UI and RPC worker
+        // threads. These are observations/gates only; lifecycle ownership
+        // remains in RuntimeTransition and the core lifecycle state machine.
+        std::atomic_bool core_running = false;
+        std::atomic_bool prepare_exit = false;
         bool spmode_vpn = false;
         bool spmode_system_proxy = false;
         bool need_keep_vpn_off = false;

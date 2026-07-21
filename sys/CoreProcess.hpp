@@ -2,6 +2,8 @@
 
 #include <QProcess>
 
+#include "main/RuntimeTransition.hpp"
+
 namespace NekoGui_sys {
     class CoreProcess : public QProcess {
     public:
@@ -11,7 +13,21 @@ namespace NekoGui_sys {
 
         void Restart();
 
-        int start_profile_when_core_is_up = -1;
+        void EnsureStarted();
+
+        [[nodiscard]] NekoGui_Runtime::DaemonProfileStartRequest
+        QueueProfileStartWhenCoreIsUp(int profileId);
+
+        [[nodiscard]] bool CancelQueuedProfileStart();
+
+        [[nodiscard]] bool ConsumeQueuedProfileStart(
+            std::uint64_t daemonGeneration,
+            std::uint64_t requestGeneration,
+            int profileId);
+
+        [[nodiscard]] std::uint64_t CurrentDaemonGeneration() const;
+
+        [[nodiscard]] bool IsDaemonReady(std::uint64_t daemonGeneration) const;
 
     private:
         QString program;
@@ -22,6 +38,7 @@ namespace NekoGui_sys {
         bool show_stderr = false;
         bool failed_to_start = false;
         bool restarting = false;
+        NekoGui_Runtime::DaemonGenerationState daemonGeneration;
     };
 
     inline QAtomicInt logCounter;

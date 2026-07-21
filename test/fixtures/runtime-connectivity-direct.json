@@ -17,7 +17,7 @@
     }
   ],
   "route": {
-    "auto_detect_interface": true,
+    "auto_detect_interface": false,
     "final": "proxy"
   }
 }

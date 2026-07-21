@@ -2,7 +2,7 @@
 
 状态：Proposed
 日期：2026-07-20
-最后复核：2026-07-20
+最后复核：2026-07-22
 
 ## 背景
 
@@ -22,7 +22,7 @@
 - legacy WinINet 系统代理实现缺 owner、完整快照、compare-and-restore 与写后回读，Windows UI 已暂时拒绝切换，等待本 ADR 的 user-session broker。
 - 过渡最终配置校验已拒绝 sing-box inbound `set_system_proxy=true` 和未授权 TUN，要求受管 TUN 完整对象逐项等于生成值、保留接口自动检测且无 default/bind-interface 覆盖，并拒绝系统 endpoint/时钟副作用；`internal-full` 与产品 TUN、辅助并发和测试路径隔离。这能阻断已知旁路，但不是任意路由的形式化证明，也不能在 worker 消失后维持数据面。
 - Windows legacy 外置 TUN 使用占位 PID，停止时曾按映像名清理所有其它 core；接管工作树已拒绝启停该路径，避免误伤外部生产实例。
-- 普通 GUI 的 core RPC 仅监听 localhost，并用每次启动随机令牌鉴权；`nekobox_core run/check` 是另一个由用户显式调用、测试工具依赖的高级入口。Go 层尚未重复 C++ ConfigBuilder 的产品策略校验，未来 Runtime 必须统一配置授权和执行入口，但不能把这一缺口误写成普通 GUI 的任意旁路。
+- 普通 GUI 的 core RPC 仅监听 localhost，并用每个 GUI session 随机令牌鉴权；同一会话内 daemon 重启沿用 token。Start/Stop/Exit 现有 session-local command sequence 可阻止同一 daemon 内旧 Start 晚于新 Stop 执行，但请求仍没有 expected daemon generation。Start/Stop 的 30 秒 HTTP/2 client abort 只界定 GUI 等待；Go handler 不保证按 context 中止，也没有 indeterminate 状态查询/对账，因此尚无端到端 deadline。`nekobox_core run/check` 是另一个由用户显式调用、测试工具依赖的高级入口。Go 层尚未重复 C++ ConfigBuilder 的产品策略校验，未来 Runtime 必须统一配置授权、generation 和执行入口，但不能把这一缺口误写成普通 GUI 的任意旁路。
 
 因此不能靠删除 guard、增加重试或把 `auto_detect_interface` 强制为 `true` 解决。后者只涉及底层接口/防环路，不负责 Mixed 入口到逻辑线路的映射，也不得承载本机双 NekoRay 的测试特例。
 
@@ -63,10 +63,10 @@ Runtime Service 的职责：
 2. 在影子端口启动 generation B，验证协议、DoH、握手和目标线路。
 3. 在 WFP transaction 中先加入新 endpoint 的精确 underlay 例外并确认保护已 armed。
 4. 原子切换稳定 anchor 对应的逻辑 selector；旧 generation A 进入有界 drain。
-5. B 异常则切回 A；A/B 都不可用时进入可观察的 `DEGRADED_BLOCKED`，不改变系统代理/TUN 模式。
+5. 提交前 B 异常时不改变仍在服务的 A；一旦 selector 已提交到 B，后续故障只进入可观察的 `DEGRADED_BLOCKED`。不得为了恢复可用性自动切回 A；只有用户明确选择并重新验证旧 generation 后才能执行回滚。
 6. drain 完成后移除旧 endpoint 例外并结束 A。
 
-第一阶段可接受连接中断：持久 anchor/WFP 保持，切换窗口先阻断线路，再停 A、启动 B；B 失败则恢复 A，恢复失败继续阻断。第二阶段再实现 A/B 并存和低中断 selector 切换。两个完整 Box 不能同时直接占用同一 `12080` 和同一 TUN，因此“整 Box 双开后交换端口”不是可行的第一阶段设计。
+第一阶段可接受连接中断：持久 anchor/WFP 保持，切换窗口先阻断线路，再停 A、启动 B；B 失败则继续阻断并报告失败，不自动恢复 A。用户明确选择回滚时，旧 generation 也必须作为候选重新验证并经过同一提交协议。第二阶段再实现 A/B 并存和低中断 selector 切换。两个完整 Box 不能同时直接占用同一 `12080` 和同一 TUN，因此“整 Box 双开后交换端口”不是可行的第一阶段设计。
 
 ## WFP 与权限边界
 
@@ -78,7 +78,7 @@ Runtime Service 的职责：
 
 ## 测试边界
 
-OpenWrt 只适合验证 AnyTLS、DoH、端口到线路映射和无跨线路 fallback。Wintun、WFP、SCM、Windows DNS/IPv6、GUI/worker/service 崩溃必须在隔离 Windows 10/11 环境验证。
+OpenWrt 只适合验证显式目标链下的 AnyTLS、DoH 和无协议级 fallback；当前临时 `52080` 探针会重写入口到目标 outbound，不能验证产品 `12080`/辅助端口映射。Wintun、WFP、SCM、Windows DNS/IPv6、GUI/worker/service 崩溃必须在隔离 Windows 10/11 环境验证。
 
 最低故障矩阵包括 candidate 无效、端口占用、DoH/AnyTLS 失败、worker kill、GUI exit/crash/restart、service crash、BFE restart、NIC 切换与休眠恢复；必须在物理接口和 Wintun 抓包中同时断言没有未授权 IPv4、IPv6 或 DNS 包。
 

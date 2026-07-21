@@ -13,7 +13,7 @@
 #include <QTimer>
 #include <QtEndian>
 #include <QThread>
-#include <QMutex>
+#include <QSemaphore>
 #include <QAbstractNetworkCache>
 
 namespace QtGrpc {
@@ -59,7 +59,10 @@ namespace QtGrpc {
         QByteArray nekoray_auth;
 
         // async
-        QNetworkReply *post(const QString &method, const QString &service, const QByteArray &args) {
+        QNetworkReply *post(const QString &method,
+                            const QString &service,
+                            const QByteArray &args,
+                            std::uint64_t lifecycleCommandSequence) {
             QUrl callUrl = url_base + "/" + service + "/" + method;
             // qDebug() << "Service call url: " << callUrl;
 
@@ -75,6 +78,11 @@ namespace QtGrpc {
             request.setRawHeader(AcceptEncodingHeader, QByteArray{"identity,gzip"});
             request.setRawHeader(TEHeader, QByteArray{"trailers"});
             request.setRawHeader("nekoray_auth", nekoray_auth);
+            if (lifecycleCommandSequence != 0) {
+                request.setRawHeader(
+                    "nekoray_command_sequence",
+                    QByteArray::number(lifecycleCommandSequence));
+            }
 
             QByteArray msg(GrpcMessageSizeHeaderSize, '\0');
             *reinterpret_cast<int *>(msg.data() + 1) = qToBigEndian((int) args.size());
@@ -106,8 +114,17 @@ namespace QtGrpc {
             return networkReply->readAll().mid(GrpcMessageSizeHeaderSize);
         }
 
-        QNetworkReply::NetworkError call(const QString &method, const QString &service, const QByteArray &args, QByteArray &qByteArray, int timeout_ms) {
-            QNetworkReply *networkReply = post(method, service, args);
+        QNetworkReply::NetworkError call(const QString &method,
+                                         const QString &service,
+                                         const QByteArray &args,
+                                         QByteArray &qByteArray,
+                                         int timeout_ms,
+                                         std::uint64_t lifecycleCommandSequence) {
+            QNetworkReply *networkReply = post(
+                method,
+                service,
+                args,
+                lifecycleCommandSequence);
 
             QTimer *abortTimer = nullptr;
             if (timeout_ms > 0) {
@@ -160,7 +177,8 @@ namespace QtGrpc {
 
         QNetworkReply::NetworkError Call(const QString &methodName,
                                          const google::protobuf::Message &req, google::protobuf::Message *rsp,
-                                         int timeout_ms = 0) {
+                                         int timeout_ms = 0,
+                                         std::uint64_t lifecycleCommandSequence = 0) {
             if (!NekoGui::dataStore->core_running) return QNetworkReply::NetworkError(-1919);
 
             std::string reqStr;
@@ -169,18 +187,22 @@ namespace QtGrpc {
 
             QByteArray responseArray;
             QNetworkReply::NetworkError err;
-            QMutex lock;
-            lock.lock();
+            QSemaphore completed;
 
             runOnUiThread(
                 [&] {
-                    err = call(methodName, serviceName, requestArray, responseArray, timeout_ms);
-                    lock.unlock();
+                    err = call(
+                        methodName,
+                        serviceName,
+                        requestArray,
+                        responseArray,
+                        timeout_ms,
+                        lifecycleCommandSequence);
+                    completed.release();
                 },
                 nm);
 
-            lock.lock();
-            lock.unlock();
+            completed.acquire();
             // qDebug() << "rsp err" << err;
             // qDebug() << "rsp array" << responseArray;
 
@@ -197,6 +219,15 @@ namespace QtGrpc {
 
 namespace NekoGui_rpc {
 
+    namespace {
+        // This bounds only the GUI's wait. The server may still finish after
+        // the HTTP/2 request is aborted, so callers must treat timeout as an
+        // indeterminate transition. A later sequenced Stop orders after older
+        // commands in the same daemon, but cross-daemon state still requires
+        // the conservative reconciliation path.
+        constexpr int CoreTransitionRpcTimeoutMs = 30 * 1000;
+    }
+
     Client::Client(std::function<void(const QString &)> onError, const QString &target, const QString &token) {
         this->make_grpc_channel = [=]() { return std::make_unique<QtGrpc::Http2GrpcChannelPrivate>(target, token, "libcore.LibcoreService"); };
         this->default_grpc_channel = make_grpc_channel();
@@ -210,12 +241,17 @@ namespace NekoGui_rpc {
     void Client::Exit() {
         libcore::EmptyReq request;
         libcore::EmptyResp reply;
-        default_grpc_channel->Call("Exit", request, &reply, 500);
+        const auto commandSequence =
+            lifecycle_command_sequence.fetch_add(1, std::memory_order_relaxed) + 1;
+        default_grpc_channel->Call("Exit", request, &reply, 500, commandSequence);
     }
 
     QString Client::Start(bool *rpcOK, const libcore::LoadConfigReq &request) {
         libcore::ErrorResp reply;
-        auto status = default_grpc_channel->Call("Start", request, &reply);
+        const auto commandSequence =
+            lifecycle_command_sequence.fetch_add(1, std::memory_order_relaxed) + 1;
+        auto status = default_grpc_channel->Call(
+            "Start", request, &reply, CoreTransitionRpcTimeoutMs, commandSequence);
 
         if (status == QNetworkReply::NoError) {
             *rpcOK = true;
@@ -229,7 +265,10 @@ namespace NekoGui_rpc {
     QString Client::Stop(bool *rpcOK) {
         libcore::EmptyReq request;
         libcore::ErrorResp reply;
-        auto status = default_grpc_channel->Call("Stop", request, &reply);
+        const auto commandSequence =
+            lifecycle_command_sequence.fetch_add(1, std::memory_order_relaxed) + 1;
+        auto status = default_grpc_channel->Call(
+            "Stop", request, &reply, CoreTransitionRpcTimeoutMs, commandSequence);
 
         if (status == QNetworkReply::NoError) {
             *rpcOK = true;

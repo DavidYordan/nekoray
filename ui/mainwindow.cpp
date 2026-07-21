@@ -418,6 +418,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), ui(new Ui::MainWi
         AutoRun_SetEnabled(checked);
     });
     connect(ui->actionAllow_LAN, &QAction::triggered, this, [=](bool checked) {
+        if (NekoGui::dataStore->core_transition_depth.load() > 0) {
+            MessageBoxWarning(software_name, tr("Wait for the current core transition to finish before changing the listen address."));
+            ui->actionAllow_LAN->setChecked(QStringList{"::", "0.0.0.0"}.contains(NekoGui::dataStore->inbound_address));
+            return;
+        }
         NekoGui::dataStore->inbound_address = checked ? "::" : "127.0.0.1";
         MW_dialog_message("", "UpdateDataStore");
     });
@@ -529,9 +534,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), ui(new Ui::MainWi
             // Remember last started
             const auto restartProfileId = NekoGui::dataStore->flag_restart_profile_id;
             if (restartProfileId >= 0) {
-                core_process->start_profile_when_core_is_up = restartProfileId;
+                (void) core_process->QueueProfileStartWhenCoreIsUp(restartProfileId);
             } else if (NekoGui::dataStore->remember_enable && NekoGui::dataStore->remember_id >= 0) {
-                core_process->start_profile_when_core_is_up = NekoGui::dataStore->remember_id;
+                (void) core_process->QueueProfileStartWhenCoreIsUp(NekoGui::dataStore->remember_id);
             }
             // Setup
             core_process->Start();
@@ -709,10 +714,42 @@ void MainWindow::dialog_message_impl(const QString& sender, const QString& info)
     } else if (sender == "CoreProcess") {
         if (info == "Crashed") {
             neko_stop();
-        } else if (info == "CoreCrashed") {
-            neko_stop(true, false, CoreStopReason::CoreCrashCleanup);
+        } else if (info.startsWith("CoreCrashed,")) {
+            const auto fields = info.split(',');
+            bool generationOK = false;
+            const auto daemonGeneration = fields.size() == 2
+                                              ? fields[1].toULongLong(&generationOK)
+                                              : 0;
+            if (!generationOK || daemonGeneration == 0) {
+                show_log_impl(tr("Ignored a malformed core-crash generation event."));
+            } else {
+                queue_core_crash_cleanup(daemonGeneration);
+            }
         } else if (info.startsWith("CoreStarted")) {
-            neko_start(info.split(",")[1].toInt(), CoreStartReason::CoreCrashRecovery);
+            const auto fields = info.split(',');
+            bool daemonGenerationOK = false;
+            bool requestGenerationOK = false;
+            bool profileIdOK = false;
+            const auto daemonGeneration = fields.size() == 4
+                                              ? fields[1].toULongLong(&daemonGenerationOK)
+                                              : 0;
+            const auto requestGeneration = fields.size() == 4
+                                               ? fields[2].toULongLong(&requestGenerationOK)
+                                               : 0;
+            const auto profileId = fields.size() == 4
+                                       ? fields[3].toInt(&profileIdOK)
+                                       : -1;
+            if (!daemonGenerationOK || !requestGenerationOK || !profileIdOK ||
+                daemonGeneration == 0 || requestGeneration == 0 || profileId < 0) {
+                show_log_impl(tr("Ignored a malformed queued core-start event."));
+            } else {
+                queue_daemon_profile_start({
+                    daemonGeneration,
+                    requestGeneration,
+                    profileId,
+                    true,
+                });
+            }
         }
     }
 }
@@ -799,11 +836,29 @@ void MainWindow::on_menu_exit_triggered() {
         on_commitDataRequest();
         //
         NekoGui::dataStore->save_control_no_save = true; // don't change datastore after this line
-        neko_stop(false, true, CoreStopReason::AppExit);
-        //
-        hide();
+        const auto stopSucceeded = std::make_shared<std::atomic_bool>(false);
+        neko_stop(false, true, CoreStopReason::AppExit, false, stopSucceeded);
         runOnNewThread([=] {
             sem_stopped.acquire();
+            if (!stopSucceeded->load()) {
+                runOnUiThread([=] {
+                    // A failed or indeterminate Stop must never be converted
+                    // into a process kill by continuing the exit sequence.
+                    // Restore only application control state; do not change
+                    // system proxy, Tun, or the observed runtime.
+                    NekoGui::dataStore->prepare_exit = false;
+                    NekoGui::dataStore->save_control_no_save = false;
+                    RegisterHotkey(false);
+                    mu_exit.unlock();
+                    refresh_status();
+                    ActivateWindow(this);
+                    MessageBoxWarning(
+                        software_name,
+                        tr("Exit was cancelled because the running core did not confirm Stop. The application and observed network state were kept; resolve the indeterminate state with an explicit permitted Stop before trying again."));
+                    runOnUiThread([=] { core_process->EnsureStarted(); }, DS_cores);
+                });
+                return;
+            }
             stop_core_daemon();
             runOnUiThread([=] {
                 on_menu_exit_triggered(); // continue exit progress
@@ -864,6 +919,11 @@ void MainWindow::on_menu_exit_triggered() {
     return;
 
 void MainWindow::neko_set_spmode_system_proxy(bool enable, bool save, ProxyModeChangeReason reason) {
+    if (NekoGui::dataStore->core_transition_depth.load() > 0) {
+        MessageBoxWarning(software_name, tr("Wait for the current core transition to finish before changing system proxy mode."));
+        refresh_status();
+        return;
+    }
 #ifdef Q_OS_WIN
     if (enable != NekoGui::dataStore->spmode_system_proxy) {
         Q_UNUSED(save);
@@ -900,6 +960,11 @@ void MainWindow::neko_set_spmode_system_proxy(bool enable, bool save, ProxyModeC
 }
 
 void MainWindow::neko_set_spmode_vpn(bool enable, bool save, ProxyModeChangeReason reason) {
+    if (NekoGui::dataStore->core_transition_depth.load() > 0) {
+        MessageBoxWarning(software_name, tr("Wait for the current core transition to finish before changing Tun mode."));
+        refresh_status();
+        return;
+    }
     const auto wasEnabled = NekoGui::dataStore->spmode_vpn;
     const auto activeInternalTun = isInternalTunActive();
     const auto shouldReloadInternalTun = enable != wasEnabled &&
@@ -1020,10 +1085,18 @@ void MainWindow::refresh_status(const QString& traffic_update) {
             }
         }
     }
+    if (runtime_state_indeterminate) {
+        const auto warning = tr("Runtime state is indeterminate. Direct fallback is not assumed; explicitly disable Tun when applicable, or use another permitted Stop and wait for confirmation before exiting or starting another line.\n%1")
+                                 .arg(runtime_state_indeterminate_reason);
+        running_tooltip = running_tooltip.isEmpty()
+                              ? warning
+                              : warning + QStringLiteral("\n") + running_tooltip;
+    }
 
     if (last_test_time.addSecs(2) < QTime::currentTime()) {
         auto txt = running == nullptr ? tr("Not Running")
                                       : QStringLiteral("[%1] %2").arg(group_name, running->bean->DisplayName()).left(30);
+        if (runtime_state_indeterminate) txt = tr("State uncertain: %1").arg(txt);
         ui->label_running->setText(txt);
     }
     //
@@ -1051,7 +1124,10 @@ void MainWindow::refresh_status(const QString& traffic_update) {
     // changed which implementation should be used next.
     const auto tunWorkerActive = running_internal_tun || vpn_pid != 0;
     ui->checkBox_VPN->setChecked(tunRequested);
-    if (tunWorkerActive && tunRequested) {
+    if (runtime_state_indeterminate && tunWorkerActive) {
+        ui->checkBox_VPN->setText(tr("Tun Mode (STATE INDETERMINATE)"));
+        ui->checkBox_VPN->setToolTip(tr("The Start request may have acquired Tun resources, but daemon ownership could not be confirmed. Keep the application running and explicitly disable Tun; only a permitted Stop accepted and sequenced by the responding core may clear this state."));
+    } else if (tunWorkerActive && tunRequested) {
         ui->checkBox_VPN->setText(tr("Tun Mode (worker active)"));
         ui->checkBox_VPN->setToolTip(tr("The current worker confirmed that its managed Tun configuration started. OS-level continuity is not yet observable."));
     } else if (tunWorkerActive) {
@@ -1077,6 +1153,7 @@ void MainWindow::refresh_status(const QString& traffic_update) {
         if (!isTray && NekoGui::IsAdmin()) tt << "[Admin]";
         if (select_mode) tt << "[" + tr("Select") + "]";
         if (!title_error.isEmpty()) tt << "[" + title_error + "]";
+        if (runtime_state_indeterminate) tt << "[" + tr("Runtime Indeterminate") + "]";
         if (tunWorkerActive && tunRequested) tt << "[Tun Worker Active]";
         if (tunWorkerActive && !tunRequested) tt << "[Tun ACTIVE / Stop Incomplete]";
         if (!tunWorkerActive && tunRequested) tt << "[Tun Requested / Inactive]";
@@ -1087,6 +1164,12 @@ void MainWindow::refresh_status(const QString& traffic_update) {
             tt << "[" + NekoGui::dataStore->active_routing + "]";
         }
         if (running != nullptr) tt << running->bean->DisplayTypeAndName() + "@" + group_name;
+        if (running_generation > 0) {
+            tt << tr("Runtime generation: %1").arg(running_generation);
+        }
+        if (!running_config_sha256.isEmpty()) {
+            tt << tr("Config SHA-256: %1").arg(QString::fromLatin1(running_config_sha256));
+        }
         return tt.join(isTray ? "\n" : " ");
     };
 
@@ -1560,6 +1643,10 @@ void MainWindow::on_menu_profile_debug_info_triggered() {
     if (btn == 1) {
         QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(QStringLiteral("profiles/%1.json").arg(ents.first()->id)).absoluteFilePath()));
     } else if (btn == 2) {
+        if (NekoGui::dataStore->core_transition_depth.load() > 0) {
+            MessageBoxWarning(software_name, tr("Configuration cannot be reloaded while a core transition is in progress."));
+            return;
+        }
         NekoGui::dataStore->Load();
         NekoGui::profileManager->LoadManager();
         pruneAuxiliaryProfilePorts();

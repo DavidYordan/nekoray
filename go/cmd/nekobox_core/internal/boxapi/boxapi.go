@@ -78,19 +78,34 @@ func DialContext(ctx context.Context, instance *box.Box, tracker adapter.Connect
 	return conn, nil
 }
 
-func CreateProxyHttpClient(instance *box.Box, tracker adapter.ConnectionTracker) *http.Client {
+type DialContextFunc func(context.Context, string, string) (net.Conn, error)
+
+func createProxyHTTPClient(dialContext DialContextFunc, disableKeepAlives bool) *http.Client {
 	transport := &http.Transport{
 		TLSHandshakeTimeout:   time.Second * 3,
 		ResponseHeaderTimeout: time.Second * 3,
+		DisableKeepAlives:     disableKeepAlives,
 	}
 
-	transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-		return DialContext(ctx, instance, tracker, network, addr)
-	}
+	transport.DialContext = dialContext
 
 	return &http.Client{
 		Transport: transport,
 	}
+}
+
+func CreateProxyHttpClient(instance *box.Box, tracker adapter.ConnectionTracker) *http.Client {
+	return createProxyHTTPClient(func(ctx context.Context, network, addr string) (net.Conn, error) {
+		return DialContext(ctx, instance, tracker, network, addr)
+	}, false)
+}
+
+// CreateGenerationBoundHTTPClient disables connection reuse so every request
+// must pass through a generation-validating dial callback. Without this, an
+// old http.Transport could silently reuse an idle connection after the owner
+// has stopped that generation and published another one.
+func CreateGenerationBoundHTTPClient(dialContext DialContextFunc) *http.Client {
+	return createProxyHTTPClient(dialContext, true)
 }
 
 func (s *SbStatsService) RoutedConnection(ctx context.Context, conn net.Conn, metadata adapter.InboundContext, matchedRule adapter.Rule, matchOutbound adapter.Outbound) net.Conn {

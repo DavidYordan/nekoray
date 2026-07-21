@@ -46,6 +46,12 @@ DialogVPNSettings::~DialogVPNSettings() {
 }
 
 void DialogVPNSettings::accept() {
+    if (NekoGui::dataStore->core_transition_depth.load() > 0) {
+        MessageBoxWarning(
+            software_name,
+            tr("Tun settings cannot be changed while a core transition is in progress. Wait for it to finish and try again."));
+        return;
+    }
     //
     auto mtu = ui->vpn_mtu->currentText().toInt();
     if (mtu > 10000 || mtu < 1000) mtu = 9000;

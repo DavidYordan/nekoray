@@ -90,6 +90,12 @@ DialogManageRoutes::~DialogManageRoutes() {
 }
 
 void DialogManageRoutes::accept() {
+    if (NekoGui::dataStore->core_transition_depth.load() > 0) {
+        MessageBoxWarning(
+            software_name,
+            tr("Routing cannot be changed while a core transition is in progress. Wait for it to finish and try again."));
+        return;
+    }
     D_C_SAVE_STRING(custom_route_global)
     bool routeChanged = false;
     if (NekoGui::dataStore->active_routing != active_routing) routeChanged = true;
@@ -215,6 +221,13 @@ void DialogManageRoutes::on_load_save_clicked() {
         }
     });
     connect(save, &QPushButton::clicked, w, [=] {
+        if (NekoGui::dataStore->core_transition_depth.load() > 0) {
+            QMessageBox::warning(
+                w,
+                software_name,
+                tr("Routing cannot be saved while a core transition is in progress. Wait for it to finish and try again."));
+            return;
+        }
         auto fn = lineEdit->text();
         if (!fn.isEmpty()) {
             if (!NekoGui::Routing::IsSafeName(fn)) {
@@ -249,6 +262,13 @@ void DialogManageRoutes::on_load_save_clicked() {
         }
     });
     connect(remove, &QPushButton::clicked, w, [=] {
+        if (NekoGui::dataStore->core_transition_depth.load() > 0) {
+            QMessageBox::warning(
+                w,
+                software_name,
+                tr("Routing cannot be removed while a core transition is in progress. Wait for it to finish and try again."));
+            return;
+        }
         auto fn = lineEdit->text();
         const auto availableRoutes = NekoGui::Routing::List();
         if (!fn.isEmpty() && NekoGui::Routing::IsSafeName(fn) &&

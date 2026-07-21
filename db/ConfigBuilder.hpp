@@ -29,8 +29,12 @@ namespace NekoGui {
     public:
         QString error;
         QJsonObject coreConfig;
+        // Immutable property of the final configuration that passed the
+        // managed-TUN validator. Runtime state must commit this value instead
+        // of re-reading mutable UI settings after the Start RPC.
+        bool managedInternalTun = false;
 
-        QList<std::shared_ptr<NekoGui_traffic::TrafficData>> outboundStats; // all, but not including "bypass" "block"
+        QList<NekoGui_traffic::TrafficBinding> outboundStats; // all, but not including "bypass" "block"
         std::shared_ptr<NekoGui_traffic::TrafficData> outboundStat;         // main
         QStringList ignoreConnTag;
     };

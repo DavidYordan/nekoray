@@ -10,7 +10,7 @@
 - [x] 冻结 Windows-only、私人项目、主端口 `12080`。
 - [x] 将 `D:\Program Files\nekoray`、`2080` 与生产 TUN 标记为永久 no-touch。
 - [x] 冻结“仅手动启停系统代理/TUN、端口精确映射、绝不 fallback直连”。
-- [x] 保留上游 `auto_detect_interface=dataStore->spmode_vpn`，未为本机双 TUN 强制开启；测试覆盖默认 preserve。持久 runtime 后改由真实 TUN owner/underlay 拓扑决定。
+- [x] 保留上游 `auto_detect_interface=dataStore->spmode_vpn`，未为本机双 TUN 强制开启；OpenWrt helper 单测覆盖默认 preserve，真实 L2 preserve 重跑与 C++ live/test/export golden 仍在后续阶段。持久 runtime 后改由真实 TUN owner/underlay 拓扑决定。
 - [x] 打包脚本移除生产安装默认依赖，运行实例存在时 fail-fast。
 - [x] 禁止 Windows legacy 外置 TUN 的占位 PID/按映像名清理路径；未建立精确 owner 前不启动或停止它。
 - [x] 删除无令牌的 TUN 提权重启自动启用；旧 WinINet 系统代理切换在精准 broker 完成前从 Windows UI 路径 fail-closed 禁用。
@@ -30,8 +30,9 @@
 9. [ ] 为现用 geosite/geoip `.db` 重建自动完成或明确替代。
 10. [x] 订阅改成内存 parse/stage/validate 后提交；空/HTML/坏 YAML/零节点失败旧组零变化；清理/回滚删除失败会保留对象并报告。
 11. [ ] 把订阅成功候选与非空 group 删除接入现有事务层，并覆盖真实磁盘失败、并发刷新、进程中断、显式恢复、版本回退和旧 profile。前置止损已完成一部分：联网前按值快照不可变 HTTP 选项，记录 group 与全部成员的身份/顺序/tombstone/序列化状态，提交转回 UI 线程并在提交串行化 mutex 下逐项重验；group 创建同步提交 `pm.json`，删除对象 tombstone，运行中 auxiliary 拒删。下一步必须一次性预检 running/front/chain/remember/活动 auxiliary/未知文件并构造最终新增与删除集合，禁止继续逐个 `AddProfile/Save/DeleteProfile`。
-12. [ ] 为 ConfigBuilder、订阅和其它跨线程读模型操作建立完整 immutable snapshot 或显式模型读写同步。当前 mutex 只串行化参与的 mutation 提交，core transition 也只在最终 Start gate 再次串行化和复核，不能宣称整个模型已有读写锁。
+12. [ ] 为 ConfigBuilder、订阅和其它跨线程读模型操作建立完整 immutable snapshot 或显式模型读写同步。本批只完成第一段止损：ConfigBuilder 不再回写 live `TrafficData.id/tag`，VLESS core 对象生成不再改写 bean `flow`；group speedtest 改为 UI 线程构建 immutable job，结果回到 UI 后以对象身份、bean/profile/config fingerprint 做 CAS 式复核并保存。当前 mutex 仍只串行化参与的 mutation 提交；final Start gate 只复核 recovery、当前 ticket 和已捕获 daemon readiness，不会重建 candidate 或比较完整 model revision。完整 `BuildModelSnapshot`、订阅与其它跨线程读模型同步均未完成，不能宣称整个模型已有读写锁。
 13. [ ] 统一 route/settings/hotkey 等保存失败的强类型传播、用户提示和内存回滚；任何磁盘失败后都必须保持磁盘—内存一致，并纳入故障注入。
+14. [ ] （P2）为 `TrafficData` 建立不可变遥测快照或明确的锁/原子方案，使 counter/rate 的 worker 写入与 UI/JsonStore 读取同步。本批仅把未初始化的 `last_update` 固定为 `0`，消除了该字段的未定义行为；generation-local `TrafficBinding` 只隔离路由身份，不解决共享计数器的数据竞态。
 
 完成门：旧配置不会因本分支首次启动或任一失败路径丢失；已有订阅可以安全刷新。
 
@@ -67,16 +68,19 @@
 
 ## 阶段 3：Windows 持久 fail-closed 运行时
 
+本批完成的 lifecycle mutex/generation 只是在现有 GUI/core 进程内封住直接竞态；下列 RuntimeStateMachine、独立 service、stable anchor 和 persistent WFP 仍全部是发布阻断，详见 [ADR 0010](architecture/decisions/0010-process-local-lifecycle-generation-fencing.md)。
+
 1. [x] 完成本地 sing-box 生命周期调查：当前无原地 reload，选定持久 service + stable anchor + generation 架构。
 2. [ ] 建立单线程 RuntimeStateMachine，分离 desired/observed/owner/health。
 3. [ ] 以精确句柄、PID、创建时间、规范路径、config hash和generation管理 worker。
 4. [ ] 建立独立于 GUI 生命周期的 Windows Runtime Service/稳定数据面控制点。
 5. [ ] 实现独立 persistent WFP kill-switch，覆盖 IPv4、IPv6、DNS和明确例外；不得随 worker/session 消失。
-6. [ ] generation执行 validate/prepare → protection active → start/health → commit/rollback。
+6. [ ] generation 执行 validate/prepare → protection active → start/health → commit；提交前失败保留当前 generation，提交后失败进入阻断，不自动切回旧线路。只有用户明确选择且旧 generation 重新验证后才允许显式 rollback。
 7. [ ] 系统代理只通过用户手动、按 SID 的 broker操作；关闭时 compare-and-restore完整快照。
 8. [x] 过渡期最终配置拒绝任意 sing-box inbound `set_system_proxy=true`、未授权 TUN，并锁定受管 TUN 完整对象及接口策略；同时拒绝已知系统 endpoint/时钟副作用。`internal-full` 与产品 TUN/辅助并发/测试隔离，默认导出与测试导出均走 OS 副作用 guard。
 9. [x] UI 区分 TUN requested 与 worker-observed 状态；core 崩溃只重启空控制 core，不自动恢复 profile/TUN。该止损不等于持久 OS 状态或 kill-switch。
-10. [ ] 在受控 core/Runtime 入口重复关键产品策略校验，并以 lifecycle mutex/generation 统一保护 `Start`/`Stop`/stats/instance；localhost 随机令牌不替代配置授权。
+10. [x] 建立进程内 lifecycle mutex/generation 基础：GUI 以单一 transition ticket 串行 Start/Stop/CrashCleanup，并在 coordinator mutex 内同步 participating-mutation depth gate，旧 completion/失败获取不能清除新 owner 或 pending cleanup 的 fence；pending crash cleanup 由当前 transition 连续 handoff，不暴露普通操作可抢占的 idle 窗口。daemon/profile-request generation 阻止旧 crash timer/ready event/排队 profile 作用于新进程。legacy gRPC `Call` 的跨线程完成通知已由“一线程 lock、另一线程 unlock”的 `QMutex` 改为 `QSemaphore` release/acquire。Start/Stop/Exit 的 session-local monotonic command sequence 让同一 daemon 的新 Stop/Exit 拒绝迟到旧 Start。Go core 串行 candidate 发布、Stop、dial、stats 和 Exit，并使旧/blocked generation fail closed。`core_running`/`prepare_exit` 已原子化；退出链只在收到响应 daemon 已接受且按序完成的 Stop 后调用 Exit/quit，失败或不确定时恢复 UI 控制并保留 observed runtime。core 崩溃只重启空控制 core，不自动恢复 profile/TUN。该项不拥有 OS 状态，也不等于 expected daemon generation、完整模型锁、RuntimeStateMachine、service、stable anchor、WFP 或无泄漏切线。
+11. [ ] 在受控 core/Runtime 入口重复关键产品策略校验；让 RPC 绑定 expected daemon/runtime generation，并建立真正的端到端 deadline、请求结果不确定后的状态查询/对账，避免盲目重试。GUI 的 Start/Stop HTTP/2 调用现有 30 秒 client abort，只界定 GUI 等待；超时仍按 indeterminate 处理，Go handler 不会据此按 context 中止正在进行的 Start/Stop，也没有服务端状态查询，因此本项未关闭。session-local command sequence 只解决同一 daemon 的命令反超，不是 generation 绑定。token 每个 GUI session 随机但在该会话内 daemon 重启时沿用，既不替代配置授权，也不构成 generation 绑定；进程内 generation 同样不替代持久 runtime transaction。补 QProcess/GUI crash→commit/退出和 HTTP/2 超时集成测试；`MarkProcessReady`/Queue 真并发恰好一次已有纯状态单测。
 
 完成门：GUI退出/重启、worker crash、候选启动失败和切线都不改变系统代理/TUN模式，也没有物理直连；失败可以全阻断。
 
@@ -85,7 +89,7 @@
 - [x] 从产品 UI/CMake 移出 MultiMapper专用导出；历史契约留在 archive。
 - [x] 移除越界的复杂批量 resolver/change-IP 平台；上游简单 **Resolve domain** 因会走 Windows 系统 DNS 并永久覆盖节点域名，现改为无副作用禁用说明。
 - [ ] 如确需恢复 Resolve domain，只能经对应 provider resolver、保留原始域名并提供可验证回退；不得把它重建成探测/改线平台。
-- [ ] 把 `test/test_final_config_guards.ps1` 的导出 fixture 下沉为 C++ 配置生成 golden/负向测试，并覆盖 Mixed 完整快照、测试配置边界和产品 TUN 精确对象。
+- [ ] 把 `test/test_final_config_guards.ps1` 的导出 fixture 下沉为 C++ 配置生成 golden/负向测试，并覆盖 Mixed 完整快照、live/test 的 TUN on/off 四象限、export 删除 `auto_detect_interface` 边界、NTP/嵌套 route direct-action bind 拒绝和产品 TUN 精确对象。
 - [ ] 建立 C++配置生成/导入/数据测试和本地 mock outbound矩阵；继续扩展已经落地的 Go nil-config/system-fallback/FullTest 回归到真实 lifecycle 竞争。
 - [x] 建立首个 Windows-only CI：校验仓库卫生、固定子模块、受控 RouteFluent core 源构建、Go 单测和无侵入 Python 安全契约；不得将其表述为 GUI/TUN/WFP 验收。
 - [ ] 收口干净 Qt/MinGW/C++ 工具链、GUI 自动构建与测试、交付 wrapper 真实 hash/manifest、许可证和 SBOM；libneko 仓内固定已完成。

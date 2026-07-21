@@ -132,6 +132,7 @@ set(PROJECT_SOURCES
         main/ConfigRecovery.cpp
         main/ConfigTransaction.cpp
         main/HTTPRequestHelper.cpp
+        main/RuntimeTransition.cpp
 
         3rdparty/base64.cpp
         3rdparty/qrcodegen.cpp
@@ -315,11 +316,23 @@ if (BUILD_TESTING)
     target_link_libraries(config_recovery_test PRIVATE Qt${QT_VERSION_MAJOR}::Core)
     add_test(NAME config_recovery_test COMMAND config_recovery_test)
     set_tests_properties(config_recovery_test PROPERTIES TIMEOUT 15)
+    add_executable(runtime_transition_test
+            test/runtime_transition_test.cpp
+            main/RuntimeTransition.cpp
+    )
+    target_link_libraries(runtime_transition_test PRIVATE Qt${QT_VERSION_MAJOR}::Core Threads::Threads)
+    add_test(NAME runtime_transition_test COMMAND runtime_transition_test)
+    set_tests_properties(runtime_transition_test PROPERTIES TIMEOUT 15)
     if (WIN32)
         add_custom_command(TARGET config_recovery_test POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 $<TARGET_FILE:Qt${QT_VERSION_MAJOR}::Core>
                 $<TARGET_FILE_DIR:config_recovery_test>
+        )
+        add_custom_command(TARGET runtime_transition_test POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:Qt${QT_VERSION_MAJOR}::Core>
+                $<TARGET_FILE_DIR:runtime_transition_test>
         )
     endif ()
 endif ()

@@ -6,7 +6,7 @@
 
 - [产品契约](PRODUCT.md)：唯一产品范围源。
 - [接管状态](TAKEOVER_STATUS.md)：当前实现、证据和发布判断。
-- [已知问题](KNOWN_ISSUES.md)：按 P0/P1 排序的缺口。
+- [已知问题](KNOWN_ISSUES.md)：按 P0/P1/P2 排序的缺口。
 - [推进路线](ROADMAP.md)：恢复上游能力与三项扩展的实施顺序。
 - [待确认决策](DECISIONS_NEEDED.md)：只保留无法从代码与现有要求推导的问题。
 
@@ -21,6 +21,7 @@
 - [ADR 0007：Mixed 端口到线路映射](architecture/decisions/0007-mixed-routing-contract.md)
 - [ADR 0008：持久 Windows Runtime 与无直连切换（候选架构）](architecture/decisions/0008-persistent-windows-runtime.md)
 - [ADR 0009：配置事务与显式恢复方向](architecture/decisions/0009-config-transaction-recovery.md)
+- [ADR 0010：进程内生命周期串行化与 generation fencing](architecture/decisions/0010-process-local-lifecycle-generation-fencing.md)
 
 ADR 0005（MultiMapper）已撤出产品决策序列；相关材料只保留在历史归档。
 

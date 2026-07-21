@@ -452,6 +452,12 @@ bool DialogEditProfile::onEnd() {
 }
 
 void DialogEditProfile::accept() {
+    if (NekoGui::dataStore->core_transition_depth.load() > 0) {
+        MessageBoxWarning(
+            software_name,
+            tr("Profiles cannot be changed while a core transition is in progress. Wait for it to finish and try again."));
+        return;
+    }
     // save to ent
     if (!onEnd()) {
         return;
@@ -523,6 +529,12 @@ void DialogEditProfile::on_certificate_edit_clicked() {
 }
 
 void DialogEditProfile::on_apply_to_group_clicked() {
+    if (NekoGui::dataStore->core_transition_depth.load() > 0) {
+        MessageBoxWarning(
+            software_name,
+            tr("Profiles cannot be changed while a core transition is in progress. Wait for it to finish and try again."));
+        return;
+    }
     if (apply_to_group_ui.empty()) {
         apply_to_group_ui[ui->multiplex] = new FloatCheckBox(ui->multiplex, this);
         apply_to_group_ui[ui->sni] = new FloatCheckBox(ui->sni, this);

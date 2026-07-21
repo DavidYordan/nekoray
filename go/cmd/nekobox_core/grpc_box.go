@@ -4,6 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
+	"net"
+	"os"
+	"strconv"
 
 	"grpc_server"
 	"grpc_server/gen"
@@ -11,73 +15,117 @@ import (
 	"github.com/matsuridayo/libneko/neko_common"
 	"github.com/matsuridayo/libneko/speedtest"
 
-	"log"
-
 	"nekobox_core/internal/boxapi"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 )
+
+const lifecycleCommandSequenceHeader = "nekoray_command_sequence"
 
 type server struct {
 	grpc_server.BaseServer
 }
 
-func (s *server) Start(ctx context.Context, in *gen.LoadConfigReq) (out *gen.ErrorResp, _ error) {
-	var err error
+func lifecycleCommandSequence(ctx context.Context) (uint64, error) {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return 0, errors.New("lifecycle command metadata is missing")
+	}
+	values := md.Get(lifecycleCommandSequenceHeader)
+	if len(values) != 1 {
+		return 0, fmt.Errorf("lifecycle command sequence header count is %d, expected 1", len(values))
+	}
+	sequence, err := strconv.ParseUint(values[0], 10, 64)
+	if err != nil || sequence == 0 {
+		return 0, fmt.Errorf("invalid lifecycle command sequence %q", values[0])
+	}
+	return sequence, nil
+}
 
-	defer func() {
-		out = &gen.ErrorResp{}
-		if err != nil {
-			out.Error = err.Error()
-			instance = nil
+// Exit intentionally overrides the promoted BaseServer implementation. The
+// generic server exits immediately, but this core must never terminate while
+// an active or indeterminately closed generation is still retained.
+func (s *server) Exit(ctx context.Context, in *gen.EmptyReq) (*gen.EmptyResp, error) {
+	commandSequence, err := lifecycleCommandSequence(ctx)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	if err := activeCoreLifecycle.exitWhenStopped(commandSequence, os.Exit); err != nil {
+		return nil, status.Error(codes.FailedPrecondition, err.Error())
+	}
+	return &gen.EmptyResp{}, nil
+}
+
+func buildCoreCandidate(in *gen.LoadConfigReq) (*managedCore, error) {
+	if in == nil {
+		return nil, errors.New("start request is missing")
+	}
+
+	candidateBox, cancel, createErr := createSingBoxCandidate([]byte(in.CoreConfig), nekoPlatformWriter{})
+	if candidateBox == nil {
+		return nil, createErr
+	}
+
+	var candidateStats *boxapi.SbStatsService
+	candidate := &managedCore{
+		cancel: cancel,
+		close:  candidateBox.Close,
+		dial: func(ctx context.Context, network string, address string) (net.Conn, error) {
+			return boxapi.DialContext(ctx, candidateBox, candidateStats, network, address)
+		},
+		queryStats: func(ctx context.Context, name string, reset bool) (int64, error) {
+			if candidateStats == nil {
+				return 0, nil
+			}
+			return candidateStats.GetStats(ctx, name, reset)
+		},
+	}
+	if createErr != nil {
+		return candidate, createErr
+	}
+
+	if in.StatsOutbounds != nil {
+		candidateStats = boxapi.NewSbStatsService(boxapi.StatsServiceOptions{
+			Enabled:   true,
+			Outbounds: in.StatsOutbounds,
+		})
+		if candidateStats != nil {
+			candidateBox.Router().AppendTracker(candidateStats)
 		}
-	}()
+	}
+	return candidate, nil
+}
 
-	if neko_common.Debug {
+func (s *server) Start(ctx context.Context, in *gen.LoadConfigReq) (out *gen.ErrorResp, _ error) {
+	out = &gen.ErrorResp{}
+	if neko_common.Debug && in != nil {
 		log.Println("Start:", in.CoreConfig)
 	}
-
-	if instance != nil {
-		err = errors.New("instance already started")
+	commandSequence, err := lifecycleCommandSequence(ctx)
+	if err != nil {
+		out.Error = err.Error()
 		return
 	}
-
-	instance, instance_cancel, err = CreateSingBox([]byte(in.CoreConfig), nekoPlatformWriter{})
-
-	if instance != nil {
-		instance_stats = nil
-		if in.StatsOutbounds != nil {
-			instance_stats = boxapi.NewSbStatsService(boxapi.StatsServiceOptions{
-				Enabled:   true,
-				Outbounds: in.StatsOutbounds,
-			})
-			if instance_stats != nil {
-				instance.Router().AppendTracker(instance_stats)
-			}
-		}
+	if err := activeCoreLifecycle.start(commandSequence, func() (*managedCore, error) {
+		return buildCoreCandidate(in)
+	}); err != nil {
+		out.Error = err.Error()
 	}
-
 	return
 }
 
 func (s *server) Stop(ctx context.Context, in *gen.EmptyReq) (out *gen.ErrorResp, _ error) {
-	var err error
-
-	defer func() {
-		out = &gen.ErrorResp{}
-		if err != nil {
-			out.Error = err.Error()
-		}
-	}()
-
-	if instance == nil {
+	out = &gen.ErrorResp{}
+	commandSequence, err := lifecycleCommandSequence(ctx)
+	if err != nil {
+		out.Error = err.Error()
 		return
 	}
-
-	instance_cancel()
-	instance.Close()
-
-	instance = nil
-	instance_stats = nil
-
+	if err := activeCoreLifecycle.stop(commandSequence); err != nil {
+		out.Error = err.Error()
+	}
 	return
 }
 
@@ -131,11 +179,23 @@ func (s *server) Test(ctx context.Context, in *gen.TestReq) (out *gen.TestResp, 
 
 func (s *server) QueryStats(ctx context.Context, in *gen.QueryStatsReq) (out *gen.QueryStatsResp, _ error) {
 	out = &gen.QueryStatsResp{}
-
-	if instance_stats != nil {
-		out.Traffic, _ = instance_stats.GetStats(context.TODO(), fmt.Sprintf("outbound>>>%s>>>traffic>>>%s", in.Tag, in.Direct), true)
+	if in == nil {
+		return out, nil
 	}
-
+	traffic, err := activeCoreLifecycle.queryStats(
+		ctx,
+		fmt.Sprintf("outbound>>>%s>>>traffic>>>%s", in.Tag, in.Direct),
+		true,
+	)
+	if errors.Is(err, boxapi.ErrNoActiveInstance) {
+		return out, nil
+	}
+	if errors.Is(err, errCoreLifecycleBlocked) {
+		return nil, status.Error(codes.FailedPrecondition, err.Error())
+	}
+	if err == nil {
+		out.Traffic = traffic
+	}
 	return
 }
 

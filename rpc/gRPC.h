@@ -3,6 +3,8 @@
 #ifndef NKR_NO_GRPC
 
 #include "go/grpc_server/gen/libcore.pb.h"
+#include <atomic>
+#include <cstdint>
 #include <QString>
 
 namespace QtGrpc {
@@ -36,6 +38,7 @@ namespace NekoGui_rpc {
         std::function<std::unique_ptr<QtGrpc::Http2GrpcChannelPrivate>()> make_grpc_channel;
         std::unique_ptr<QtGrpc::Http2GrpcChannelPrivate> default_grpc_channel;
         std::function<void(const QString &)> onError;
+        std::atomic_uint64_t lifecycle_command_sequence{0};
     };
 
     inline Client *defaultClient;

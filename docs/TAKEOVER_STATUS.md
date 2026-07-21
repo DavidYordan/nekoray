@@ -19,7 +19,7 @@
 | P0 | external-core、Naive、custom external、TUIC/Hysteria2 外核被整体删除 | 选择性恢复；仅 Xray 保持删除 |
 | P0 | 未知/现已不识别 profile 曾被 loader 删除 | 已停止删除与 ID 复用，并生成可验证 quarantine 证据；事务 CLI 只处理结构化事务，不会自动恢复 unknown/quarantine，仍缺图形恢复与未知模型修复 |
 | P0 | 订阅刷新曾在验证前改 order/删 profile | 已改为 parse/stage/validate 后提交；继续补多文件事务与故障注入 |
-| P0 | TUN 下重载被 UI 阻止；整核 Stop/Start 无独立 kill-switch | 持久 runtime + WFP + generation 事务 |
+| P0 | TUN 下重载被 UI 阻止；整核 Stop/Start 无独立 kill-switch | 进程内 lifecycle/generation 止损已落地；仍需持久 runtime + WFP + OS 级 generation 事务 |
 | P0 | final custom 曾可覆盖 Mixed 端口绑定；空辅助 chain 曾可 fail-open | 最终 validator 已落地；补完整负向自动回归 |
 | P0 | DoH 扩展曾含普通 nameserver 猜测、本机 fallback、无 DoH也套自定义 group | 已收敛为精确 proxy-server-nameserver + strict；bootstrap 仍待实现 |
 | P1 | VMess/v2rayN、SOCKS userinfo、SS v2ray-plugin 等格式兼容误删 | 恢复，不等同于恢复 Xray core |
@@ -39,12 +39,12 @@ OpenWrt `192.168.1.7` 使用同版本 `sing-box 1.13.12-routefluent-anytls-clien
 | 移除 detour并改 native | 失败 | 失败 | 失败 | 服务端 internal error |
 | 独立 Trojan profile 2（与 `g-2` 对象相同） | 204 | 204 | 204 | Trojan 单跳可用 |
 
-因此 Mixed 监听、主端口映射、Mihomo AnyTLS 单跳和 Trojan 对象分别成立；组合 detour 尚未闭环。旧探针会在临时 OpenWrt 副本强制 `auto_detect_interface=true`，所以这些结果只能用于协议组合归因，不能证明导出配置的接口策略；工具现已改为默认 preserve，后续需按新默认重跑。
+因此临时 loopback Mixed、目标 outbound 的 Mihomo AnyTLS 单跳和 Trojan 单跳分别可达；组合 detour 尚未闭环。探针固定改写为临时 `52080` 并显式指向目标 outbound，不能证明产品 `12080` 主端口映射。旧探针还会在临时 OpenWrt 副本强制 `auto_detect_interface=true`，所以这些结果只能用于协议组合归因，不能证明导出配置的接口策略；工具现已改为默认 preserve，后续需按新默认重跑。
 
 ## 已完成的接管止损
 
 - 明确产品边界：保留 NekoRay，只有 Xray 明确删除；新增仅三项。
-- 产品生成器恢复上游 `auto_detect_interface=dataStore->spmode_vpn`；测试机适配不得进入默认。
+- 产品生成器已精确恢复上游 `auto_detect_interface=dataStore->spmode_vpn`：live 与 test 都只随产品 TUN 意图变化，文件 export 随后删除该字段；没有生产 NekoRay、物理网卡或本机双 TUN 特例。三份 loopback 诊断 fixture 也已移除无必要的 `true`。尚缺 live/test 的 TUN on/off 四象限与 export 删除边界的 C++ golden，不能把源码审计写成自动验证完成。
 - OpenWrt 探针默认保留该字段，仅显式诊断参数可强制；收紧器会拒绝系统 NTP 写入/非空 endpoint，并把 outbound 缩到目标线路的精确 detour 闭包；当前 Python 工具单测 19/19 通过。
 - 主 Mixed 默认 `12080`；Clash API 默认保持关闭（配置值 `-9090`，启用时端口 `9090`）；`2080` 与生产安装完全隔离。
 - 主/辅助 Mixed 标准路径显式绑定各自 chain；辅助 chain 失败、profile失效、端口重复现在整体构建失败，不再留下孤儿入口。
@@ -57,29 +57,32 @@ OpenWrt `192.168.1.7` 使用同版本 `sing-box 1.13.12-routefluent-anytls-clien
 - 普通单文件保存使用禁止 direct-write fallback 的 `QSaveFile`，与多文件事务共享提交串行化 mutex 和跨进程磁盘锁。每次实际内容变化在 commit 前发布短生命周期 durable before/after intent；精确验证 before/after 后写成 `aborted`/`committed`、移到 `recovery/retired-single-file-transactions/` 并尽力删除，无法判定则保留 `prepared` 并阻断。加载时存在性也进入快照，旧进程不能把被外部删除的文件当作新文件重建。覆盖前建立可验证备份，损坏/未知 profile 原件保留并生成 quarantine，且 ID 不复用，危险 reorder 已禁止。group 创建会同时提交 group 文件与 `pm.json`；单 profile/空 group 删除和 profile 跨组移动已接入持久 before/after manifest 与失败逆序回滚。启动扫描到完整配置加载由同一可重入磁盘锁覆盖；锁不会仅因运行超过 30 秒被抢占。扫描会枚举隐藏/系统项，拒绝 active lock、意外条目、manifest/身份/header 问题和非终态状态；终态只校验 JSON 与 schema/id/state header，合法终态即使 entries 损坏也不阻断启动，但 report 会深解析并标为 `valid=false`，非法终态 schema 仍阻断。命令行可先生成报告，再由用户明确选择结构化事务的完整 before/after，恢复中途不允许改方向；它不自动恢复 unknown/quarantine。配置根以下会拒绝危险 Windows 名、大小写重复和 reparse/junction，选定根本身是必须由操作者确认非 junction/别名的信任锚。删除对象会 tombstone，测速线程迟到保存不能复活文件；运行中的 auxiliary 也拒绝删除。非空 group 的旧半删除路径仍整体禁用。
 - route 名现限制为安全 Windows 单文件名，非法 `active_routing` 保留主配置原件并中止加载；非活动 route 使用事务删除，活动 route 必须先显式切换，不再直接删除后尝试补救。
 - 订阅刷新恢复为 parse/stage-before-mutate；解析失败、空响应、坏结构与零支持节点不写入。联网前会按值快照不可变 HTTP 选项，并记录目标 group 与全部成员的身份、顺序、tombstone 和序列化状态；提交回 UI 线程并取得提交串行化 mutex 后逐项重验，完成回调也回到 UI 线程。清理/回滚删除失败会保留对象并明确记录，但成功候选仍由多个独立 profile/group 提交组成，尚未形成跨文件崩溃一致事务。
-- Go helper 在无有效 sing-box instance 时不再回落系统 TCP/UDP/HTTP 网络。
+- ConfigBuilder 不再为统计回写 live `TrafficData.id/tag`，VLESS core 对象生成也不再为规范化 `-udp443`/`none` 改写 bean `flow`。group speedtest 现由 UI 线程生成 immutable job，按值冻结 profile/bean/最终 test config fingerprint 与请求；worker 只执行 RPC，结果回 UI 后以对象身份和 fingerprint 重验再保存，迟到结果不能覆盖已编辑、替换或有效配置已变化的 profile。`TrafficData::last_update` 已初始化为 `0`，消除了首次速率计算的未初始化读取；counter/rate 的 worker 写入与 UI/JsonStore 无锁读取仍是 P2，并未被 `TrafficBinding` 解决。该项只是完整 `BuildModelSnapshot` 前的局部止损。
+- Go helper 在无有效 sing-box instance 时不再回落系统 TCP/UDP/HTTP 网络。core candidate 现在只在启动成功后按 generation 发布；Start/Stop/dial/stats/Exit 由 lifecycle mutex 串行，旧 generation reference/HTTP client 与 Close 不确定形成的 blocked generation 均 fail closed，generation-bound HTTP client 禁止连接跨代复用。
 - Windows legacy 外置 TUN 因无精确 PID/句柄且曾按映像名批量 `taskkill`，现已安全禁用；配置数据保留，默认内部 TUN不受此项删除。
 - Windows 内部 TUN 生成配置现强制 `strict_route=true` 并同时覆盖 IPv4/IPv6；这只收紧活动期，仍不能覆盖 worker/GUI 消失窗口。
-- 最终 OS-mode validator 会拒绝未由显式产品 TUN 开关生成的 TUN，并要求受管 TUN 完整对象与生成值精确一致；在受管 TUN 活动配置中还拒绝 `route.default_interface` 以及 outbound/endpoint/DNS 的 bind-address/interface 覆盖。任意模式下的 inbound `set_system_proxy=true`、系统 WireGuard/Tailscale endpoint 与 NTP 写系统时钟均拒绝。它是已知 OS 副作用与产品 TUN 对象的窄 guard，不代表任意 `route.rules` 都已形式化证明安全。
+- 最终 OS-mode validator 会拒绝未由显式产品 TUN 开关生成的 TUN，并要求受管 TUN 完整对象与生成值精确一致；在受管 TUN 活动配置中还拒绝 `route.default_interface`，以及 outbound/endpoint/DNS/NTP 和嵌套 route `action=direct` dialer 的 bind-address/interface 覆盖。任意模式下的 inbound `set_system_proxy=true`、系统 WireGuard/Tailscale endpoint 与 NTP 写系统时钟均拒绝。它是已知 OS 副作用与产品 TUN 对象的窄 guard，不代表任意 `route.rules` 都已形式化证明安全。
 - 无令牌的 `-flag_restart_tun_on` 自动提权连续流程已删除；非管理员用户须自行以管理员身份启动后再次手动启用 TUN。
 - legacy WinINet 系统代理接口不能证明写入成功、所有权或完整恢复原 PAC/proxy/bypass，产品内 Windows 系统代理切换现已临时禁用，等待按 SID 的 compare-and-restore broker。
 - MultiMapper 专用导出和复杂批量 resolver/change-IP 平台已从产品 UI/构建/代码移出，历史材料保留在 archive。上游简单 **Resolve domain** 因直接走 Windows 系统 resolver 并永久覆盖节点域名，现也改为无副作用禁用说明；未来只能经对应 provider resolver 且保留原域名。
 - 打包脚本不再关闭/强杀运行实例；发现运行即失败。生产安装不再是默认构建参考目录。
 - 启动/普通重启不再根据 remember 状态或 CLI 连续参数自动启用系统代理/TUN；core 崩溃时只重启空控制 core，不自动恢复 profile/TUN。
+- GUI Start/Stop/CrashCleanup 现由单一 process-local transition ticket 串行；coordinator 同一 mutex 内同步 participating-mutation depth gate，迟到完成/失败获取不能释放新 owner 或 pending cleanup 的 fence。pending crash cleanup 由当前 transition 直接 handoff，普通操作不能抢入中间窗口，旧 Stop 未明确成功时新 Start 中止。legacy gRPC `Call` 的跨线程完成通知也已由错误的跨线程 `QMutex` lock/unlock 改为 `QSemaphore` release/acquire。Start/Stop/Exit 另带 GUI session 内单调 command sequence；Go lifecycle 在 phase 检查前推进最高序号，因此同一 daemon 的新 Stop/Exit 会拒绝后来才抢锁的旧 Start。最终 validator 通过后按值冻结 core config、SHA-256、受管 TUN 标志与发送前本地捕获的 candidate daemon generation，成功状态不再从 mutable UI 反推。RPC 未携带 expected generation，且 channel/token/port 跨同一 GUI session 的 daemon restart 复用，因此 Start 不确定或 ack 后、UI commit 前 readiness 丢失时，以 `max(candidate, CurrentDaemonGeneration)` 作为保守清理上界；它防止旧 crash 过早清除，但可能保留过久，并不能证明实际接收者。TrafficLooper binding 仅在 UI runtime commit 成功后发布。`CoreProcess` 的 daemon/profile-request generation 会阻止旧 crash timer/ready event 操作新进程；queue 与 ready 判断原子化，已 ready 时立即返回 one-shot request。UI 先保留请求，busy 时等待 transition 排空并在取得 ticket 后一次消费；显式 Stop/退出、新的直接 user/reload Start 或 daemon stop 会撤销旧请求。Start/Stop 响应不确定时保留 observed profile/TUN 并显示 indeterminate，等待上界 generation crash 或响应 daemon 已接受且按序完成的显式 Stop；该响应仍不证明 daemon 身份。
+- `DataStore::core_running`/`prepare_exit` 已改为 atomic bool，CoreProcess 不再跨线程读取 `spmode_vpn`，异常退出统一只重启空控制 core。退出/重启会等待 Stop completion；失败/不确定时不调用 core Exit 或 GUI quit，而是在 UI 线程撤销退出/save freeze、恢复 hotkey/control 并保留 observed runtime。只有响应 daemon 已接受且按序完成的 Stop 才继续，且不会顺带改变系统代理/TUN。Start/Stop HTTP/2 client 现以 30 秒 abort 界定 GUI 等待；超时仍按 indeterminate，Go handler 未按该 context 中止且没有服务端状态查询/跨 daemon 对账，所以不是端到端 deadline。
 - Windows GUI 已忽略 CRT `SIGTERM`/`SIGINT`，避免控制台信号直接绕过 UI 退出 guard；这不处理 `TerminateProcess`/任务管理器强制结束、崩溃、关机或 worker 自退，持久 Runtime/WFP 仍是 P0。
 - URL/Full Test 只接受精确有界的临时生成配置，`internal-full` 与顶层 `custom_config` 变更会被测试路径拒绝；产品 TUN requested/worker active 任一成立时拒绝新测试，测试运行中也拒绝启 TUN。Full Test 中原先调用系统 DNS 的“入口 IP”查询已禁用，并补上空配置/非法 URL 拒绝、父 RPC context 取消、超时 goroutine 防阻塞和 64 KiB 响应上限；TCP Ping 在 GUI 与 core 两层都明确禁用，因为它使用系统直连 socket。
 - 默认文件导出和 `for_share` 别名都使用无产品 TUN/辅助运行态的审计导出；`for_test` 使用独立有界测试配置。所有模式都执行已知 OS 副作用校验，但导出文件仍含凭据且不能视为可任意启动的沙箱。
-- 普通 GUI 通过 localhost、每次启动随机令牌的 gRPC 控制 core。独立 `nekobox_core run/check` 是构建与隔离测试显式使用的高级入口，可直接读取 sing-box 配置；Go 层尚未重复 C++ 的产品策略校验，属于需要补齐的纵深防御边界，而不是普通 GUI 可随意绕过 guard 的证据。
+- 普通 GUI 通过 localhost、每个 GUI session 随机令牌的 gRPC 控制 core；同一会话内 daemon 重启沿用该 token。lifecycle command sequence 只排序同一 daemon 收到的命令，当前请求仍不携带 expected daemon generation。独立 `nekobox_core run/check` 是构建与隔离测试显式使用的高级入口，可直接读取 sing-box 配置；Go 层尚未重复 C++ 的产品策略校验，属于需要补齐的纵深防御边界，而不是普通 GUI 可随意绕过 guard 的证据。
 - 本轮 GUI/core 只重建到 `build-package-windows64/` 并用于接管验证；`deployment/windows64/` 仍是 2026-07-18 的旧产物，未完成正式全量打包，不可交付。
 
 ## 2026-07-22 无侵入回归快照
 
-- 当前源码的 Windows GUI 增量构建成功；两个 Go 模块普通测试通过，本轮较早也用仓库 MinGW、`CGO_ENABLED=1` 通过两个模块的 race 测试，随后已重建 `build-package-windows64/nekobox_core.exe`。
-- 本轮构建目录快照：`nekobox.exe` SHA-256 `69596F03DCD7E6E30A2E5F2C35B43A81884A9BC4EB9DCBBD8CEC6E71DF920502`；`nekobox_core.exe` SHA-256 `D2D532E72CEE65791D5A098D688FB6C9A9F0133C2C79B847070627E595656E92`。这只是接管审计证据，不是 release manifest。
-- `test_final_config_guards.ps1` 10/10，`test_config_preservation.ps1` 10/10，`config_recovery_test` 1/1，OpenWrt helper Python 单测 19/19。
+- 当前源码的 Windows 全量 C++/package 本地重编译成功。Go core 已通过普通测试、`go test -count=20 ./...`、`go vet ./...` 与 `go test -race ./...`；`grpc_server` 已通过普通测试、vet 与 race。它们证明本轮源码和进程内并发断言，不是父进程/Windows TUN/WFP 生命周期验收。
+- 本轮本地审计二进制快照：`nekobox.exe` SHA-256 `FDD4901C2836FACBCAAC6271B0D3463F8AB064458DD40BFACAB07C2B3F16BD15`；`nekobox_core.exe` SHA-256 `6FE7236AF6866E6789CD41F3A0DA5C1F88ACCEC209E328E5449E4543AD0CE7A1`。它们位于本地构建目录，只是接管审计证据，不是 release manifest，也没有更新 `deployment/windows64/`。
+- `test_final_config_guards.ps1` 10/10，`test_config_preservation.ps1` 10/10，OpenWrt helper Python 单测 19/19。
 - 本地 Mixed fixture 7/7；额外 listener、系统代理、禁用日志和 loopback origin 清理均保持预期。
 - runtime connectivity 的 expected 204 场景通过，HTTP 与 SOCKS5h 均为 204；expected 200 场景按预期报告 2 项 mismatch 并返回失败。系统代理、fixture 端口和 origin 清理均通过。
-- 本轮已执行 `ctest --test-dir build-package-windows64 --output-on-failure`，`config_recovery_test` 为 1/1；它覆盖事务基础提交、模拟回滚、锁、pending 阻断、before/after 恢复、方向锁、单文件 `VerifiedBefore`/`VerifiedAfter`/`Indeterminate` intent、退役目录、隐藏/意外条目、精确大小写身份和协议 staging。它还锁定边界：合法 `committed` schema/id/state 但 entries 损坏/为空时 startup scan 不阻断，而 `BuildRecoveryReport` 必须标记 `valid=false`；非法 terminal schema 仍阻断。测试中的 `routes_box/ROUTE~1` 是对 `~` 的词法拒绝用例，不代表已构造或解析真实 8.3 alias。它不覆盖订阅/非空 group 或 ConfigBuilder golden。以上证据均不覆盖 Windows TUN/WFP/退出/切线，也不改变 Alpha/不可发布判断。
+- 本轮已在项目 MinGW `bin` 已加入 `PATH` 的环境中执行 `ctest --test-dir build-package-windows64 --output-on-failure`，2/2 通过。`config_recovery` 覆盖事务基础提交、模拟回滚、锁、pending 阻断、before/after 恢复、方向锁、单文件 `VerifiedBefore`/`VerifiedAfter`/`Indeterminate` intent、退役目录、隐藏/意外条目、精确大小写身份和协议 staging，并锁定 terminal startup/report 分层边界；其中 `routes_box/ROUTE~1` 只是 `~` 的词法拒绝用例，不代表真实 8.3 alias。`runtime_transition` 覆盖 process-local transition fencing、crash-cleanup handoff、daemon/profile-request generation、queue-or-ready 顺序与真并发恰好一次等纯状态行为；它不启动 QProcess/GUI/core、真实 HTTP/2 超时或 Windows TUN/WFP。两者都不覆盖订阅/非空 group、完整 ConfigBuilder snapshot/golden，也不改变 Alpha/不可发布判断。
 
 ## 仍然阻断发布
 
@@ -87,11 +90,13 @@ OpenWrt `192.168.1.7` 使用同版本 `sing-box 1.13.12-routefluent-anytls-clien
 2. 单文件原子保存、group 创建与部分删除/移动事务已落地，订阅也已先 stage、在 UI 线程串行提交并报告删除失败；订阅成功候选仍未接入单一事务，也缺真实进程终止/磁盘故障和图形恢复验收。
 3. 最终 Mixed、strict resolver 与 TUN/系统代理副作用不变量校验已落地，并新增 `test/test_final_config_guards.ps1` 覆盖部分导出拒绝分支；完整 C++ 配置生成 golden/负向回归仍未完成，不能只凭脚本存在判定通过。
 4. AnyTLS + Trojan detour 仍失败。
-5. 当前 Go wrapper 没有原地热重载；内部 TUN 与单个 Box 同生共死，WFP kill-switch/持久 Runtime Service 尚不存在。
+5. 当前 Go wrapper 没有原地热重载；内部 TUN 与单个 Box 同生共死。进程内 lifecycle/generation 已封住直接 Start/Stop/旧引用竞态，但 Windows Runtime Service、stable Mixed/TUN anchor 和 persistent WFP kill-switch 尚不存在；GUI/父进程死亡仍会带走当前数据面。
 6. Windows 下主+多辅助真实不同出口、TUN 切线、worker/GUI 崩溃窗口与 IPv4/IPv6/DNS 防泄漏尚未验收；当前 guard 仍违反“开 TUN 时可切线”。
 7. 精准系统代理 broker 尚未实现，产品内切换暂禁；旧 WinINet helper 不得重新接回 UI。
-8. Go core 仍缺产品策略的第二层校验，以及统一保护 `Start`/`Stop`/stats/全局 instance 的 lifecycle mutex/generation；localhost 随机令牌只保护 RPC 调用，不解决配置授权和并发状态机。
-9. 当前提交串行化 mutex 不是完整模型读写锁；ConfigBuilder 尚无覆盖全部读取的 immutable snapshot，core transition 仅在最终 Start gate 再次串行化。route/settings/hotkey 等调用也尚未统一处理保存失败与内存回滚，均属于 Alpha/P0 数据一致性债务。
+8. Go core 仍缺产品策略的第二层校验；现有 process-local lifecycle mutex/generation 已保护 `Start`/`Stop`/stats/dial/Exit，session-local command sequence 已阻止同一 daemon 内旧 Start 反超新 Stop，GUI Start/Stop 也已有 30 秒 client abort。但 RPC 仍无 expected daemon generation、服务端可取消的端到端 deadline 和 indeterminate 后状态查询/对账，也没有持久 RuntimeStateMachine。token 每个 GUI session 随机但会跨该会话内的 daemon 重启沿用，只保护调用者身份，不解决 generation、配置授权或 OS 状态所有权。超时只结束 GUI 等待并保守标为 indeterminate；Go handler 可能继续完成，退出链不会把它转成主动 kill。queue-or-ready 与 command sequence 均有纯状态测试，仍缺 QProcess/GUI crash→commit/退出和真实 HTTP/2 超时集成。
+9. 当前提交串行化 mutex 不是完整模型读写锁；ConfigBuilder 两类明确 live-model 写入和 group speedtest worker 读写已止损，但完整 `BuildModelSnapshot`、订阅与其它跨线程读取仍未完成。final Start gate 只复核 recovery、ticket 和已捕获 daemon readiness，不重建 candidate 或比较完整 model revision。route/settings/hotkey 等调用也尚未统一处理保存失败与内存回滚，均属于 Alpha/P0 数据一致性债务。
 10. Windows-only CI 已建立并通过，但干净 Qt/MinGW/C++ 依赖工具链和真实交付二进制 manifest 尚未完成；libneko 已锁定为仓内子模块，当前 `deployment/windows64/` 仍是旧产物。
+
+另有一项不冒充当前 P0 发布主阻断的 P2 债务：`TrafficData::last_update` 的未初始化读取已修复，但 counter/rate 仍由 worker 写、UI/JsonStore 无统一同步读取；需后续采用不可变遥测快照或明确锁/原子设计。
 
 本分支不得部署到 `D:\Program Files\nekoray`。后续顺序见 [推进路线](ROADMAP.md)。

@@ -35,7 +35,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\verify_fail_closed_r
 
 1. 系统代理和 TUN 关闭时，GUI 退出、重启和线路切换不得启用它们。
 2. 系统代理和 TUN 开启时，GUI 退出、重启和线路切换不得停用、恢复或改写它们。
-3. TUN 开启时重启当前线路，保护规则先于旧 core 停止，并保持到新 core 通过健康检查；故障时应阻断并回滚，不得 direct 泄漏。
+3. TUN 开启时重启当前线路，保护规则先于旧 core 停止，并保持到新 core 通过健康检查；故障时继续阻断，不得自动切回旧线路。只有用户明确选择且旧 generation 重新验证后才执行显式回滚，任何阶段都不得 direct 泄漏。
 4. core 启动失败、崩溃、卡死、提权失败、端口占用、DNS 失败和 IPv4/IPv6 分别故障时，观察结果必须与“无偷跑”一致；同时核对 requested、worker-observed 与 Windows 实际状态，不得把“请求仍为开”当作 TUN 已恢复。
 5. worker 和 Runtime Service 分别终止、BFE 重启、NIC 切换及休眠恢复时，persistent WFP 仍阻断未授权物理 IPv4/IPv6/DNS；helper 不得改走系统网络。
 6. 用户手动关闭某项网络能力时，只精准撤销本项目仍拥有的状态；检测到外部修改时不得覆盖第三方当前设置。

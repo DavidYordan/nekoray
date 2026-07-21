@@ -1,8 +1,8 @@
 # 产品契约
 
 状态：现行、已冻结部分为开发硬约束
-调查基线：NekoRay 4.0.1 `adef6cd` → 当前 `96f1166` + 接管工作树
-最后更新：2026-07-20
+调查基线：NekoRay 4.0.1 `adef6cd` → 偏离审计终点 `96f1166`；后续整改状态以接管文档和 Git 历史为准
+最后更新：2026-07-22
 
 ## 1. 产品定位
 
@@ -78,7 +78,7 @@ Windows GUI 当前忽略 CRT `SIGTERM`/`SIGINT`，只用于防止控制台信号
 
 ## 7. 运行入口与信任边界
 
-- 普通 GUI 路径由 C++ ConfigBuilder 生成并校验产品配置，再通过仅监听 localhost、使用每次启动随机令牌的 gRPC 控制 core。
+- 普通 GUI 路径由 C++ ConfigBuilder 生成并校验产品配置，再通过仅监听 localhost、使用每个 GUI session 随机令牌的 gRPC 控制 core；Start/Stop/Exit 的 session-local command sequence 可防止同一 daemon 中旧 Start 晚于新 Stop 执行。同一会话内 daemon 重启仍沿用 token，command sequence 也不等于 expected-generation 绑定。
 - `nekobox_core run/check` 是用户显式选择的高级 CLI，供构建、审计和经过收紧的隔离测试使用；它能够直接读取 sing-box 配置，因此不得被描述为普通 GUI 的任意绕过，也不得用于未经审计的配置。
 - 当前 Go core 会执行 sing-box 自身的配置与生命周期处理，但尚未重复执行 C++ 层的 Mixed、TUN、系统代理和 resolver 产品策略。该纵深防御缺口必须在受控 core/Runtime 边界补齐；随机令牌不能替代配置授权。
 
