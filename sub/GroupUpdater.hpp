@@ -21,7 +21,8 @@ namespace NekoGui_sub {
 
         QString detected_source_type;
         QStringList detected_doh_upstreams;
-        QStringList detected_invalid_doh_upstreams;
+        QStringList detected_unsupported_resolver_entries;
+        QString detected_resolver_origin;
         QString fallback_utls_fingerprint;
     };
 

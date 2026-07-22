@@ -641,6 +641,8 @@ namespace NekoGui {
         _add(new configItem("default_client_source", &default_client_source, itemType::string));
         _add(new configItem("default_server_resolver_doh", &default_server_resolver_doh, itemType::string));
         _add(new configItem("default_server_resolver_source", &default_server_resolver_source, itemType::string));
+        _add(new configItem("default_server_resolver_origin", &default_server_resolver_origin, itemType::string));
+        _add(new configItem("default_server_resolver_policy_version", &default_server_resolver_policy_version, itemType::integer));
         _add(new configItem("default_server_resolver_fallback", &default_server_resolver_allow_local_fallback, itemType::boolean));
         _add(new configItem("manually_column_width", &manually_column_width, itemType::boolean));
         _add(new configItem("column_width", &column_width, itemType::integerList));

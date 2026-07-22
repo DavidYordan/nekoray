@@ -1,9 +1,11 @@
 #include "db/ProfileFilter.hpp"
+#include "db/ResolverConfig.hpp"
 #include "fmt/includes.h"
 #include "fmt/Preset.hpp"
 #include "main/ConfigMutation.hpp"
 #include "main/HTTPRequestHelper.hpp"
 
+#include "ClashResolverPolicy.hpp"
 #include "GroupUpdater.hpp"
 
 #include <QInputDialog>
@@ -33,6 +35,8 @@ namespace NekoGui_sub {
         QString defaultClientSource;
         QString defaultResolverDoh;
         QString defaultResolverSource;
+        QString defaultResolverOrigin;
+        int defaultResolverPolicyVersion = 0;
         bool defaultResolverFallback = false;
         QList<int> order;
 
@@ -46,6 +50,8 @@ namespace NekoGui_sub {
             defaultClientSource = group->default_client_source;
             defaultResolverDoh = group->default_server_resolver_doh;
             defaultResolverSource = group->default_server_resolver_source;
+            defaultResolverOrigin = group->default_server_resolver_origin;
+            defaultResolverPolicyVersion = group->default_server_resolver_policy_version;
             defaultResolverFallback = group->default_server_resolver_allow_local_fallback;
             order = group->order;
         }
@@ -60,6 +66,8 @@ namespace NekoGui_sub {
             group->default_client_source = defaultClientSource;
             group->default_server_resolver_doh = defaultResolverDoh;
             group->default_server_resolver_source = defaultResolverSource;
+            group->default_server_resolver_origin = defaultResolverOrigin;
+            group->default_server_resolver_policy_version = defaultResolverPolicyVersion;
             group->default_server_resolver_allow_local_fallback = defaultResolverFallback;
             group->order = order;
         }
@@ -278,48 +286,6 @@ namespace NekoGui_sub {
         return {};
     }
 
-    bool IsValidClashDohUpstream(const QString& raw) {
-        const auto url = QUrl(raw.trimmed());
-        if (!url.isValid() || url.scheme().toLower() != "https") return false;
-        if (url.host().isEmpty()) return false;
-        if (url.path().isEmpty() || url.path() == "/") return false;
-        if (!url.userName().isEmpty() || !url.password().isEmpty()) return false;
-        if (url.hasQuery() || url.hasFragment()) return false;
-        return true;
-    }
-
-    struct ClashDohUpstreams {
-        bool present = false;
-        QStringList valid;
-        QStringList invalid;
-    };
-
-    ClashDohUpstreams ExtractClashProxyServerDohUpstreams(const YAML::Node& root) {
-        ClashDohUpstreams result;
-        auto dns = root["dns"];
-        if (!dns.IsMap()) return result;
-
-        const auto configured = NodeChild(dns, {
-                                                   "proxy-server-nameserver",
-                                                   "proxy_server_nameserver",
-                                               });
-        if (!configured.IsDefined()) return result;
-        result.present = true;
-
-        QSet<QString> seen;
-        for (const auto& raw: Node2QStringList(configured)) {
-            const auto value = raw.trimmed();
-            if (value.isEmpty() || seen.contains(value)) continue;
-            seen.insert(value);
-            if (IsValidClashDohUpstream(value)) {
-                result.valid << value;
-            } else {
-                result.invalid << value;
-            }
-        }
-        return result;
-    }
-
     bool IsVisibleAsciiAnyTLSClientValue(const QString& value) {
         if (value.isEmpty() || value.size() > 128) return false;
         for (auto ch: value) {
@@ -349,17 +315,18 @@ namespace NekoGui_sub {
                 return;
             }
 
-            const auto clashDohResult = ExtractClashProxyServerDohUpstreams(root);
-            if (clashDohResult.present && clashDohResult.valid.isEmpty()) {
+            const auto clashResolver = ExtractClashServerResolver(root);
+            if (!clashResolver.invalidDohEntries.isEmpty()) {
                 parse_failed = true;
                 parse_error = QObject::tr(
-                    "dns.proxy-server-nameserver is present but contains no valid HTTPS DoH endpoint.");
+                    "The selected Clash server resolver source contains an invalid HTTPS DoH endpoint.");
                 return;
             }
-            const auto clashDohUpstreams = clashDohResult.valid;
+            const auto clashDohUpstreams = clashResolver.dohUpstreams;
             detected_source_type = "clash";
             detected_doh_upstreams = clashDohUpstreams;
-            detected_invalid_doh_upstreams = clashDohResult.invalid;
+            detected_unsupported_resolver_entries = clashResolver.unsupportedEntries;
+            detected_resolver_origin = ClashResolverSourceName(clashResolver.source);
             for (auto proxy: proxies) {
                 if (!proxy.IsMap()) continue;
                 auto type = Node2QString(proxy["type"]).toLower();
@@ -377,12 +344,12 @@ namespace NekoGui_sub {
                 ent->bean->name = Node2QString(proxy["name"]);
                 ent->bean->serverAddress = Node2QString(proxy["server"]);
                 ent->bean->serverPort = Node2Int(proxy["port"]);
-                // The supported Clash extension is only the top-level
-                // dns.proxy-server-nameserver field. Do not accept the prior
-                // private per-proxy server-resolver schema or its local
-                // fallback switch.
-                if (!clashDohUpstreams.isEmpty() &&
-                    !ent->bean->serverAddress.isEmpty() && !IsIpAddress(ent->bean->serverAddress)) {
+                // Resolver policy is subscription-owned: an explicit
+                // proxy-server-nameserver is authoritative; only when that
+                // field is absent may HTTPS entries in dns.nameserver be
+                // inherited. Never import the prior private per-proxy
+                // resolver or local-fallback schema.
+                if (!ent->bean->serverAddress.isEmpty() && !IsIpAddress(ent->bean->serverAddress)) {
                     ent->bean->inheritSubscriptionResolver = true;
                     ent->bean->serverResolverDohUpstreams = "";
                     ent->bean->serverResolverAllowLocalFallback = false;
@@ -829,10 +796,11 @@ namespace NekoGui_sub {
             MW_show_log("<<<<<<<< " + QObject::tr("Subscription update aborted without changes: %1").arg(reason));
             return _sub_gid;
         }
-        if (!rawUpdater->detected_invalid_doh_upstreams.isEmpty()) {
+        if (!rawUpdater->detected_unsupported_resolver_entries.isEmpty()) {
             MW_show_log(QObject::tr(
-                            "Ignored %1 unsupported proxy-server-nameserver item(s); valid HTTPS DoH endpoints remain active.")
-                            .arg(rawUpdater->detected_invalid_doh_upstreams.size()));
+                            "Ignored %1 non-HTTPS server resolver item(s) from %2; this project only extends HTTPS DoH resolution.")
+                            .arg(rawUpdater->detected_unsupported_resolver_entries.size())
+                            .arg(rawUpdater->detected_resolver_origin));
         }
 
         // Downloads and parsing stay off the UI thread. The complete legacy
@@ -946,6 +914,9 @@ namespace NekoGui_sub {
                     }
                     if (group->DefaultResolverManagedBySubscription()) {
                         group->default_server_resolver_doh = rawUpdater->detected_doh_upstreams.join("\n");
+                        group->default_server_resolver_origin = rawUpdater->detected_resolver_origin;
+                        group->default_server_resolver_policy_version =
+                            NekoGui_resolver::SubscriptionResolverPolicyVersion;
                         group->default_server_resolver_allow_local_fallback = false;
                         group->SetDefaultResolverManagedBySubscription(true);
                     }

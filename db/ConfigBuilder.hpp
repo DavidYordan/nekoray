@@ -10,6 +10,12 @@ namespace NekoGui {
         QString outboundTag;
         QString server;
         QStringList dohUpstreams;
+        int profileId = -1;
+        int groupId = -1;
+        int mixedPort = -1;
+        QString bindingRole;
+        QString bootstrapResolverTag;
+        QJsonObject expectedBootstrapServer;
     };
 
     struct ManagedMixedBinding {
@@ -68,6 +74,8 @@ namespace NekoGui {
         QJsonArray outbounds;
         QList<ResolverBindingRequest> resolverBindingRequests;
         QList<ManagedMixedBinding> managedMixedBindings;
+        int resolverContextMixedPort = -1;
+        QString resolverContextRole;
     };
 
     std::shared_ptr<BuildConfigResult> BuildConfig(const std::shared_ptr<ProxyEntity> &ent, bool forTest, bool forExport);

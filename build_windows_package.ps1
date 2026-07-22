@@ -646,6 +646,12 @@ try {
         $ShareFormatTest = Require-File `
             $ShareFormatTestPath `
             "share format test"
+        $ResolverPolicyTestPath = Assert-PathOutsideProtectedProduction `
+            (Join-Path $BuildDirFull "resolver_policy_test.exe") `
+            "resolver policy test executable"
+        $ResolverPolicyTest = Require-File `
+            $ResolverPolicyTestPath `
+            "resolver policy test"
         $CoreExitIntegrationWorkRoot = Assert-PathOutsideProtectedProduction `
             (Join-Path $BuildDirFull "core-exit-integration-work") `
             "core Exit integration work root"
@@ -683,6 +689,10 @@ try {
                 $ShareFormatTest `
                 @() `
                 "share format test before core Exit integration"
+            Invoke-Checked `
+                $ResolverPolicyTest `
+                @() `
+                "resolver policy test before core Exit integration"
             foreach ($entry in $CoreExitEnvironment.GetEnumerator()) {
                 $CoreExitPreviousEnvironment[$entry.Key] = [Environment]::GetEnvironmentVariable(
                     $entry.Key,

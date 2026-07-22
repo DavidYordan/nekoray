@@ -1,10 +1,10 @@
 #include "db/ConfigBuilder.hpp"
 #include "db/Database.hpp"
+#include "db/ResolverConfig.hpp"
 #include "fmt/includes.h"
 #include "fmt/Preset.hpp"
 
 #include <QApplication>
-#include <QCryptographicHash>
 #include <QFile>
 #include <QFileInfo>
 #include <QMap>
@@ -68,69 +68,6 @@ namespace NekoGui {
         return value;
     }
 
-    QJsonObject BuildDomainResolverObject(const QString &server, const QString &strategy = "ipv4_only") {
-        QJsonObject resolver{{"server", server}};
-        const auto normalizedStrategy = NormalizeDnsStrategy(strategy);
-        if (!normalizedStrategy.isEmpty()) resolver["strategy"] = normalizedStrategy;
-        return resolver;
-    }
-
-    QString StableRouteFluentTag(const QString &prefix, const QString &key) {
-        const auto digest = QCryptographicHash::hash(key.toUtf8(), QCryptographicHash::Sha1).toHex().left(12);
-        return prefix + "-" + digest;
-    }
-
-    QStringList ParseResolverDohUpstreams(const QString &raw) {
-        auto normalized = raw;
-        normalized.replace(",", "\n");
-        QStringList out;
-        QSet<QString> seen;
-        for (const auto &line: SplitLinesSkipSharp(normalized)) {
-            const auto value = line.trimmed();
-            if (value.isEmpty() || seen.contains(value)) continue;
-            seen.insert(value);
-            out << value;
-        }
-        return out;
-    }
-
-    bool IsValidDohUpstream(const QString &raw, QString *error = nullptr) {
-        const auto url = QUrl(raw.trimmed());
-        const auto label = raw.trimmed();
-        auto setError = [&](const QString &message) {
-            if (error != nullptr) *error = QStringLiteral("%1: %2").arg(label, message);
-            return false;
-        };
-        if (!url.isValid() || url.scheme().toLower() != "https") return setError("DoH URL must use https scheme");
-        if (url.host().isEmpty()) return setError("DoH URL must have host");
-        if (url.path().isEmpty() || url.path() == "/") return setError("DoH URL must have non-root path");
-        if (!url.userName().isEmpty() || !url.password().isEmpty()) return setError("DoH URL must not include credentials");
-        if (url.hasQuery()) return setError("DoH URL must not include query");
-        if (url.hasFragment()) return setError("DoH URL must not include fragment");
-        return true;
-    }
-
-    QJsonObject BuildRouteFluentDohServer(const QString &tag, const QString &rawUrl) {
-        const auto url = QUrl(rawUrl.trimmed());
-        const auto host = url.host();
-        QJsonObject server{
-            {"tag", tag},
-            {"type", "https"},
-            {"server", host},
-            {"server_port", url.port(443)},
-            {"path", url.path()},
-        };
-        return server;
-    }
-
-    QJsonObject BuildRouteFluentResolverGroup(const QString &tag, const QStringList &primaryTags) {
-        return QJsonObject{
-            {"tag", tag},
-            {"type", "routefluent_resolver_group"},
-            {"primary", QList2QJsonArray(primaryTags)},
-        };
-    }
-
     bool DnsServersContainTag(const QJsonArray &servers, const QString &tag) {
         for (const auto &value: servers) {
             if (value.isObject() && value.toObject()["tag"].toString() == tag) return true;
@@ -144,43 +81,83 @@ namespace NekoGui {
         servers += server;
     }
 
-    void ApplyRouteFluentResolverBindings(const std::shared_ptr<BuildConfigStatus> &status, QJsonArray &dnsServers) {
+    QJsonObject DnsServerByTag(const QJsonArray& servers, const QString& tag) {
+        for (const auto& value: servers) {
+            if (!value.isObject()) continue;
+            const auto server = value.toObject();
+            if (server["tag"].toString() == tag) return server;
+        }
+        return {};
+    }
+
+    QString ResolverRequestLabel(const ResolverBindingRequest& request) {
+        auto label = request.bindingRole.trimmed();
+        if (label.isEmpty()) label = QStringLiteral("managed line");
+        if (request.mixedPort > 0) label += QStringLiteral(" port %1").arg(request.mixedPort);
+        return QStringLiteral("%1, profile %2, group %3, outbound %4")
+            .arg(label)
+            .arg(request.profileId)
+            .arg(request.groupId)
+            .arg(request.outboundTag);
+    }
+
+    void ApplyRouteFluentResolverBindings(
+        const std::shared_ptr<BuildConfigStatus>& status,
+        QJsonArray& dnsServers,
+        const QJsonObject& nativeBootstrapServer) {
         if (status->resolverBindingRequests.isEmpty()) return;
 
         QMap<QString, QString> dohTagByUrl;
         QSet<QString> resolverGroupKeys;
+        const auto nativeBootstrapTag = nativeBootstrapServer["tag"].toString();
 
-        for (const auto &request: status->resolverBindingRequests) {
+        for (auto& request: status->resolverBindingRequests) {
             QString resolverTag;
             if (!request.dohUpstreams.isEmpty()) {
                 QStringList primaryTags;
                 for (const auto &upstream: request.dohUpstreams) {
                     QString error;
-                    if (!IsValidDohUpstream(upstream, &error)) {
-                        status->result->error = QStringLiteral("invalid server resolver DoH upstream for %1: %2")
-                                                    .arg(request.outboundTag, error);
+                    if (!NekoGui_resolver::ValidateDohUpstream(upstream, &error)) {
+                        status->result->error = QStringLiteral("Invalid server resolver DoH upstream for %1: %2")
+                                                    .arg(ResolverRequestLabel(request), error);
                         return;
                     }
                     auto normalizedUrl = QUrl(upstream.trimmed()).toString(QUrl::FullyEncoded);
-                    const auto dohHost = QUrl(normalizedUrl).host();
-                    if (!IsIpAddress(dohHost)) {
-                        status->result->error = QStringLiteral(
-                            "server resolver DoH endpoint '%1' requires an explicit, auditable bootstrap IP; "
-                            "local-system bootstrap and direct DNS fallback are disabled.")
-                                                    .arg(dohHost);
+                    const auto dohTag = NekoGui_resolver::StableTag("rf-doh", normalizedUrl);
+                    const auto dohServer = NekoGui_resolver::BuildProviderDohServer(
+                        dohTag,
+                        normalizedUrl,
+                        nativeBootstrapTag,
+                        &error);
+                    if (dohServer.isEmpty()) {
+                        status->result->error = QStringLiteral("Cannot build server resolver DoH for %1: %2")
+                                                    .arg(ResolverRequestLabel(request), error);
                         return;
                     }
+                    if (dohServer.contains("domain_resolver")) {
+                        AppendDnsServerIfMissing(dnsServers, nativeBootstrapServer);
+                        const auto actualBootstrap = DnsServerByTag(dnsServers, nativeBootstrapTag);
+                        if (actualBootstrap.isEmpty()) {
+                            status->result->error = QStringLiteral(
+                                "The native NekoRay bootstrap resolver '%1' is unavailable for %2.")
+                                                        .arg(nativeBootstrapTag, ResolverRequestLabel(request));
+                            return;
+                        }
+                        request.bootstrapResolverTag = nativeBootstrapTag;
+                        request.expectedBootstrapServer = actualBootstrap;
+                    }
                     if (!dohTagByUrl.contains(normalizedUrl)) {
-                        const auto dohTag = StableRouteFluentTag("rf-doh", normalizedUrl);
                         dohTagByUrl[normalizedUrl] = dohTag;
-                        AppendDnsServerIfMissing(dnsServers, BuildRouteFluentDohServer(dohTag, normalizedUrl));
+                        AppendDnsServerIfMissing(dnsServers, dohServer);
                     }
                     primaryTags << dohTagByUrl[normalizedUrl];
                 }
                 const auto groupKey = primaryTags.join("|");
-                resolverTag = StableRouteFluentTag("rf-resolver", groupKey);
+                resolverTag = NekoGui_resolver::StableTag("rf-resolver", groupKey);
                 if (!resolverGroupKeys.contains(groupKey)) {
-                    AppendDnsServerIfMissing(dnsServers, BuildRouteFluentResolverGroup(resolverTag, primaryTags));
+                    AppendDnsServerIfMissing(
+                        dnsServers,
+                        NekoGui_resolver::BuildProviderResolverGroup(resolverTag, primaryTags));
                     resolverGroupKeys.insert(groupKey);
                 }
             } else {
@@ -193,7 +170,7 @@ namespace NekoGui {
 
             if (request.outboundIndex < 0 || request.outboundIndex >= status->outbounds.size()) continue;
             auto outbound = status->outbounds[request.outboundIndex].toObject();
-            outbound["domain_resolver"] = BuildDomainResolverObject(resolverTag);
+            outbound["domain_resolver"] = NekoGui_resolver::BuildDomainResolverObject(resolverTag);
             status->outbounds.replace(request.outboundIndex, outbound);
         }
     }
@@ -677,12 +654,22 @@ namespace NekoGui {
             QMap<QString, QJsonObject> expectedDohServers;
             for (const auto &upstream: request.dohUpstreams) {
                 const auto normalizedUrl = QUrl(upstream.trimmed()).toString(QUrl::FullyEncoded);
-                const auto dohTag = StableRouteFluentTag("rf-doh", normalizedUrl);
+                const auto dohTag = NekoGui_resolver::StableTag("rf-doh", normalizedUrl);
                 primaryTags += dohTag;
-                expectedDohServers[dohTag] = BuildRouteFluentDohServer(dohTag, normalizedUrl);
+                QString error;
+                const auto expectedServer = NekoGui_resolver::BuildProviderDohServer(
+                    dohTag,
+                    normalizedUrl,
+                    request.bootstrapResolverTag,
+                    &error);
+                if (expectedServer.isEmpty()) {
+                    return QStringLiteral("Managed resolver validation could not rebuild DoH server for %1: %2")
+                        .arg(ResolverRequestLabel(request), error);
+                }
+                expectedDohServers[dohTag] = expectedServer;
             }
-            const auto resolverTag = StableRouteFluentTag("rf-resolver", primaryTags.join("|"));
-            const auto expectedResolver = BuildRouteFluentResolverGroup(resolverTag, primaryTags);
+            const auto resolverTag = NekoGui_resolver::StableTag("rf-resolver", primaryTags.join("|"));
+            const auto expectedResolver = NekoGui_resolver::BuildProviderResolverGroup(resolverTag, primaryTags);
 
             const auto outboundMatches = outboundsByTag.value(request.outboundTag);
             if (outboundMatches.size() != 1) {
@@ -696,9 +683,18 @@ namespace NekoGui {
                     .arg(request.outboundTag);
             }
             if (!outbound["domain_resolver"].isObject() ||
-                outbound["domain_resolver"].toObject() != BuildDomainResolverObject(resolverTag)) {
+                outbound["domain_resolver"].toObject() != NekoGui_resolver::BuildDomainResolverObject(resolverTag)) {
                 return QStringLiteral("Managed server-domain resolver outbound '%1' must retain its exact strict resolver binding '%2'.")
                     .arg(request.outboundTag, resolverTag);
+            }
+
+            if (!request.expectedBootstrapServer.isEmpty()) {
+                const auto bootstrapMatches = dnsServersByTag.value(request.bootstrapResolverTag);
+                if (bootstrapMatches.size() != 1 || bootstrapMatches[0] != request.expectedBootstrapServer) {
+                    return QStringLiteral(
+                               "Native bootstrap resolver '%1' for %2 must remain exactly generated after custom_config merge.")
+                        .arg(request.bootstrapResolverTag, ResolverRequestLabel(request));
+                }
             }
 
             const auto resolverMatches = dnsServersByTag.value(resolverTag);
@@ -1030,14 +1026,47 @@ namespace NekoGui {
         return chainTagOut;
     }
 
-    QString EffectiveResolverDohUpstreams(const std::shared_ptr<ProxyEntity> &ent) {
+    QString EffectiveResolverDohUpstreams(const std::shared_ptr<ProxyEntity> &ent, QString *error) {
         if (ent == nullptr || ent->bean == nullptr) return {};
         const auto profileResolver = ent->bean->serverResolverDohUpstreams.trimmed();
         if (!profileResolver.isEmpty() || !ent->bean->inheritSubscriptionResolver) return profileResolver;
 
         auto group = profileManager->GetGroup(ent->gid);
         if (group == nullptr) return {};
-        return group->default_server_resolver_doh.trimmed();
+        const auto groupResolver = group->default_server_resolver_doh.trimmed();
+        if (!group->DefaultResolverManagedBySubscription()) return groupResolver;
+
+        if (!groupResolver.isEmpty() &&
+            group->default_server_resolver_policy_version !=
+                NekoGui_resolver::SubscriptionResolverPolicyVersion) {
+            if (error != nullptr) {
+                *error = QStringLiteral(
+                             "Subscription resolver metadata for profile %1, group %2 was saved by an obsolete import policy. Refresh that subscription successfully before starting this line; the stale DoH value will not be used.")
+                             .arg(ent->id)
+                             .arg(ent->gid);
+            }
+            return {};
+        }
+
+        if (group->default_server_resolver_policy_version ==
+            NekoGui_resolver::SubscriptionResolverPolicyVersion) {
+            const auto origin = group->default_server_resolver_origin.trimmed().toLower();
+            const QSet<QString> allowedOrigins{
+                QStringLiteral("none"),
+                QStringLiteral("proxy-server-nameserver"),
+                QStringLiteral("nameserver"),
+            };
+            if (!allowedOrigins.contains(origin) || (!groupResolver.isEmpty() && origin == "none")) {
+                if (error != nullptr) {
+                    *error = QStringLiteral(
+                                 "Subscription resolver provenance for profile %1, group %2 is inconsistent. Refresh that subscription successfully before starting this line.")
+                                 .arg(ent->id)
+                                 .arg(ent->gid);
+                }
+                return {};
+            }
+        }
+        return groupResolver;
     }
 
     void ApplySubscriptionAnyTLSClientDefault(const std::shared_ptr<ProxyEntity> &ent, QJsonObject &outbound) {
@@ -1216,14 +1245,24 @@ namespace NekoGui {
             }
 
             const auto outboundServer = outbound.value("server").toString().trimmed();
-            const auto resolverDohUpstreams = ParseResolverDohUpstreams(EffectiveResolverDohUpstreams(ent));
+            QString resolverPolicyError;
+            const auto effectiveResolver = EffectiveResolverDohUpstreams(ent, &resolverPolicyError);
+            if (!resolverPolicyError.isEmpty()) {
+                status->result->error = resolverPolicyError;
+                return {};
+            }
+            const auto resolverDohUpstreams = NekoGui_resolver::ParseDohUpstreams(effectiveResolver);
             if (!outboundServer.isEmpty() && !IsIpAddress(outboundServer) && !resolverDohUpstreams.isEmpty()) {
-                status->resolverBindingRequests += ResolverBindingRequest{
-                    static_cast<int>(status->outbounds.size()),
-                    tagOut,
-                    outboundServer,
-                    resolverDohUpstreams,
-                };
+                ResolverBindingRequest request;
+                request.outboundIndex = static_cast<int>(status->outbounds.size());
+                request.outboundTag = tagOut;
+                request.server = outboundServer;
+                request.dohUpstreams = resolverDohUpstreams;
+                request.profileId = ent->id;
+                request.groupId = ent->gid;
+                request.mixedPort = status->resolverContextMixedPort;
+                request.bindingRole = status->resolverContextRole;
+                status->resolverBindingRequests += request;
             }
 
             status->outbounds += outbound;
@@ -1290,6 +1329,16 @@ namespace NekoGui {
         }
 
         // Outbounds
+        if (status->forTest) {
+            status->resolverContextRole = QStringLiteral("isolated test line");
+            status->resolverContextMixedPort = -1;
+        } else if (status->forExport) {
+            status->resolverContextRole = QStringLiteral("exported primary line");
+            status->resolverContextMixedPort = -1;
+        } else {
+            status->resolverContextRole = QStringLiteral("primary Mixed line");
+            status->resolverContextMixedPort = dataStore->inbound_socks_port;
+        }
         auto tagProxy = BuildChain(0, status);
         if (!status->result->error.isEmpty()) return;
         if (tagProxy.isEmpty()) {
@@ -1351,6 +1400,8 @@ namespace NekoGui {
 
                 const auto inboundTag = QStringLiteral("aux-mixed-%1").arg(auxProfile->id);
                 status->ent = auxProfile;
+                status->resolverContextRole = QStringLiteral("auxiliary Mixed line");
+                status->resolverContextMixedPort = it.value();
                 const auto auxOutboundTag = BuildChain(auxChainId++, status);
                 status->ent = mainEnt;
                 if (!status->result->error.isEmpty()) return;
@@ -1386,6 +1437,8 @@ namespace NekoGui {
                 managedMixedPorts.insert(it.value());
             }
             status->ent = mainEnt;
+            status->resolverContextRole = QStringLiteral("primary Mixed line");
+            status->resolverContextMixedPort = dataStore->inbound_socks_port;
         }
 
         // direct & bypass
@@ -1534,7 +1587,10 @@ namespace NekoGui {
             dns = QString2QJsonObject(dataStore->routing->dns_object);
             dnsServers = dns.value("servers").toArray();
         }
-        ApplyRouteFluentResolverBindings(status, dnsServers);
+        ApplyRouteFluentResolverBindings(
+            status,
+            dnsServers,
+            BuildDnsServer("dns-local", BOX_UNDERLYING_DNS, "direct"));
         if (!status->result->error.isEmpty()) return;
         if (status->forTest) {
             QList<ManagedMixedBinding> testBindings{

@@ -21,7 +21,7 @@
 | P0 | 订阅刷新曾在验证前改 order/删 profile | 已改为 parse/stage/validate 后提交；继续补多文件事务与故障注入 |
 | P0 | TUN 下重载被 UI 阻止；整核 Stop/Start 无独立 kill-switch | 进程内 lifecycle/generation 止损已落地；仍需持久 runtime + WFP + OS 级 generation 事务 |
 | P0 | final custom 曾可覆盖 Mixed 端口绑定；空辅助 chain 曾可 fail-open | 最终 validator 已落地；补完整负向自动回归 |
-| P0 | DoH 扩展曾含普通 nameserver 猜测、本机 fallback、无 DoH也套自定义 group | 已收敛为精确 proxy-server-nameserver + strict；bootstrap 仍待实现 |
+| P0 | DoH 扩展曾含无条件 nameserver 猜测、本机 fallback、无 DoH也套自定义 group，随后又误拒域名 DoH | 已按字段存在性三态修正：WD 原生、NEX 自带 DoH；strict provider resolver + 原生 endpoint bootstrap |
 | P1 | VMess/v2rayN、SOCKS userinfo、SS v2ray-plugin 等格式兼容误删 | 恢复，不等同于恢复 Xray core |
 | P1 | GeoSite 自动完成变成空 UI；测试路径曾出现直连/无界风险 | URL Test 已恢复为有界配置；TCP Ping 已禁用；GeoSite 仍待恢复 |
 | 越界 | MultiMapper、复杂批量解析/改 IP、通用健康探测平台 | 退出产品主线，材料归档 |
@@ -50,9 +50,9 @@ OpenWrt `192.168.1.7` 使用同版本 `sing-box 1.13.12-routefluent-anytls-clien
 - 主/辅助 Mixed 标准路径显式绑定各自 chain；辅助 chain 失败、profile失效、端口重复现在整体构建失败，不再留下孤儿入口。
 - 主/辅助 Mixed 都不再在精确线路绑定前借全局/默认 DNS 执行 `resolve`；使用 provider server-domain DoH 的 outbound 会绑定精确 strict resolver。无 provider DoH 的普通节点仍走 NekoRay/sing-box 原有解析路径。
 - 没有 provider DoH 的普通节点不再强制使用自定义 `local_only` resolver group。
-- Clash 导入只读取 `proxy-server-nameserver`/`proxy_server_nameserver`；字段存在但没有有效 HTTPS DoH 时整次导入失败且旧数据不变。
-- 生成配置已移除 local fallback/probe；DoH endpoint 仍是域名且没有可审计 bootstrap 时明确构建失败，不再偷用 `local-system`。
-- 顶层 custom 合并前会捕获每个受管 Mixed 的完整生成 listener 和沿 detour 可达的全部 outbound 对象；合并后要求这些对象逐项相同、各 tag/port 唯一且精确无条件 route 绑定仍在所有可能改投/提前 resolve 规则之前。profile 级 `custom_outbound` 可在快照前修改普通字段，但不得新增或改变 detour。provider resolver 的 outbound → strict group → 精确 DoH server 也按生成对象锁定，并拒绝 RouteFluent fallback/local-only 字段。
+- Clash 导入按字段存在性选择唯一 resolver 来源：专用 `proxy-server-nameserver` 显式存在时权威、不借普通 nameserver；专用字段 absent 时才提取 `dns.nameserver` 的 HTTPS DoH。所选来源的非法 HTTPS 项使刷新失败且旧数据不变，非 HTTPS 项只计数；来源和策略版本随 group 保存。
+- 生成配置已移除 provider local fallback/probe。域名 DoH endpoint 使用 NekoRay 原生 `dns-local` bootstrap，保留 TLS SNI、不强制地址族；它只建立 DoH 传输，不会在 provider DoH 失败后解析线路 server。无 provider DoH 的节点走原生解析。
+- 顶层 custom 合并前会捕获每个受管 Mixed 的完整生成 listener 和沿 detour 可达的全部 outbound 对象；合并后要求这些对象逐项相同、各 tag/port 唯一且精确无条件 route 绑定仍在所有可能改投/提前 resolve 规则之前。profile 级 `custom_outbound` 可在快照前修改普通字段，但不得新增或改变 detour。provider resolver 的 outbound → strict group → 精确 DoH server → 原生 bootstrap 也按生成对象锁定，并拒绝 RouteFluent fallback/local-only 字段。旧策略留下的非空订阅 DoH 在成功刷新前拒绝构建。
 - 辅助端口 map 不再因 stop/restart/crash/exit 或 UI 刷新被清空；字段类型错误、非字符串、损坏或重复项会使既有主配置原件保持不变并中止启动。显式启停/删除映射只有在原子保存成功后才继续 reload，失败会回滚内存。
 - 普通单文件保存使用禁止 direct-write fallback 的 `QSaveFile`，与多文件事务共享提交串行化 mutex 和跨进程磁盘锁。每次实际内容变化在 commit 前发布短生命周期 durable before/after intent；精确验证 before/after 后写成 `aborted`/`committed`、移到 `recovery/retired-single-file-transactions/` 并尽力删除，无法判定则保留 `prepared` 并阻断。加载时存在性也进入快照，旧进程不能把被外部删除的文件当作新文件重建。覆盖前建立可验证备份，损坏/未知 profile 原件保留并生成 quarantine，且 ID 不复用，危险 reorder 已禁止。group 创建会同时提交 group 文件与 `pm.json`；单 profile/空 group 删除和 profile 跨组移动已接入持久 before/after manifest 与失败逆序回滚。启动扫描到完整配置加载由同一可重入磁盘锁覆盖；锁不会仅因运行超过 30 秒被抢占。扫描会枚举隐藏/系统项，拒绝 active lock、意外条目、manifest/身份/header 问题和非终态状态；终态只校验 JSON 与 schema/id/state header，合法终态即使 entries 损坏也不阻断启动，但 report 会深解析并标为 `valid=false`，非法终态 schema 仍阻断。命令行可先生成报告，再由用户明确选择结构化事务的完整 before/after，恢复中途不允许改方向；它不自动恢复 unknown/quarantine。配置根以下会拒绝危险 Windows 名、大小写重复和 reparse/junction，选定根本身是必须由操作者确认非 junction/别名的信任锚。删除对象会 tombstone，测速线程迟到保存不能复活文件；运行中的 auxiliary 也拒绝删除。非空 group 的旧半删除路径仍整体禁用。
 - route 名现限制为安全 Windows 单文件名，非法 `active_routing` 保留主配置原件并中止加载；非活动 route 使用事务删除，活动 route 必须先显式切换，不再直接删除后尝试补救。
@@ -75,16 +75,24 @@ OpenWrt `192.168.1.7` 使用同版本 `sing-box 1.13.12-routefluent-anytls-clien
 - 普通 GUI 通过 localhost、每个 GUI session 随机令牌的 gRPC 控制 core；token 在同一会话内沿用，每次 daemon 启动另有不可变 UUID fence，旧协议组合 fail closed。UUID 不是配置授权、持久 generation 或 OS owner。独立 `nekobox_core run/check` 是构建与隔离测试显式使用的高级入口，可直接读取 sing-box 配置；Go 层尚未重复 C++ 的产品策略校验，属于需要补齐的纵深防御边界，而不是普通 GUI 可随意绕过 guard 的证据。
 - 无 `-SkipGoBuild`/`-SkipGuiBuild` 的完整打包现在会在同轮 GUI 测试程序与刚构建的 package core 上依次运行 tracker 和 raw QProcess/Qt HTTP/2 Exit，全部通过后才创建正式 zip。任一 Skip 都只产生诊断 package 目录，跳过该 gate 且不创建/覆盖正式 zip。deployment/zip 仍是忽略的本地验收产物，不可交付。
 
+## 2026-07-22 WD/NEX DNS 纠偏与本地迁移
+
+- 权威样本复核：WD 当前 YAML 显式包含 `proxy-server-nameserver`，但其中只有本地 UDP 项；普通 `nameserver` 的公共 DoH 不应被借来解析线路 server。NEX 留存原始 YAML 没有专用字段，普通 `nameserver` 中有三条 HTTPS DoH，因此应由这三条 DoH 解析线路 server。
+- 当前忽略目录中的 group 1（WD）已清除旧误判 DoH，记录来源 `proxy-server-nameserver`；group 2（NEX）保留三条 DoH，记录来源 `nameserver`；两组均写入 resolver policy version 1。迁移前原件保存在 `deployment/windows64/config/recovery/manual-dns-policy-migration-20260722/`，不提交 Git。
+- 迁移前 group 1/2 备份 SHA-256 分别为 `8D9C9148B8E75B641A73CAE860980F15DA39979E2453DF994C09DCA1AB7F8B6A`、`06194E2EB534176961711DA32B45B24FC209233CD769573B733EB301B388187A`。恢复旧备份后，旧策略非空 resolver 会被新构建器拒绝，必须成功刷新订阅后再运行，不能静默复活错误来源。
+- 受控导出验证：WD profile 0 生成 0 个 provider DoH/resolver group；NEX profile 89（含其 WD front proxy）只生成 1 个 strict group、3 个 NEX provider DoH，三条 endpoint 均经 `dns-local` bootstrap，无强制 strategy、无 fallback 字段；两份配置均通过当前 `nekobox_core.exe check`。
+- 此迁移和导出没有启动、停止或改写 `D:\Program Files\nekoray`。复核时生产 core PID `11772` 仍持有 `2080`。
+
 ## 2026-07-22 无侵入回归快照
 
 - 当前源码的 Windows 全量 C++/package 本地重编译成功。Go core 已通过普通测试、`go test -count=20 ./...`、`go vet ./...` 与 `go test -race ./...`；`grpc_server` 已通过普通测试、vet 与 race。它们证明本轮源码和进程内并发断言，不是父进程/Windows TUN/WFP 生命周期验收。
-- 本轮本地审计快照：`nekobox.exe` SHA-256 `FB414B28E710A74E13CD1FBA9E45AB26048F17044906E06DA1A59B80EC61841F`；`nekobox_core.exe` SHA-256 `999CCD8FE112289BB5F799649CFF09C89F4399ED3485E4CEB09D35A83A284C02`；zip SHA-256 `0CF2597C761B867E3A3FBC97BBC705269775784A0F19E5822820FB4D416BDC48`；package RouteFluent manifest SHA-256 `725C6437EC2B671E861BFCB67C5C86A8A13264B536B3E580C47E5806EB99593E`。当前版本完整 Windows 打包脚本已无 Skip 参数实跑成功：先受保护地清空并重建 GUI build tree，tracker、分享格式与 raw real-core Exit gate 均 PASS，`deployment/windows64/` 与 zip 已在本地刷新；212 个 package 配置文件恢复完成，两个 preserve 目录和手工诊断产物均无残留。deployment/zip 仍是忽略的本地验收产物，不是 release manifest，也不改变 Alpha/不可发布判断。
+- 本轮本地审计快照：`nekobox.exe` SHA-256 `3E918885EBB20D0A00FF04FD43E16841E5C0453CCD324C6F5EDE2BB3C3EBB43D`；`nekobox_core.exe` SHA-256 `F545DC44627B83DAF49786F3403ED9E464783D71E6917CE06FDFFC0E147D09E5`；zip SHA-256 `86F3CD775DFF03B13FF6A66DC225FFA1BDDA0B919D504542384C0D743CFBC306`；package RouteFluent manifest SHA-256 `28100CC9F77DE340A3B76A873E476B8EA9D4ECB115B1BA347FFF57345184760A`。当前版本完整 Windows 打包脚本已无 Skip 参数实跑成功：先受保护地清空并重建 GUI build tree，tracker、分享格式、resolver policy 与 raw real-core Exit gate 均 PASS，`deployment/windows64/` 与 zip 已在本地刷新；215 个 package 配置文件恢复完成，两个 preserve 目录和手工诊断产物均无残留。deployment/zip 仍是忽略的本地验收产物，不是 release manifest，也不改变 Alpha/不可发布判断。
 - 完整打包/Exit gate 前后的只读生产快照一致：生产 GUI PID `12608`、core PID `11772`，`2080` 仍由 PID `11772` 持有，常见 WinINet 五键不变。脚本未控制这些进程；该快照不证明生产 TUN、路由、DNS 或 WFP 状态。
-- `test_final_config_guards.ps1` 10/10，`test_config_preservation.ps1` 10/10，OpenWrt helper Python 单测 19/19。
+- `test_final_config_guards.ps1` 15/15（新增原生域名路径、有效/过期订阅组元数据、域名 DoH bootstrap、非法 DoH 与 bootstrap custom 篡改），`test_config_preservation.ps1` 10/10，OpenWrt helper Python 单测 19/19。
 - 仓库卫生会解析所有已跟踪 PowerShell，并自测生产路径 exact/subtree/short-name/UNC/device/ADS/SUBST/reparse 等拒绝分支；本轮另以生产 GUI/core 路径参数验证两个测试入口均在启动前失败。这些用例不覆盖 hardlink/final-file identity，不得将其解读为完整的物理文件别名验收。
 - 本地 Mixed fixture 7/7；额外 listener、系统代理、禁用日志和 loopback origin 清理均保持预期。
 - runtime connectivity 的 expected 204 场景通过，HTTP 与 SOCKS5h 均为 204；expected 200 场景按预期报告 2 项 mismatch 并返回失败。系统代理、fixture 端口和 origin 清理均通过。
-- 本轮已在项目 MinGW `bin` 已加入 `PATH` 的环境中执行 `ctest --test-dir build-package-windows64 --output-on-failure`，3/3 通过。`config_recovery` 覆盖配置事务和目录身份边界，`runtime_transition` 覆盖 process-local transition/finished tracker，新增 `share_format_test` 用假凭据覆盖无 remark 及严格凭据列表转换。CTest 不操作真实 GUI/剪贴板/core。真实 core 的 raw QProcess/Qt HTTP/2 Exit harness 故意不注册到 CTest，只由完整无 Skip package 对刚构建 core 运行；它不调用产品 Client/MainWindow，配置无 listener/TUN，只快照常见 WinINet 五键。上述证据都不覆盖订阅/非空 group、完整 ConfigBuilder snapshot/golden、GUI→Client、生产 TUN/路由/DNS/WFP，也不改变 Alpha/不可发布判断。
+- 本轮已在项目 MinGW `bin` 已加入 `PATH` 的环境中执行 `ctest --test-dir build-package-windows64 --output-on-failure`，4/4 通过。`config_recovery` 覆盖配置事务和目录身份边界，`runtime_transition` 覆盖 process-local transition/finished tracker，`share_format_test` 用假凭据覆盖无 remark 及严格凭据列表转换，`resolver_policy_test` 覆盖 WD/NEX 字段选择、DoH URL 校验、domain/IP endpoint bootstrap 与 strict group。CTest 不操作真实 GUI/剪贴板/core。真实 core 的 raw QProcess/Qt HTTP/2 Exit harness 故意不注册到 CTest，只由完整无 Skip package 对刚构建 core 运行；它不调用产品 Client/MainWindow，配置无 listener/TUN，只快照常见 WinINet 五键。上述证据仍不覆盖完整 ProfileManager 刷新事务、DNS 抓取、GUI→Client 或 Windows TUN/路由/DNS/WFP，也不改变 Alpha/不可发布判断。
 
 ## 仍然阻断发布
 

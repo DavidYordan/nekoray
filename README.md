@@ -8,7 +8,7 @@
 
 1. AnyTLS 协议支持；
 2. 多线路并发：主 Mixed 端口和各辅助 Mixed 端口分别绑定确定的逻辑线路；
-3. 读取 Clash `dns.proxy-server-nameserver`，用于解析代理节点的 server domain。
+3. 按字段存在性读取 Clash 自带的 server-domain DoH：专用 `dns.proxy-server-nameserver` 存在时以它为准；它完全缺失时才使用 `dns.nameserver` 中的 HTTPS DoH。
 
 2026-07-22 另明确追加一个私人导出便利功能：线路右键多选在保留上游含 remark 链接和 Neko Links 的同时，新增不含 URI fragment 的原生链接，以及严格的 `ip:port:user:pass` 凭据列表；完整边界见[产品契约](docs/PRODUCT.md#34-批量分享格式2026-07-22-用户明确追加)。
 

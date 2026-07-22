@@ -86,7 +86,8 @@ OpenWrt 只适合验证显式目标链下的 AnyTLS、DoH 和无协议级 fallba
 
 1. 线路切换是否接受短暂全阻断和既有 TCP/UDP 连接重置，还是第一版就必须保持连接。
 2. kill-switch 保护全机还是本项目/指定进程；DHCP、NDP、LAN、RDP、打印机等例外范围。
-3. DoH endpoint 域名的可审计 bootstrap 来源。
+
+DoH endpoint 域名的配置语义已在 ADR 0003 冻结为 NekoRay 原生 `dns-local` bootstrap；本 ADR 仍需在 WFP 设计中把该 underlay 纳入精确放行和泄漏观测，但不再把解析来源留作产品需求问题。
 
 在威胁模型、实现和 Windows 故障注入完成前，本 ADR 保持 Proposed。无论这些体验细节如何选择，都不得削弱 ADR 0004 的手动模式控制、固定线路映射和绝不直连约束。
 

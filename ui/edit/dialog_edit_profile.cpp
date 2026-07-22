@@ -12,43 +12,19 @@
 
 #include "fmt/includes.h"
 #include "fmt/Preset.hpp"
+#include "db/ResolverConfig.hpp"
 
 #include "3rdparty/qt_compat/ui/widgets/editors/w_JsonEditor.hpp"
 #include "main/GuiUtils.hpp"
 
 #include <QInputDialog>
-#include <QSet>
-#include <QUrl>
-
 namespace {
     QStringList parseResolverDohUpstreamsForUi(const QString &raw) {
-        auto normalized = raw;
-        normalized.replace(",", "\n");
-        QStringList out;
-        QSet<QString> seen;
-        for (const auto &line: SplitLinesSkipSharp(normalized)) {
-            const auto value = line.trimmed();
-            if (value.isEmpty() || seen.contains(value)) continue;
-            seen.insert(value);
-            out << value;
-        }
-        return out;
+        return NekoGui_resolver::ParseDohUpstreams(raw);
     }
 
     bool isValidDohUpstreamForUi(const QString &raw, QString *error = nullptr) {
-        const auto value = raw.trimmed();
-        const auto url = QUrl(value);
-        auto fail = [&](const QString &message) {
-            if (error != nullptr) *error = QStringLiteral("%1: %2").arg(value, message);
-            return false;
-        };
-        if (!url.isValid() || url.scheme().toLower() != "https") return fail("must use https");
-        if (url.host().isEmpty()) return fail("must have host");
-        if (url.path().isEmpty() || url.path() == "/") return fail("must have non-root path");
-        if (!url.userName().isEmpty() || !url.password().isEmpty()) return fail("must not include credentials");
-        if (url.hasQuery()) return fail("must not include query");
-        if (url.hasFragment()) return fail("must not include fragment");
-        return true;
+        return NekoGui_resolver::ValidateDohUpstream(raw, error);
     }
 } // namespace
 

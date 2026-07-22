@@ -151,6 +151,7 @@ set(PROJECT_SOURCES
         db/traffic/TrafficLooper.cpp
         db/ProfileFilter.cpp
         db/ConfigBuilder.cpp
+        db/ResolverConfig.cpp
 
         fmt/AbstractBean.cpp
         fmt/Bean2CoreObj_box.cpp
@@ -160,6 +161,7 @@ set(PROJECT_SOURCES
         fmt/ChainBean.hpp # translate
 
         sub/GroupUpdater.cpp
+        sub/ClashResolverPolicy.cpp
 
         sys/CoreProcess.cpp
         sys/AutoRun.cpp
@@ -334,6 +336,20 @@ if (BUILD_TESTING)
     )
     add_test(NAME share_format_test COMMAND share_format_test)
     set_tests_properties(share_format_test PROPERTIES TIMEOUT 15)
+    if (NOT NKR_NO_YAML)
+        add_executable(resolver_policy_test
+                test/resolver_policy_test.cpp
+                db/ResolverConfig.cpp
+                sub/ClashResolverPolicy.cpp
+        )
+        target_link_libraries(resolver_policy_test PRIVATE
+                Qt${QT_VERSION_MAJOR}::Core
+                Qt${QT_VERSION_MAJOR}::Network
+                yaml-cpp
+        )
+        add_test(NAME resolver_policy_test COMMAND resolver_policy_test)
+        set_tests_properties(resolver_policy_test PROPERTIES TIMEOUT 15)
+    endif ()
     if (WIN32)
         add_executable(core_exit_integration_test
                 test/core_exit_integration_test.cpp
@@ -364,6 +380,18 @@ if (BUILD_TESTING)
                 $<TARGET_FILE:Qt${QT_VERSION_MAJOR}::Core>
                 $<TARGET_FILE_DIR:share_format_test>
         )
+        if (TARGET resolver_policy_test)
+            add_custom_command(TARGET resolver_policy_test POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    $<TARGET_FILE:Qt${QT_VERSION_MAJOR}::Core>
+                    $<TARGET_FILE_DIR:resolver_policy_test>
+            )
+            add_custom_command(TARGET resolver_policy_test POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    $<TARGET_FILE:Qt${QT_VERSION_MAJOR}::Network>
+                    $<TARGET_FILE_DIR:resolver_policy_test>
+            )
+        endif ()
         add_custom_command(TARGET share_format_test POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 $<TARGET_FILE:Qt${QT_VERSION_MAJOR}::Network>

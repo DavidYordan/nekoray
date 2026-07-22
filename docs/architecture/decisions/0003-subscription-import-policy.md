@@ -1,7 +1,7 @@
 # ADR 0003：订阅导入与 server-domain DoH
 
-状态：Accepted（实现尚未完全满足）
-日期：2026-07-20
+状态：Accepted（DNS 语义已实现；订阅成功提交事务仍未完成）
+日期：2026-07-22
 
 ## 决策
 
@@ -12,13 +12,14 @@
 
 ## Clash DoH 精确语义
 
-- 只读取 `dns.proxy-server-nameserver` 或 `dns.proxy_server_nameserver`；不接受其它模糊“等价”字段。
-- `dns.nameserver` 服务于普通 DNS，不是 proxy server domain resolver 的兜底。
-- 字段 absent、存在且有效、存在但全部非法必须区分；最后一种情况要报错，不能静默本机解析。
-- 有效 HTTPS DoH只绑定需要解析 server domain的节点；server已是IP或订阅没有该字段时沿用 NekoRay普通路径。
+- `dns.proxy-server-nameserver`/`dns.proxy_server_nameserver` 显式存在时是权威来源。只提取合法 HTTPS DoH；只有 UDP/本地项时不借 `dns.nameserver`，节点沿用 NekoRay 原生解析。
+- 专用字段完全缺失时，才从 `dns.nameserver` 提取合法 HTTPS DoH。该行为用于兼容确实把线路 server resolver 放在普通 nameserver 中的订阅（当前 NEX）。这不是在专用字段无效时自动 fallback。
+- 所选来源中的非法 HTTPS 项使整次导入失败；非 HTTPS 项被忽略并计数。来源、策略版本和最终 DoH 列表按 group 保存，刷新成功才替换旧值。
+- 有效 HTTPS DoH只绑定需要解析 server domain的节点；server已是IP或最终没有 provider DoH时沿用 NekoRay普通路径。
 - 不解析节点私有的 `server-resolver`/`server_resolver` 扩展，也不接受其中的 local fallback。
 - 对由 provider DoH 管理的 server-domain resolver binding 全面关闭 local fallback，辅助绑定尤其不得借主线或本机解析；没有该 provider 字段的普通节点继续沿用 NekoRay 解析路径。
-- DoH endpoint域名 bootstrap必须采用另行确认、可审计的策略；在此之前，URL host 为域名会在配置构建阶段明确失败。
+- DoH endpoint 为域名时使用生成配置中的原生 `dns-local` bootstrap，并保留 TLS SNI；不强制地址族。它只解析 DoH endpoint，不允许在 provider DoH 失败后用本机 DNS 解析线路 server。
+- custom merge 后必须逐项验证原生 bootstrap、DoH server、strict resolver group 和 outbound binding 未被替换。旧策略保存的非空订阅 DoH 在成功刷新迁移前拒绝使用，避免旧的普通 nameserver 猜测复活。
 
 ## AnyTLS client 来源
 

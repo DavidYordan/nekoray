@@ -75,7 +75,14 @@ function Add-Case(
     [string]$CustomConfig = "",
     [string]$CustomOutbound = "",
     [string]$RoutingCustom = "",
-    [switch]$AssertNoNullRuleFields
+    [switch]$AssertNoNullRuleFields,
+    [string]$ServerAddress = "192.0.2.1",
+    [string]$ResolverDoh = "",
+    [int]$ExpectedProviderDohCount = -1,
+    [switch]$AssertNativeBootstrap,
+    [switch]$UseSubscriptionGroupResolver,
+    [int]$GroupResolverPolicyVersion = 1,
+    [string]$GroupResolverOrigin = "nameserver"
 ) {
     $lab = New-TestLab
     try {
@@ -88,14 +95,14 @@ function Add-Case(
             [ordered]@{
                 _v = 0
                 name = "final-config-guard-socks-fixture"
-                addr = "192.0.2.1"
+                addr = $ServerAddress
                 port = 1080
                 c_cfg = $CustomConfig
                 c_out = $CustomOutbound
-                server_resolver_doh = ""
+                server_resolver_doh = if ($UseSubscriptionGroupResolver) { "" } else { $ResolverDoh }
                 server_resolver_fallback = $false
                 inherit_subscription_client = $false
-                inherit_subscription_resolver = $false
+                inherit_subscription_resolver = [bool]$UseSubscriptionGroupResolver
                 v = 5
                 username = ""
                 password = ""
@@ -121,6 +128,17 @@ function Add-Case(
         $profilePath = Join-Path $profileDir "1.json"
         [IO.File]::WriteAllText($profilePath, ($profile | ConvertTo-Json -Depth 30), $utf8NoBom)
 
+        if ($UseSubscriptionGroupResolver) {
+            $groupPath = Join-Path $lab "config\groups\0.json"
+            $group = [IO.File]::ReadAllText($groupPath) | ConvertFrom-Json
+            $group | Add-Member -NotePropertyName "source_type" -NotePropertyValue "clash" -Force
+            $group | Add-Member -NotePropertyName "default_server_resolver_source" -NotePropertyValue "subscription" -Force
+            $group | Add-Member -NotePropertyName "default_server_resolver_doh" -NotePropertyValue $ResolverDoh -Force
+            $group | Add-Member -NotePropertyName "default_server_resolver_origin" -NotePropertyValue $GroupResolverOrigin -Force
+            $group | Add-Member -NotePropertyName "default_server_resolver_policy_version" -NotePropertyValue $GroupResolverPolicyVersion -Force
+            [IO.File]::WriteAllText($groupPath, ($group | ConvertTo-Json -Depth 30), $utf8NoBom)
+        }
+
         if (![string]::IsNullOrWhiteSpace($RoutingCustom)) {
             $routePath = Join-Path $lab "config\routes_box\Default"
             $route = [IO.File]::ReadAllText($routePath) | ConvertFrom-Json
@@ -138,6 +156,26 @@ function Add-Case(
                 if (($rule.PSObject.Properties.Name -contains "rules" -and $null -eq $rule.rules) -or
                     ($rule.PSObject.Properties.Name -contains "outbound" -and $null -eq $rule.outbound)) {
                     $outputAssertionPassed = $false
+                }
+            }
+        }
+        if ($ExpectedProviderDohCount -ge 0 -and $run.output_created) {
+            $output = [IO.File]::ReadAllText((Join-Path $lab "export.json")) | ConvertFrom-Json
+            $providerDoh = @($output.dns.servers | Where-Object { $_.tag -like "rf-doh-*" })
+            if ($providerDoh.Count -ne $ExpectedProviderDohCount) {
+                $outputAssertionPassed = $false
+            }
+            if ($AssertNativeBootstrap) {
+                $nativeBootstrap = @($output.dns.servers | Where-Object { $_.tag -eq "dns-local" })
+                if ($nativeBootstrap.Count -ne 1 -or $nativeBootstrap[0].type -ne "local") {
+                    $outputAssertionPassed = $false
+                }
+                foreach ($server in $providerDoh) {
+                    if ($server.domain_resolver.server -ne "dns-local" -or
+                        $server.tls.server_name -ne $server.server -or
+                        ($server.domain_resolver.PSObject.Properties.Name -contains "strategy")) {
+                        $outputAssertionPassed = $false
+                    }
                 }
             }
         }
@@ -215,6 +253,56 @@ Add-Case `
     -FixtureType "socks" `
     -RoutingCustom '{"rules":[{"domain_suffix":["example.test"],"outbound":"proxy"}]}' `
     -AssertNoNullRuleFields
+
+Add-Case `
+    -Name "native_domain_without_provider_doh" `
+    -CoreConfig '{}' `
+    -ShouldSucceed $true `
+    -FixtureType "socks" `
+    -ServerAddress "native-node.example" `
+    -ExpectedProviderDohCount 0
+
+Add-Case `
+    -Name "provider_domain_doh_uses_native_bootstrap" `
+    -CoreConfig '{}' `
+    -ShouldSucceed $true `
+    -FixtureType "socks" `
+    -ServerAddress "provider-node.example" `
+    -ResolverDoh "https://resolver.example/dns-query/provider" `
+    -ExpectedProviderDohCount 1 `
+    -AssertNativeBootstrap `
+    -UseSubscriptionGroupResolver
+
+Add-Case `
+    -Name "reject_obsolete_subscription_resolver_metadata" `
+    -CoreConfig '{}' `
+    -ShouldSucceed $false `
+    -FixtureType "socks" `
+    -ServerAddress "provider-node.example" `
+    -ResolverDoh "https://stale.example/dns-query" `
+    -UseSubscriptionGroupResolver `
+    -GroupResolverPolicyVersion 0 `
+    -GroupResolverOrigin "" `
+    -ExpectedError "obsolete import policy"
+
+Add-Case `
+    -Name "reject_invalid_provider_doh" `
+    -CoreConfig '{}' `
+    -ShouldSucceed $false `
+    -FixtureType "socks" `
+    -ServerAddress "provider-node.example" `
+    -ResolverDoh "http://resolver.example/dns-query" `
+    -ExpectedError "DoH URL must use https scheme"
+
+Add-Case `
+    -Name "reject_native_bootstrap_replacement" `
+    -CoreConfig '{}' `
+    -ShouldSucceed $false `
+    -FixtureType "socks" `
+    -ServerAddress "provider-node.example" `
+    -ResolverDoh "https://resolver.example/dns-query" `
+    -CustomConfig '{"dns":{"servers":[{"tag":"dns-local","type":"udp","server":"8.8.8.8"}]}}' `
+    -ExpectedError "Native bootstrap resolver 'dns-local'"
 
 Add-Case `
     -Name "reject_tailscale_system_interface_share_export" `

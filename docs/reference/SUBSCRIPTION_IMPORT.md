@@ -19,7 +19,11 @@
 
 ## Clash server-domain DoH
 
-只读取以下两个等价键：`proxy-server-nameserver` 与 `proxy_server_nameserver`。不得扩展到普通 `dns.nameserver`。
+解析器按字段是否存在选择唯一来源：
+
+1. `proxy-server-nameserver` 或 `proxy_server_nameserver` 显式存在：它是权威来源，只取其中 HTTPS DoH，不查看普通 `nameserver`。
+2. 两个专用字段都完全缺失：从普通 `nameserver` 提取 HTTPS DoH。
+3. 选定来源没有 HTTPS DoH：不建立 provider resolver，节点使用 NekoRay/sing-box 原生解析。
 
 ```yaml
 dns:
@@ -27,12 +31,13 @@ dns:
     - https://resolver.example/dns-query
 ```
 
-- `dns.nameserver`不作兜底。
-- 只接受合规HTTPS DoH；字段存在但没有有效项必须显示错误。
+- `dns.nameserver` 只在专用字段 absent 时参与，不能在专用字段存在但只含 UDP/本地项时被借用。
+- 只接受合规 HTTPS DoH；所选来源中出现语法非法的 HTTPS 项会显示错误并中止刷新。非 HTTPS 项只计数和忽略。
 - DoH只应用于需要解析proxy `server`域名的节点。
 - 由该 provider DoH 扩展管理的 server-domain outbound 会绑定精确 strict resolver；legacy fallback 字段只为读取旧数据保留且不生效，主线和辅助线的这些受管绑定都禁止 local fallback。没有 provider DoH 的普通节点继续使用 NekoRay/sing-box 原有解析路径。
-- DoH endpoint为域名时的bootstrap属于单独控制面策略，当前未最终冻结。
-- 过渡实现不会使用本机 DNS bootstrap：URL host 不是 IP 时导入数据可保留，但最终配置构建会明确失败。
+- DoH endpoint 为域名时，生成器用原生 `dns-local` bootstrap 解析 endpoint host，保留 TLS SNI 且不强制 `ipv4_only`。它不会在 provider DoH 失败时替线路 server 做本机 DNS fallback。
+- group 会保存 `origin` 与 resolver policy version。旧版本留下的非空订阅 DoH 在成功刷新前拒绝构建；不得凭旧值猜测它来自哪个字段。
+- 顶层 custom config 若替换 `dns-local`、provider DoH、strict group 或 outbound resolver binding，最终构建失败。
 - 节点级私有 `server-resolver`/`server_resolver` 不在支持范围内，不能借此打开 local fallback。
 
 ## AnyTLS client

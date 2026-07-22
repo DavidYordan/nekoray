@@ -12,7 +12,8 @@ Qt Widgets UI
   -> ConfigBuilder
        -> 主 Mixed 12080 -> 主 chain
        -> 辅助 Mixed port -> 对应辅助 chain
-       -> Clash proxy-server-nameserver -> server domain resolver
+       -> Clash 三态 resolver source -> strict server-domain resolver
+          -> provider DoH endpoint -> native dns-local bootstrap
   -> TransitionCoordinator + CoreProcess {generation, daemon UUID, PID}
   -> 本地 token + UUID gRPC / ready handshake / reconcile barrier / Exit ACK
   -> nekobox_core.exe / RouteFluent patched sing-box

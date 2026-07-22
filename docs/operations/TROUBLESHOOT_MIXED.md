@@ -110,7 +110,8 @@ powershell -NoProfile -ExecutionPolicy Bypass `
 - Trojan 成功而 AnyTLS EOF/超时：入口大概率正常，转查 AnyTLS、front proxy、uTLS/ALPN 和节点状态。
 - AnyTLS mihomo client 去掉 detour 后成功、detour 对象单独也成功，但组合出现 `failed to create session: EOF`：把问题定位为组合链路或其生成/运行语义，不要再归为 Mixed parser 故障。
 - 原生 AnyTLS client 收到服务端 internal error、mihomo client 成功：说明 client 兼容语义有实际作用，不要通过删除 client 字段“修复”detour 问题。
-- `resolver_unavailable>0`：检查订阅是否提供有效 `proxy-server-nameserver`、DoH 可达性及可审计 bootstrap；不得通过本机 DNS、direct 或其它线路 fallback 掩盖故障。
+- `resolver_unavailable>0`：先看订阅来源。专用 `proxy-server-nameserver` 显式存在时只检查它，不能借普通 nameserver；专用字段 absent 时再检查 `dns.nameserver` 中的 HTTPS DoH。随后检查 provider DoH 可达性和 `dns-local` 是否只用于 endpoint bootstrap；不得让 provider DoH 失败后通过本机 DNS、direct 或其它线路 fallback 掩盖故障。
+- 出现 `obsolete import policy`：这是旧组里非空 resolver 值的迁移护栏，不要手工复制旧值；成功刷新该订阅后，来源、版本和 DoH 列表会原子地随 group 保存。若刷新失败，旧线路数据保持不变。
 - 只有本机失败、OpenWrt 相同临时配置成功：优先检查 Windows 默认路由、TUN 回环、接口选择和进程生命周期。
 - 本机与 OpenWrt 同一配置均失败：优先检查配置生成、DNS、detour、节点或上游网络。
 - GUI 退出时提示正在等待某个精确 core PID：不要重复关闭、kill 该进程或手工替换 core。结构化 Exit ACK 已提交，或 ACK 丢失后无法证明未接纳时，continuation fence 会持续等待同一 `{generation, UUID, PID}` finished；这不是 Mixed 入口自动检测或线路 fallback。只有退出详情明确说明对账已证明 clean non-admission（协议条件为 `STOPPED/FENCED_NOT_ADMITTED`）时，GUI 才能安全恢复控制。

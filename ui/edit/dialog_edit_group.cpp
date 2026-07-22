@@ -2,13 +2,12 @@
 #include "ui_dialog_edit_group.h"
 
 #include "db/Database.hpp"
+#include "db/ResolverConfig.hpp"
 #include "fmt/AnyTLSBean.hpp"
 #include "ui/mainwindow_interface.h"
 
 #include <QClipboard>
 #include <QMessageBox>
-#include <QSet>
-#include <QUrl>
 
 namespace {
     QString normalizeSourceType(const QString &value) {
@@ -19,21 +18,7 @@ namespace {
     }
 
     QStringList parseDohUpstreams(const QString &raw) {
-        QString normalized = raw;
-        normalized.replace(",", "\n");
-        QStringList out;
-        QSet<QString> seen;
-        for (const auto &line: SplitLinesSkipSharp(normalized)) {
-            const auto value = line.trimmed();
-            if (value.isEmpty() || seen.contains(value)) continue;
-            const QUrl url(value);
-            if (!url.isValid() || url.scheme().toLower() != "https" || url.host().isEmpty() || url.path().isEmpty() || url.path() == "/") {
-                continue;
-            }
-            seen.insert(value);
-            out << value;
-        }
-        return out;
+        return NekoGui_resolver::ParseDohUpstreams(raw);
     }
 
     bool isVisibleAsciiClientValue(const QString &value) {
@@ -159,8 +144,28 @@ DialogEditGroup::~DialogEditGroup() {
 }
 
 bool DialogEditGroup::save_subscription_defaults_from_ui() {
-    ent->source_type = normalizeSourceType(ui->source_type->currentText());
+    const auto sourceType = normalizeSourceType(ui->source_type->currentText());
     const auto clientAuto = ui->default_client_auto->isChecked();
+    const auto clientMode = ui->default_client_mode->currentText().trimmed().toLower();
+    const auto clientValue = ui->default_client_value->text().trimmed();
+    if (!clientAuto && clientMode == "custom" && !isVisibleAsciiClientValue(clientValue)) {
+        MessageBoxWarning(tr("Default Client"), tr("Custom client value must be 1..128 visible ASCII characters without spaces."));
+        return false;
+    }
+
+    const auto resolverAuto = ui->default_server_resolver_auto->isChecked();
+    const auto resolverUpstreams = parseDohUpstreams(ui->default_server_resolver_doh->toPlainText());
+    if (!resolverAuto) {
+        for (const auto& upstream: resolverUpstreams) {
+            QString error;
+            if (!NekoGui_resolver::ValidateDohUpstream(upstream, &error)) {
+                MessageBoxWarning(tr("Default Server Resolver"), tr("Invalid HTTPS DoH endpoint: %1").arg(error));
+                return false;
+            }
+        }
+    }
+
+    ent->source_type = sourceType;
     ent->SetDefaultClientManagedBySubscription(clientAuto);
     if (clientAuto) {
         if (ent->source_type == "clash") {
@@ -171,18 +176,13 @@ bool DialogEditGroup::save_subscription_defaults_from_ui() {
             ent->default_client_value.clear();
         }
     } else {
-        ent->default_client_mode = ui->default_client_mode->currentText().trimmed().toLower();
+        ent->default_client_mode = clientMode;
         if (ent->default_client_mode == "native") {
             ent->default_client_mode.clear();
             ent->default_client_value.clear();
         } else if (ent->default_client_mode == "mihomo") {
             ent->default_client_value = "mihomo/1.19.28";
         } else if (ent->default_client_mode == "custom") {
-            const auto clientValue = ui->default_client_value->text().trimmed();
-            if (!isVisibleAsciiClientValue(clientValue)) {
-                MessageBoxWarning(tr("Default Client"), tr("Custom client value must be 1..128 visible ASCII characters without spaces."));
-                return false;
-            }
             ent->default_client_value = clientValue;
         } else {
             ent->default_client_mode.clear();
@@ -190,10 +190,12 @@ bool DialogEditGroup::save_subscription_defaults_from_ui() {
         }
     }
 
-    const auto resolverAuto = ui->default_server_resolver_auto->isChecked();
     ent->SetDefaultResolverManagedBySubscription(resolverAuto);
     if (!resolverAuto) {
-        ent->default_server_resolver_doh = parseDohUpstreams(ui->default_server_resolver_doh->toPlainText()).join("\n");
+        ent->default_server_resolver_doh = resolverUpstreams.join("\n");
+        ent->default_server_resolver_origin = QStringLiteral("manual");
+        ent->default_server_resolver_policy_version =
+            NekoGui_resolver::SubscriptionResolverPolicyVersion;
     }
     return true;
 }

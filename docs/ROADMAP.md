@@ -59,13 +59,13 @@
 
 ### Clash server-domain DoH
 
-- [x] 只解析 `proxy-server-nameserver`/`proxy_server_nameserver`，区分 absent/valid/invalid三态。
+- [x] 实现字段存在性驱动的三态：专用 `proxy-server-nameserver` 显式存在时权威且不借普通 nameserver；它 absent 时才提取 `dns.nameserver` 的 HTTPS DoH；两处都无 DoH 时走原生解析。
 - [x] 使用 provider DoH 的 server-domain outbound 绑定精确 strict resolver，主/辅助绑定均禁止 local fallback；无 provider DoH 的普通节点保留上游正常解析路径。
 - [x] 无 provider DoH 时恢复 NekoRay/sing-box普通解析，不使用自定义 local-only group。
-- [x] 删除生成配置的普通 nameserver猜测、local fallback/probe，并隐藏 legacy fallback 开关；节点私有 resolver 不再导入。
-- [x] 最终 custom merge 校验锁定 outbound、strict resolver group 和 DoH server，并拒绝 RouteFluent fallback/local-only 字段。
-- [ ] 决定并实现可审计 bootstrap；当前域名 DoH endpoint 明确构建失败。
-- [ ] 增加订阅导入→最终 outbound `domain_resolver` 的 C++ golden tests与断网零本机 DNS测试。
+- [x] 删除“专用字段存在时仍猜普通 nameserver”、local fallback/probe，并隐藏 legacy fallback 开关；节点私有 resolver 不再导入。
+- [x] 域名 DoH endpoint 使用 NekoRay 原生 `dns-local` bootstrap，保留 SNI、不强制地址族；provider resolver 仍无本机 fallback。
+- [x] 最终 custom merge 校验锁定 outbound、strict resolver group、DoH server 和原生 bootstrap，并拒绝 RouteFluent fallback/local-only 字段。
+- [x] 增加纯 C++ 订阅来源/DoH 生成策略测试和隔离导出 guard；仍缺完整 ProfileManager 导入→group 持久化→最终 outbound golden 与断网 DNS 泄漏观测测试。
 
 ## 阶段 3：Windows 持久 fail-closed 运行时
 
@@ -81,7 +81,7 @@
 8. [x] 过渡期最终配置拒绝任意 sing-box inbound `set_system_proxy=true`、未授权 TUN，并锁定受管 TUN 完整对象及接口策略；同时拒绝已知系统 endpoint/时钟副作用。`internal-full` 与产品 TUN/辅助并发/测试隔离，默认导出与测试导出均走 OS 副作用 guard。
 9. [x] UI 区分 TUN requested 与 worker-observed 状态；core 崩溃只重启空控制 core，不自动恢复 profile/TUN。该止损不等于持久 OS 状态或 kill-switch。
 10. [x] 建立进程内 lifecycle executor/generation 与 daemon identity 基础：GUI 以单一 transition ticket 串行 Start/Stop/CrashCleanup；每次 QProcess 启动生成 UUID，所有 RPC 在 handler 前验证该身份，日志只触发 UUID/协议 v3 握手，旧进程未确认退出时不发布 replacement identity。Start/Stop/Exit 使用单调 command sequence；更高序号的对账与 lifecycle 命令共用 context-aware single-owner executor，并返回目标 command outcome、config hash 和稳定 phase。等待准入的命令可由服务端 deadline 取消；Start candidate 以原子 cancellation-vs-publication 边界决定清理或提交。Go core 使旧/blocked generation fail closed。超时对账成功时只接受精确 active/stopped 结论，再次超时或不一致仍保留 indeterminate。Exit 子项已闭合到进程边界：只在精确 `STOPPED` 返回结构化 `EXITING` ACK，随后 `GracefulStop`；GUI 冻结 generation/UUID/PID 并等待同一 QProcess `NormalExit/0`，不 kill/replacement，ACK 不确定时只有精确 non-admission 对账才恢复控制。详见 ADR 0010/0011。
-11. [ ] 在受控 core/Runtime 入口重复关键产品策略校验，并建立可恢复的持久 OS 事实对账。daemon UUID、协议 v3 握手、服务端 deadline、process-local `ReconcileLifecycle`、Start 取消/发布仲裁和 Exit ACK/finished 子项已完成；完整无 Skip package 也会运行 tracker、分享格式纯测试与安全 raw QProcess/Qt HTTP/2 core gate。但该 raw harness 不调用产品 Client/MainWindow，配置无 listener/TUN，只快照常见 WinINet 五键。已准入 Stop/Close 仍不可中断，对账再次超时仍是 unknown，`GracefulStop` 也可能等待在途 handler；还缺 GUI→Client、crash→commit、真实 timeout/ACK 丢失、父进程死亡和 Windows 路由/DNS/TUN/WFP 资源集成测试。token/UUID/进程内 generation 均不替代持久 runtime transaction、service、stable anchor 或 WFP，因此本项保持未关闭。
+11. [ ] 在受控 core/Runtime 入口重复关键产品策略校验，并建立可恢复的持久 OS 事实对账。daemon UUID、协议 v3 握手、服务端 deadline、process-local `ReconcileLifecycle`、Start 取消/发布仲裁和 Exit ACK/finished 子项已完成；完整无 Skip package 也会运行 tracker、分享格式、resolver policy 纯测试与安全 raw QProcess/Qt HTTP/2 core gate。但该 raw harness 不调用产品 Client/MainWindow，配置无 listener/TUN，只快照常见 WinINet 五键。已准入 Stop/Close 仍不可中断，对账再次超时仍是 unknown，`GracefulStop` 也可能等待在途 handler；还缺 GUI→Client、crash→commit、真实 timeout/ACK 丢失、父进程死亡和 Windows 路由/DNS/TUN/WFP 资源集成测试。token/UUID/进程内 generation 均不替代持久 runtime transaction、service、stable anchor 或 WFP，因此本项保持未关闭。
 
 完成门：GUI退出/重启、worker crash、候选启动失败和切线都不改变系统代理/TUN模式，也没有物理直连；失败可以全阻断。
 
