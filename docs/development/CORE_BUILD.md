@@ -61,6 +61,6 @@ Windows 产品必须包含 GUI/core 的 token + daemon UUID 协议；`NKR_NO_GRP
 
 `check -c` 只证明 schema 和 pre-start 校验通过，不证明 Mixed 监听、DNS、TLS、AnyTLS 会话或真实连通。
 
-截至 2026-07-20，`deployment/windows64/nekobox_core.exe` 仍是 2026-07-18 的旧产物；正式完整打包前不得用它代表当前源码。`run/check` 会直接读取 sing-box 配置，安全边界见 [CLI 文档](../reference/CLI.md#core-高级-cli)。
+截至 2026-07-22，当前源码已完成一次不带 Skip 参数的本地完整打包，`deployment/windows64/nekobox_core.exe` 与 `build-package-windows64/nekobox_core.exe` 的 SHA-256 均为 `1556618A46FAD2CDF88281DFB6194F202417EA00FBFE25DE44C8EB5AAE8C2BF4`。该 deployment 仍是被忽略的本地审计产物，不是 release manifest 或 Windows 集成验收。`run/check` 会直接读取 sing-box 配置，安全边界见 [CLI 文档](../reference/CLI.md#core-高级-cli)。
 
 RouteFluent 自有测试和 fixtures 应进入 CI；主项目仍需单独覆盖 GUI、数据库、导入和运行状态。

@@ -126,7 +126,7 @@ legacy WinINet helper 不返回可靠结果，也没有保存完整 PAC/proxy/by
 - 干净构建仍依赖仓库外 Qt/MinGW/预构建库；libneko 已锁定为仓内子模块。
 - 本机增量构建和 OpenWrt协议测试不能替代 Windows TUN/WFP验收。
 
-当前接管验证使用本轮重建的 `build-package-windows64/nekobox.exe`（SHA-256 `973671A7C3EB6882350945A35A2DF38ACCB700A950A7B36A4BE7FB79010E51EF`）与 `nekobox_core.exe`（SHA-256 `1556618A46FAD2CDF88281DFB6194F202417EA00FBFE25DE44C8EB5AAE8C2BF4`）。这些值仅是本地审计快照；`deployment/windows64/` 仍是 2026-07-18 的旧二进制，未做正式全量打包，不能作为交付证据。
+当前接管验证已完成一次不带 Skip 参数的本地完整打包。`build-package-windows64/` 与 `deployment/windows64/` 中的 `nekobox.exe` SHA-256 均为 `973671A7C3EB6882350945A35A2DF38ACCB700A950A7B36A4BE7FB79010E51EF`，`nekobox_core.exe` 均为 `1556618A46FAD2CDF88281DFB6194F202417EA00FBFE25DE44C8EB5AAE8C2BF4`；zip SHA-256 为 `D8410F7E7930D4DC204B68D2E913A192C5777E68EC83894FA5B048B25C11605C`。这些值仅是本地审计快照；deployment/zip 被忽略，且尚无干净工具链、release manifest 或 Windows 集成验收，不能作为交付证据。
 
 其它无侵入回归为：配置保留/隔离/显式恢复/事务阻断 10/10、OpenWrt helper Python 单测 19/19、本地 Mixed fixture 7/7；runtime connectivity 的 204 正例通过，错误期望 200 被正确拒绝。它们不覆盖真实 Windows TUN/WFP/退出/切线。
 

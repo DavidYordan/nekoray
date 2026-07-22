@@ -65,7 +65,7 @@ OpenWrt `192.168.1.7` 使用同版本 `sing-box 1.13.12-routefluent-anytls-clien
 - 无令牌的 `-flag_restart_tun_on` 自动提权连续流程已删除；非管理员用户须自行以管理员身份启动后再次手动启用 TUN。
 - legacy WinINet 系统代理接口不能证明写入成功、所有权或完整恢复原 PAC/proxy/bypass，产品内 Windows 系统代理切换现已临时禁用，等待按 SID 的 compare-and-restore broker。
 - MultiMapper 专用导出和复杂批量 resolver/change-IP 平台已从产品 UI/构建/代码移出，历史材料保留在 archive。上游简单 **Resolve domain** 因直接走 Windows 系统 resolver 并永久覆盖节点域名，现也改为无副作用禁用说明；未来只能经对应 provider resolver 且保留原域名。
-- 打包脚本不再关闭/强杀运行实例；发现运行即失败。生产安装不再是默认构建参考目录。构建、GUI/core 夹具、配置导出和运行审计的可写/可执行/临时路径共用保守的生产路径护栏：规范化后只允许本地固定磁盘的盘符路径，拒绝 UNC/设备路径、网络映射/可移动盘、SUBST/DOS 设备重定向、8.3 短路径和 ReparsePoint/junction，并识别指向与 `D:` 相同物理卷的盘符别名。它仍没有通过最终句柄核验 final-file identity，不能宣称解决所有已存在 hardlink 等同文件别名；单文件导出/报告工具对已存在目标采取拒绝覆盖策略，但这只是附加止损。
+- 打包脚本不再关闭/强杀运行实例；发现运行即失败。生产安装不再是默认构建参考目录。构建、GUI/core 夹具、配置导出和运行审计的可写/可执行/临时路径共用保守的生产路径护栏：规范化后只允许本地固定磁盘的盘符路径，拒绝 UNC/设备路径、ADS/额外冒号命名空间、网络映射/可移动盘、SUBST/DOS 设备重定向、8.3 短路径和 ReparsePoint/junction，并识别指向与 `D:` 相同物理卷的盘符别名。它仍没有通过最终句柄核验 final-file identity，不能宣称解决所有已存在 hardlink 等同文件别名；单文件导出/报告工具对已存在目标采取拒绝覆盖策略，但这只是附加止损。
 - 启动/普通重启不再根据 remember 状态或 CLI 连续参数自动启用系统代理/TUN；core 崩溃时只重启空控制 core，不自动恢复 profile/TUN。
 - GUI Start/Stop/CrashCleanup 现由单一 process-local transition ticket 串行；coordinator 同一 mutex 内同步 participating-mutation depth gate，pending crash cleanup 直接 handoff。每次 `CoreProcess::Start` 生成新 UUID 并传给 core；所有 RPC 在 handler 前同时验证 session token 与精确 UUID。`grpc server listening` 只触发 `GetDaemonInfo` 身份/协议握手，成功后才把同一 `{QProcess generation, UUID}` 标为 ready；旧进程 500 ms 内未确认退出时拒绝发布 replacement identity。Start/Stop/Exit 使用 GUI session 单调 command sequence，Go lifecycle 在同一 mutex 内排序；Start/Stop 还记录服务端 config SHA、target outcome 与 active Start sequence。响应不确定时，GUI 用更高 sequence 的 `ReconcileLifecycle` barrier：目标先执行则等待终态，barrier 先执行则迟到目标变 stale。只有精确 active/stopped 结论才推进 UI，其余继续 indeterminate。TrafficLooper binding 仍只在成功 commit 后发布；profile/TUN 不自动恢复。
 - `DataStore::core_running`/`prepare_exit` 已改为 atomic bool，CoreProcess 不再跨线程读取 `spmode_vpn`，异常退出统一只重启空控制 core。退出/重启会等待 Stop completion；失败或对账仍不确定时不调用 core Exit/GUI quit，而是撤销退出控制并保留 observed runtime。Start/Stop HTTP/2 client 的 30 秒 abort 与随后的 5 秒对账等待都只界定 GUI 等待，Go handler/屏障不会据此被取消；再次超时仍不是端到端 deadline。Exit 尚未 ACK 并等待精确 UUID 的 QProcess finished。
@@ -73,14 +73,14 @@ OpenWrt `192.168.1.7` 使用同版本 `sing-box 1.13.12-routefluent-anytls-clien
 - URL/Full Test 只接受精确有界的临时生成配置，`internal-full` 与顶层 `custom_config` 变更会被测试路径拒绝；产品 TUN requested/worker active 任一成立时拒绝新测试，测试运行中也拒绝启 TUN。Full Test 中原先调用系统 DNS 的“入口 IP”查询已禁用，并补上空配置/非法 URL 拒绝、父 RPC context 取消、超时 goroutine 防阻塞和 64 KiB 响应上限；TCP Ping 在 GUI 与 core 两层都明确禁用，因为它使用系统直连 socket。
 - 默认文件导出和 `for_share` 别名都使用无产品 TUN/辅助运行态的审计导出；`for_test` 使用独立有界测试配置。所有模式都执行已知 OS 副作用校验，但导出文件仍含凭据且不能视为可任意启动的沙箱。
 - 普通 GUI 通过 localhost、每个 GUI session 随机令牌的 gRPC 控制 core；token 在同一会话内沿用，每次 daemon 启动另有不可变 UUID fence，旧协议组合 fail closed。UUID 不是配置授权、持久 generation 或 OS owner。独立 `nekobox_core run/check` 是构建与隔离测试显式使用的高级入口，可直接读取 sing-box 配置；Go 层尚未重复 C++ 的产品策略校验，属于需要补齐的纵深防御边界，而不是普通 GUI 可随意绕过 guard 的证据。
-- 本轮 GUI/core 只重建到 `build-package-windows64/` 并用于接管验证；`deployment/windows64/` 仍是 2026-07-18 的旧产物，未完成正式全量打包，不可交付。
+- 本轮已用当前源码完成一次不带 Skip 参数的本地完整打包；`build-package-windows64/`、`deployment/windows64/` 与 zip 中的 GUI/core 来自同一轮构建。deployment/zip 仍是忽略的本地验收产物，不可交付。
 
 ## 2026-07-22 无侵入回归快照
 
 - 当前源码的 Windows 全量 C++/package 本地重编译成功。Go core 已通过普通测试、`go test -count=20 ./...`、`go vet ./...` 与 `go test -race ./...`；`grpc_server` 已通过普通测试、vet 与 race。它们证明本轮源码和进程内并发断言，不是父进程/Windows TUN/WFP 生命周期验收。
-- 本轮本地审计二进制快照：`nekobox.exe` SHA-256 `973671A7C3EB6882350945A35A2DF38ACCB700A950A7B36A4BE7FB79010E51EF`；`nekobox_core.exe` SHA-256 `1556618A46FAD2CDF88281DFB6194F202417EA00FBFE25DE44C8EB5AAE8C2BF4`。当前版本完整 Windows 打包脚本已无 Skip 参数实跑成功，`deployment/windows64/` 与 zip 已在本地刷新；212 个 package 配置文件恢复完成，两个 preserve 目录均已清除。deployment/zip 仍是忽略的本地验收产物，不是 release manifest，也不改变 Alpha/不可发布判断。
+- 本轮本地审计二进制快照：`nekobox.exe` SHA-256 `973671A7C3EB6882350945A35A2DF38ACCB700A950A7B36A4BE7FB79010E51EF`；`nekobox_core.exe` SHA-256 `1556618A46FAD2CDF88281DFB6194F202417EA00FBFE25DE44C8EB5AAE8C2BF4`；zip SHA-256 `D8410F7E7930D4DC204B68D2E913A192C5777E68EC83894FA5B048B25C11605C`。当前版本完整 Windows 打包脚本已无 Skip 参数实跑成功，`deployment/windows64/` 与 zip 已在本地刷新；212 个 package 配置文件恢复完成，两个 preserve 目录均已清除。deployment/zip 仍是忽略的本地验收产物，不是 release manifest，也不改变 Alpha/不可发布判断。
 - `test_final_config_guards.ps1` 10/10，`test_config_preservation.ps1` 10/10，OpenWrt helper Python 单测 19/19。
-- 仓库卫生会解析所有已跟踪 PowerShell，并自测生产路径 exact/subtree/short-name/UNC/device 等拒绝分支；本轮另以生产 GUI/core 路径参数验证两个测试入口均在启动前失败。这些用例不覆盖 hardlink/final-file identity，不得将其解读为完整的物理文件别名验收。
+- 仓库卫生会解析所有已跟踪 PowerShell，并自测生产路径 exact/subtree/short-name/UNC/device/ADS/SUBST/reparse 等拒绝分支；本轮另以生产 GUI/core 路径参数验证两个测试入口均在启动前失败。这些用例不覆盖 hardlink/final-file identity，不得将其解读为完整的物理文件别名验收。
 - 本地 Mixed fixture 7/7；额外 listener、系统代理、禁用日志和 loopback origin 清理均保持预期。
 - runtime connectivity 的 expected 204 场景通过，HTTP 与 SOCKS5h 均为 204；expected 200 场景按预期报告 2 项 mismatch 并返回失败。系统代理、fixture 端口和 origin 清理均通过。
 - 本轮已在项目 MinGW `bin` 已加入 `PATH` 的环境中执行 `ctest --test-dir build-package-windows64 --output-on-failure`，2/2 通过。`config_recovery` 覆盖事务基础提交、模拟回滚、锁、pending 阻断、before/after 恢复、方向锁、单文件 `VerifiedBefore`/`VerifiedAfter`/`Indeterminate` intent、退役目录、隐藏/意外条目、精确大小写身份和协议 staging，并锁定 terminal startup/report 分层边界；其中 `routes_box/ROUTE~1` 只是 `~` 的词法拒绝用例，不代表真实 8.3 alias。`runtime_transition` 覆盖 process-local transition fencing、crash-cleanup handoff、daemon/profile-request generation、queue-or-ready 顺序与真并发恰好一次等纯状态行为；它不启动 QProcess/GUI/core、真实 HTTP/2 超时或 Windows TUN/WFP。两者都不覆盖订阅/非空 group、完整 ConfigBuilder snapshot/golden，也不改变 Alpha/不可发布判断。
@@ -96,7 +96,7 @@ OpenWrt `192.168.1.7` 使用同版本 `sing-box 1.13.12-routefluent-anytls-clien
 7. 精准系统代理 broker 尚未实现，产品内切换暂禁；旧 WinINet helper 不得重新接回 UI。
 8. Go core 仍缺产品策略的第二层校验。process-local lifecycle mutex/generation、每 daemon UUID、全 RPC identity validation、ready handshake、command sequence 与 indeterminate 对账 barrier 已完成；它们可封住 reused port/token 和响应丢失的已知竞态。但 RPC 仍无服务端可取消的端到端 deadline、持久 RuntimeStateMachine 或 Windows OS 事实源；对账自身超时仍为 unknown，Exit 也未等待精确进程退出。token/UUID 只保护调用者与实例身份，不解决配置授权或 OS 状态所有权。已有纯状态/race 测试仍需补 QProcess/GUI crash→commit/退出、真实 HTTP/2 超时和 Windows TUN/WFP 集成。
 9. 当前提交串行化 mutex 不是完整模型读写锁；ConfigBuilder 两类明确 live-model 写入和 group speedtest worker 读写已止损，但完整 `BuildModelSnapshot`、订阅与其它跨线程读取仍未完成。final Start gate 只复核 recovery、ticket 和已捕获 daemon readiness，不重建 candidate 或比较完整 model revision。route/settings/hotkey 等调用也尚未统一处理保存失败与内存回滚，均属于 Alpha/P0 数据一致性债务。
-10. Windows-only CI 已建立并通过，但干净 Qt/MinGW/C++ 依赖工具链和真实交付二进制 manifest 尚未完成；libneko 已锁定为仓内子模块，当前 `deployment/windows64/` 仍是旧产物。
+10. Windows-only CI 已建立并通过，本机完整无 Skip 打包也已刷新忽略的 deployment/zip；但干净 Qt/MinGW/C++ 依赖工具链、真实交付二进制 manifest 和 Windows 集成验收尚未完成。libneko 已锁定为仓内子模块。
 
 另有一项不冒充当前 P0 发布主阻断的 P2 债务：`TrafficData::last_update` 的未初始化读取已修复，但 counter/rate 仍由 worker 写、UI/JsonStore 无统一同步读取；需后续采用不可变遥测快照或明确锁/原子设计。
 

@@ -73,7 +73,7 @@ powershell -NoProfile -ExecutionPolicy Bypass `
   -ConfigPath <exported-config.json> -Json
 ```
 
-脚本只支持主 `mixed-in -> proxy` 连通性诊断，传入其它 `InboundTag` 会拒绝；它不是辅助端口映射 contract 测试器。脚本只保留目标 loopback Mixed 和从 `proxy` 可达的精确 outbound detour 闭包，拒绝 TUN、非空 top-level endpoints、`ntp.write_to_system=true` 与占用端口，并移除无系统写入的 NTP 服务。它核对监听 PID，并只结束自己创建的精确 PID。`CorePath`、配置和临时路径规范化后必须解析为本地固定磁盘的盘符路径；共享护栏拒绝生产根、UNC/设备路径、网络映射或可移动盘、SUBST/DOS 设备重定向、8.3 短路径与 ReparsePoint/junction，并会比对与 `D:` 指向同一物理卷的盘符别名。诊断选项只修改临时副本：
+脚本只支持主 `mixed-in -> proxy` 连通性诊断，传入其它 `InboundTag` 会拒绝；它不是辅助端口映射 contract 测试器。脚本只保留目标 loopback Mixed 和从 `proxy` 可达的精确 outbound detour 闭包，拒绝 TUN、非空 top-level endpoints、`ntp.write_to_system=true` 与占用端口，并移除无系统写入的 NTP 服务。它核对监听 PID，并只结束自己创建的精确 PID。`CorePath`、配置和临时路径规范化后必须解析为本地固定磁盘的盘符路径；共享护栏拒绝生产根、UNC/设备路径、ADS/额外冒号命名空间、网络映射或可移动盘、SUBST/DOS 设备重定向、8.3 短路径与 ReparsePoint/junction，并会比对与 `D:` 指向同一物理卷的盘符别名。诊断选项只修改临时副本：
 
 这个护栏不通过最终文件句柄验证 final-file identity，所以不能识别所有已存在 hardlink。不要把另一路径下的同文件当作隔离副本；对可执行文件、输入配置和临时根仍需核对实际来源。
 
