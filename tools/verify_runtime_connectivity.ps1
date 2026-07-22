@@ -17,10 +17,12 @@ Set-StrictMode -Version Latest
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Root = [System.IO.Path]::GetFullPath((Join-Path $ScriptDir ".."))
+. (Join-Path $ScriptDir "path_safety.ps1")
 if ([string]::IsNullOrWhiteSpace($PackageDir)) {
     $PackageDir = Join-Path $Root "deployment\windows64"
 }
 $PackageDir = [System.IO.Path]::GetFullPath($PackageDir)
+$PackageDir = Assert-PathOutsideProtectedProduction $PackageDir "Runtime-audit package directory"
 
 function Write-Step([string] $Message) {
     if (!$Json) {
@@ -399,10 +401,13 @@ $report = [ordered]@{
 
 if ([string]::IsNullOrWhiteSpace($OutputPath)) {
     $auditDir = Join-Path $PackageDir "runtime_audit"
-    New-Item -ItemType Directory -Force -Path $auditDir | Out-Null
     $stamp = Get-Date -Format "yyyyMMdd_HHmmss_fff"
-    $OutputPath = Join-Path $auditDir "runtime_$stamp.json"
+    $uniqueId = [Guid]::NewGuid().ToString("N").Substring(0, 8)
+    $OutputPath = Join-Path $auditDir "runtime_${stamp}_${uniqueId}.json"
 }
+$OutputPath = Assert-NewFileOutsideProtectedProduction $OutputPath "Runtime-audit report"
+$outputDir = Split-Path -Parent $OutputPath
+New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
 
 $jsonText = $report | ConvertTo-Json -Depth 8
 Set-Content -LiteralPath $OutputPath -Value $jsonText -Encoding UTF8

@@ -9,6 +9,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"grpc_server/auth"
 	"grpc_server/gen"
 )
 
@@ -17,6 +18,26 @@ func lifecycleCommandContext(sequence string) context.Context {
 		context.Background(),
 		metadata.Pairs(lifecycleCommandSequenceHeader, sequence),
 	)
+}
+
+func authenticatedLifecycleCommandContext(t *testing.T, sequence string, daemonID string) context.Context {
+	t.Helper()
+	ctx := metadata.NewIncomingContext(
+		context.Background(),
+		metadata.Pairs(
+			lifecycleCommandSequenceHeader, sequence,
+			"nekoray_auth", "test-token",
+			"nekoray_daemon_instance_id", daemonID,
+		),
+	)
+	authenticated, err := (auth.Authenticator{
+		Token:            "test-token",
+		DaemonInstanceID: daemonID,
+	}).Authenticate(ctx)
+	if err != nil {
+		t.Fatalf("authenticate test context: %v", err)
+	}
+	return authenticated
 }
 
 func TestIsolatedTestsRequireExplicitBoundedConfig(t *testing.T) {
@@ -48,7 +69,7 @@ func TestServerExitRefusesActiveAndBlockedLifecycle(t *testing.T) {
 
 	activeCoreLifecycle = newCoreLifecycle()
 	active := &fakeManagedCore{}
-	if err := activeCoreLifecycle.start(1, func() (*managedCore, error) { return active.candidate(), nil }); err != nil {
+	if err := activeCoreLifecycle.start(1, "", func() (*managedCore, error) { return active.candidate(), nil }); err != nil {
 		t.Fatalf("start active lifecycle: %v", err)
 	}
 	if _, err := (&server{}).Exit(lifecycleCommandContext("2"), &gen.EmptyReq{}); status.Code(err) != codes.FailedPrecondition {
@@ -65,7 +86,7 @@ func TestServerExitRefusesActiveAndBlockedLifecycle(t *testing.T) {
 
 	activeCoreLifecycle = newCoreLifecycle()
 	blocked := &fakeManagedCore{closeErr: errFakeClose}
-	if err := activeCoreLifecycle.start(1, func() (*managedCore, error) { return blocked.candidate(), nil }); err != nil {
+	if err := activeCoreLifecycle.start(1, "", func() (*managedCore, error) { return blocked.candidate(), nil }); err != nil {
 		t.Fatalf("start blocked lifecycle candidate: %v", err)
 	}
 	if err := activeCoreLifecycle.stop(2); !errors.Is(err, errCoreLifecycleBlocked) {
@@ -100,5 +121,90 @@ func TestServerLifecycleCommandSequenceOrdersStopBeforeDelayedStart(t *testing.T
 	startResponse, err := (&server{}).Start(lifecycleCommandContext("1"), nil)
 	if err != nil || startResponse == nil || !strings.Contains(startResponse.Error, errStaleCommandSequence.Error()) {
 		t.Fatalf("delayed older Start was not rejected as stale: response=%#v err=%v", startResponse, err)
+	}
+}
+
+func TestServerReconcileLifecycleReturnsIdentityAndExactTarget(t *testing.T) {
+	originalLifecycle := activeCoreLifecycle
+	defer func() { activeCoreLifecycle = originalLifecycle }()
+	activeCoreLifecycle = newCoreLifecycle()
+
+	const configHash = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+	if err := activeCoreLifecycle.start(1, configHash, func() (*managedCore, error) {
+		return (&fakeManagedCore{}).candidate(), nil
+	}); err != nil {
+		t.Fatalf("start lifecycle: %v", err)
+	}
+	response, err := (&server{}).ReconcileLifecycle(
+		authenticatedLifecycleCommandContext(t, "2", "daemon-test"),
+		&gen.LifecycleReconcileReq{
+			TargetCommandSequence: 1,
+			TargetCommandKind:     gen.LifecycleCommandKind_LIFECYCLE_COMMAND_START,
+			TargetConfigSha256:    configHash,
+		},
+	)
+	if err != nil {
+		t.Fatalf("reconcile RPC: %v", err)
+	}
+	if response.DaemonInstanceId != "daemon-test" ||
+		response.OrderingWatermark != 2 ||
+		response.Phase != gen.LifecyclePhase_LIFECYCLE_PHASE_ACTIVE ||
+		!response.HasCurrent || response.ActiveStartCommandSequence != 1 ||
+		response.CurrentConfigSha256 != configHash || response.TargetCommand == nil ||
+		response.TargetCommand.Outcome != gen.LifecycleCommandOutcome_LIFECYCLE_OUTCOME_SUCCEEDED ||
+		!response.TargetCommand.RequestedConfigMatches {
+		t.Fatalf("unexpected reconcile response: %#v", response)
+	}
+}
+
+func TestServerReconcileRequiresHigherBarrierSequence(t *testing.T) {
+	originalLifecycle := activeCoreLifecycle
+	defer func() { activeCoreLifecycle = originalLifecycle }()
+	activeCoreLifecycle = newCoreLifecycle()
+
+	_, err := (&server{}).ReconcileLifecycle(
+		authenticatedLifecycleCommandContext(t, "1", "daemon-test"),
+		&gen.LifecycleReconcileReq{
+			TargetCommandSequence: 1,
+			TargetCommandKind:     gen.LifecycleCommandKind_LIFECYCLE_COMMAND_START,
+			TargetConfigSha256:    "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+		},
+	)
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("non-higher reconcile barrier returned %v", err)
+	}
+}
+
+func TestServerReconcileRejectsMalformedHashBeforeAdvancingWatermark(t *testing.T) {
+	originalLifecycle := activeCoreLifecycle
+	defer func() { activeCoreLifecycle = originalLifecycle }()
+
+	for _, malformedHash := range []string{
+		"short",
+		"EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE",
+		"gggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg",
+	} {
+		activeCoreLifecycle = newCoreLifecycle()
+		_, err := (&server{}).ReconcileLifecycle(
+			authenticatedLifecycleCommandContext(t, "2", "daemon-test"),
+			&gen.LifecycleReconcileReq{
+				TargetCommandSequence: 1,
+				TargetCommandKind:     gen.LifecycleCommandKind_LIFECYCLE_COMMAND_START,
+				TargetConfigSha256:    malformedHash,
+			},
+		)
+		if status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("malformed hash %q returned %v", malformedHash, err)
+		}
+
+		const validHash = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+		if err := activeCoreLifecycle.start(1, validHash, func() (*managedCore, error) {
+			return (&fakeManagedCore{}).candidate(), nil
+		}); err != nil {
+			t.Fatalf("malformed reconcile advanced lifecycle watermark: %v", err)
+		}
+		if err := activeCoreLifecycle.stop(3); err != nil {
+			t.Fatalf("cleanup lifecycle: %v", err)
+		}
 	}
 }

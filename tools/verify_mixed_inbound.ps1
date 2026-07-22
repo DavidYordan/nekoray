@@ -27,6 +27,10 @@ Set-StrictMode -Version Latest
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Root = [System.IO.Path]::GetFullPath((Join-Path $ScriptDir ".."))
+. (Join-Path $ScriptDir "path_safety.ps1")
+$tempRoot = Assert-PathOutsideProtectedProduction `
+    ([System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())) `
+    "Mixed-inbound verification temporary root"
 
 if ($InboundTag -ne "mixed-in") {
     throw "This connectivity probe supports only the primary 'mixed-in' -> 'proxy' path. It is not an auxiliary-port mapping contract tester."
@@ -190,10 +194,12 @@ function Invoke-ProxyProbe(
 }
 
 $configFull = Require-File (Resolve-InputPath $ConfigPath) "core config"
+$configFull = Assert-PathOutsideProtectedProduction $configFull "Mixed-probe input config"
 if ([string]::IsNullOrWhiteSpace($CorePath)) {
     $CorePath = Join-Path $Root "deployment\windows64\nekobox_core.exe"
 }
 $coreFull = Require-File (Resolve-InputPath $CorePath) "nekobox_core.exe"
+$coreFull = Assert-PathOutsideProtectedProduction $coreFull "Mixed-probe core executable"
 $config = Get-Content -LiteralPath $configFull -Raw -Encoding UTF8 | ConvertFrom-Json
 $runConfigFull = $configFull
 $variantConfigPath = ""
@@ -320,14 +326,16 @@ if ($ForceAutoDetectInterface) {
         $diagnosticRoute | Add-Member -NotePropertyName "auto_detect_interface" -NotePropertyValue $true
     }
 }
-$variantConfigPath = Join-Path ([System.IO.Path]::GetTempPath()) "nekoray-mixed-probe-$([Guid]::NewGuid().ToString('N')).json"
-$jsonText = $config | ConvertTo-Json -Depth 100
-[System.IO.File]::WriteAllText($variantConfigPath, $jsonText, [System.Text.UTF8Encoding]::new($false))
-$runConfigFull = $variantConfigPath
-
+$variantConfigPath = Assert-NewFileOutsideProtectedProduction `
+    (Join-Path $tempRoot "nekoray-mixed-probe-$([Guid]::NewGuid().ToString('N')).json") `
+    "Mixed-inbound verification temporary config"
 $probeId = [Guid]::NewGuid().ToString("N")
-$stdoutPath = Join-Path ([System.IO.Path]::GetTempPath()) "nekoray-mixed-$probeId.stdout.log"
-$stderrPath = Join-Path ([System.IO.Path]::GetTempPath()) "nekoray-mixed-$probeId.stderr.log"
+$stdoutPath = Assert-NewFileOutsideProtectedProduction `
+    (Join-Path $tempRoot "nekoray-mixed-$probeId.stdout.log") `
+    "Mixed-inbound verification stdout path"
+$stderrPath = Assert-NewFileOutsideProtectedProduction `
+    (Join-Path $tempRoot "nekoray-mixed-$probeId.stderr.log") `
+    "Mixed-inbound verification stderr path"
 $process = $null
 $listenerReady = $false
 $httpResult = $null
@@ -342,6 +350,9 @@ $coreExitCode = $null
 $stoppedByProbe = $false
 
 try {
+    $jsonText = $config | ConvertTo-Json -Depth 100
+    [System.IO.File]::WriteAllText($variantConfigPath, $jsonText, [System.Text.UTF8Encoding]::new($false))
+    $runConfigFull = $variantConfigPath
     $process = Start-Process `
         -FilePath $coreFull `
         -ArgumentList "run -c `"$runConfigFull`"" `
@@ -381,25 +392,39 @@ try {
         ).Count -gt 0
     }
 } finally {
-    if ($null -ne $process) {
-        if ($process.HasExited) {
-            $coreExitCode = $process.ExitCode
-        } else {
-            $stoppedByProbe = $true
-            Stop-Process -Id $process.Id -Force
-            $process.WaitForExit(5000) | Out-Null
-        }
-    }
-
-    foreach ($path in @($stdoutPath, $stderrPath)) {
-        if (Test-Path -LiteralPath $path -PathType Leaf) {
-            $plainLog += Get-Content -LiteralPath $path -Encoding UTF8 | ForEach-Object {
-                $_ -replace "\x1b\[[0-9;]*m", ""
+    try {
+        if ($null -ne $process) {
+            if ($process.HasExited) {
+                $coreExitCode = $process.ExitCode
+            } else {
+                $stoppedByProbe = $true
+                try {
+                    Stop-Process -Id $process.Id -Force -ErrorAction Stop
+                } catch {
+                    if (!$process.HasExited) { throw }
+                }
+                $process.WaitForExit(5000) | Out-Null
             }
         }
-    }
-    if (![string]::IsNullOrEmpty($variantConfigPath) -and (Test-Path -LiteralPath $variantConfigPath -PathType Leaf)) {
-        Remove-Item -LiteralPath $variantConfigPath -Force
+
+        foreach ($path in @($stdoutPath, $stderrPath)) {
+            if (Test-Path -LiteralPath $path -PathType Leaf) {
+                $plainLog += Get-Content -LiteralPath $path -Encoding UTF8 | ForEach-Object {
+                    $_ -replace "\x1b\[[0-9;]*m", ""
+                }
+            }
+        }
+    } finally {
+        if (Test-Path -LiteralPath $variantConfigPath -PathType Leaf) {
+            Remove-Item -LiteralPath $variantConfigPath -Force
+        }
+        if (!$KeepLogs) {
+            foreach ($path in @($stdoutPath, $stderrPath)) {
+                if (Test-Path -LiteralPath $path -PathType Leaf) {
+                    Remove-Item -LiteralPath $path -Force
+                }
+            }
+        }
     }
 }
 
@@ -452,13 +477,6 @@ $result = [pscustomobject]@{
     log_paths = $retainedLogPaths
 }
 
-if (!$KeepLogs) {
-    foreach ($path in @($stdoutPath, $stderrPath)) {
-        if (Test-Path -LiteralPath $path -PathType Leaf) {
-            Remove-Item -LiteralPath $path -Force
-        }
-    }
-}
 if ($Json) {
     $result | ConvertTo-Json -Depth 8
 } else {

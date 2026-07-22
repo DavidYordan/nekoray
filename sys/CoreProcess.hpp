@@ -27,6 +27,12 @@ namespace NekoGui_sys {
 
         [[nodiscard]] std::uint64_t CurrentDaemonGeneration() const;
 
+        [[nodiscard]] NekoGui_Runtime::DaemonInstanceSnapshot CurrentDaemonInstance() const;
+
+        [[nodiscard]] NekoGui_Runtime::DaemonReadyResult ConfirmDaemonReady(
+            std::uint64_t expectedGeneration,
+            const QString& expectedInstanceId);
+
         [[nodiscard]] bool IsDaemonReady(std::uint64_t daemonGeneration) const;
 
     private:
@@ -39,6 +45,12 @@ namespace NekoGui_sys {
         bool failed_to_start = false;
         bool restarting = false;
         NekoGui_Runtime::DaemonGenerationState daemonGeneration;
+        QByteArray stdoutProbeBuffer;
+        QByteArray stderrProbeBuffer;
+
+        void HandleCoreLog(QByteArray& probeBuffer, const QByteArray& log);
+
+        void RequestDaemonHandshake();
     };
 
     inline QAtomicInt logCounter;

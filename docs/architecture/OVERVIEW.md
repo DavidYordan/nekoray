@@ -13,15 +13,15 @@ Qt Widgets UI
        -> 主 Mixed 12080 -> 主 chain
        -> 辅助 Mixed port -> 对应辅助 chain
        -> Clash proxy-server-nameserver -> server domain resolver
-  -> TransitionCoordinator + CoreProcess daemon generation
-  -> 本地 token gRPC
+  -> TransitionCoordinator + CoreProcess {generation, daemon UUID}
+  -> 本地 token + UUID gRPC / ready handshake / reconcile barrier
   -> nekobox_core.exe / RouteFluent patched sing-box
   -> Mixed / internal TUN / outbound
 ```
 
-当前 GUI 同时拥有主 core和网络数据面生命周期。Go wrapper仍只有整 Box 的 Start/Stop；Stop关闭内部 TUN、Mixed、DNS、outbounds、Wintun和动态 WFP session。这一结构不能满足 TUN下 fail-closed切线。无 instance 时的 system TCP/UDP/HTTP helper fallback 已封死，Start/Stop/dial/stats/Exit 也已由 process-local lifecycle mutex 和 generation-bound reference 串行，但持久保护层尚不存在。
+当前 GUI 同时拥有主 core和网络数据面生命周期。数据面变更仍只有整 Box 的 Start/Stop，没有 Reload/Prepare/Commit；Stop关闭内部 TUN、Mixed、DNS、outbounds、Wintun和动态 WFP session。`GetDaemonInfo` 与 `ReconcileLifecycle` 只提供进程身份/状态对账，不改变这一数据面限制。这一结构不能满足 TUN下 fail-closed切线。无 instance 时的 system TCP/UDP/HTTP helper fallback 已封死，Start/Stop/dial/stats/Exit 也已由 process-local lifecycle mutex 和 generation-bound reference 串行，但持久保护层尚不存在。
 
-普通 GUI 只连接 core 的 localhost gRPC，token 每个 GUI session 随机生成并经 stdin 传给 core；同一 GUI 会话内 daemon 重启沿用该 token，没有 token 仍不能调用 RPC。`Start`/`Stop`/`Exit` 另带该 GUI session 内单调递增的 command sequence；Go lifecycle 在检查状态前记录最高序号，因此同一 daemon 中较新的 Stop/Exit 能拒绝随后抢到锁的旧 Start。该序号仍不是 expected daemon generation，新 daemon 会接受它收到的首个有效序号，不能证明具体哪一代处理了请求。HTTP/2 client 的 30 秒 abort 只界定 GUI 等待，Go handler 不保证随 context 中止，也没有 indeterminate 后状态查询/对账，因此这不是端到端 deadline，token 和 command sequence 都不能充当跨 daemon fence。`nekobox_core run/check` 则是用户显式执行的高级 CLI，构建和隔离测试工具依赖它直接读取配置。当前 Go 层会执行 sing-box 自身的配置与进程内生命周期处理，但没有再次执行 C++ ConfigBuilder 的产品策略，因此这是一项 core 边界纵深防御缺口；它不等于普通 GUI 可以任意绕过 guard。
+普通 GUI 只连接 core 的 localhost gRPC，token 每个 GUI session 随机生成并经 stdin 传给 core；同一 GUI 会话内 daemon 重启沿用该 token，没有 token 仍不能调用 RPC。每次 QProcess 启动另生成不可变 UUID，所有 RPC 在 handler 前验证该精确身份；日志只触发 `GetDaemonInfo` 身份/协议握手，不能独自构成 ready。`Start`/`Stop`/`Exit` 另带单调 command sequence；Go lifecycle 在同一 mutex 内记录最高序号。Start/Stop 响应不确定时，更高序号 `ReconcileLifecycle` barrier 会等待目标终态或先封住迟到目标，并返回 target outcome、config hash 与当前 phase。30 秒 client abort 与 5 秒对账等待仍只界定 GUI 等待，Go handler/屏障不保证随 context 中止；再次超时仍为 unknown，所以这不是端到端 deadline。`nekobox_core run/check` 则是用户显式执行的高级 CLI，构建和隔离测试工具依赖它直接读取配置。当前 Go 层会执行 sing-box 自身的配置与进程内生命周期处理，但没有再次执行 C++ ConfigBuilder 的产品策略，因此这是一项 core 边界纵深防御缺口；它不等于普通 GUI 可以任意绕过 guard。
 
 当前安全隔离会拒绝任何 inbound `set_system_proxy=true` 和未由产品 TUN 开关生成的 TUN；受管 TUN 必须与完整生成对象一致，并保留生成的接口自动检测、不得出现 default/bind-interface 覆盖。系统 WireGuard/Tailscale endpoint 与 NTP 写系统时钟也被拒绝，`internal-full` 则与产品 TUN、辅助并发和测试路径隔离。顶层 custom merge 另以完整 listener/outbound 快照保护受管 Mixed。上述均是配置时窄 guard，不代表任意路由已证明安全，也没有改变 GUI 退出会带走 worker 的架构事实。
 
@@ -39,18 +39,18 @@ NekoRay external-core能力被上一阶段误删，恢复后应重新接在 Conf
 GUI TransitionCoordinator（Start/Stop/CrashCleanup 单一 ticket）
   -> coordinator mutex 内同步 participating-mutation depth gate
   -> pending crash cleanup 连续 handoff
-  -> immutable candidate bytes / config SHA-256 / managed-TUN flag / candidate daemon generation
-  -> CoreProcess daemon generation（atomic queue-or-ready / one-shot request / crash timer fencing）
-  -> gRPC（session-local monotonic command sequence）
+  -> immutable candidate bytes / config SHA-256 / managed-TUN flag / candidate daemon UUID
+  -> CoreProcess {generation, UUID}（日志触发握手 / atomic queue-or-ready / crash timer fencing）
+  -> gRPC（token + UUID；session-local monotonic command sequence / reconcile barrier）
   -> Go coreLifecycle mutex
        -> candidate 成功后发布 generation
        -> generation-bound dial / HTTP / stats
        -> Stop/Close 不确定 => BLOCKED，拒绝继续使用或重试
 ```
 
-这套基础封住旧的跨线程解锁、Start/Stop/CrashCleanup 重叠、旧 completion 清除新 owner 的 mutation gate、同一 daemon 内旧 Start 晚于新 Stop 执行、旧 crash timer/ready event 操作新 daemon、旧 HTTP/reference 跨代使用等直接竞态。transition 所有权由 ticket 管理；legacy gRPC `Call` 的完成通知则改用 `QSemaphore` release/acquire，不再由不同线程 lock/unlock 同一个 `QMutex`。pending crash cleanup 由当前 transition 连续 handoff；旧 generation 未能明确 Stop 时，新 Start 不再继续。Start 不确定或 ack 后 UI commit 丢失 readiness 时，以本地 `max(candidate, current)` daemon generation 作为保守清理上界；RPC 没有 expected generation，不能证明实际接收者，该上界也可能保留过久。TrafficLooper 只在成功 commit 后发布。core 崩溃只重建空控制 core。详见 [ADR 0010](decisions/0010-process-local-lifecycle-generation-fencing.md)。
+这套基础封住旧的跨线程解锁、Start/Stop/CrashCleanup 重叠、旧 completion 清除新 owner 的 mutation gate、旧 Start 晚于新 Stop、旧 crash timer/ready event 操作新 daemon、旧 HTTP/reference 跨代使用，以及 reused port/token 把旧请求落到新 daemon 等直接竞态。transition 所有权由 ticket 管理；gRPC 完成通知使用 `QSemaphore`；每代 daemon 使用 UUID fence；pending crash cleanup 连续 handoff。响应丢失时只在同一 UUID 的排序屏障给出精确 target/config/phase 结论后推进，否则保留 indeterminate。TrafficLooper 只在成功 commit 后发布，core 崩溃只重建空控制 core。详见 [ADR 0010](decisions/0010-process-local-lifecycle-generation-fencing.md) 与 [ADR 0011](decisions/0011-daemon-identity-and-lifecycle-reconciliation.md)。
 
-它不是持久 runtime：所有 owner 都仍在 GUI/子进程边界内，父进程死亡会带走当前数据面；没有 Windows Service、stable Mixed/TUN anchor、persistent WFP、完整 desired/observed/owner/health 状态机或 RPC indeterminate 对账。final Start gate 也不会重建 candidate/比较完整 model revision；RPC 未携带 expected daemon generation，前后 readiness 检查不能原子绑定服务端处理者。`core_running`/`prepare_exit` 已原子化；只有收到响应 daemon 已接受且以更高 command sequence 排在旧 Start 之后的 Stop，退出链才继续，但该响应不证明 daemon generation。30 秒 client abort 后仍会保守留在 indeterminate，Go handler 可能继续执行，跨 daemon 状态仍无法确认，尚无端到端 deadline 或 QProcess/GUI crash→commit/退出及真实超时集成测试。
+它不是持久 runtime：所有 owner 都仍在 GUI/子进程边界内，父进程死亡会带走当前数据面；没有 Windows Service、stable Mixed/TUN anchor、persistent WFP、完整 desired/observed/owner/health 状态机或 Windows OS 事实源。final Start gate 也不会重建 candidate/比较完整 model revision。UUID/对账只证明一个 core 进程内的 lifecycle 记录；不证明线路健康、Mixed/TUN/WFP 或路由无泄漏。client abort/对账再次超时后 Go 操作可能继续；Exit 尚未 ACK 并等待精确 UUID 的 QProcess finished，仍缺 QProcess/GUI crash→commit/退出及真实 HTTP/2/Windows 资源集成测试。
 
 ## 候选 Windows 运行时
 

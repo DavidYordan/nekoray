@@ -140,9 +140,20 @@ int main(int argc, char** argv) {
     {
         NekoGui_Runtime::DaemonGenerationState daemon;
         (void) daemon.QueueProfileForNextStart(17);
-        const auto firstGeneration = daemon.BeginProcessStart();
+        const auto firstGeneration = daemon.BeginProcessStart("daemon-1");
+        const auto firstInstance = daemon.CurrentInstance();
+        ok &= expect(firstInstance.valid() && !firstInstance.ready &&
+                         firstInstance.generation == firstGeneration &&
+                         firstInstance.instanceId == "daemon-1",
+                     "daemon start must atomically publish its generation and identity");
+        ok &= expect(!daemon.MarkProcessReady(firstGeneration, "wrong-daemon").accepted &&
+                         !daemon.IsReady(firstGeneration),
+                     "a mismatched handshake must not mark the daemon ready");
         const auto oldCrashToken = daemon.CrashRestartToken();
-        const auto firstReady = daemon.MarkProcessReady();
+        const auto firstConfirmation = daemon.MarkProcessReady(firstGeneration, "daemon-1");
+        const auto firstReady = firstConfirmation.profileStart;
+        ok &= expect(firstConfirmation.accepted,
+                     "the exact daemon handshake must be accepted");
         ok &= expect(firstReady.valid && firstReady.profileId == 17 &&
                          firstReady.daemonGeneration == firstGeneration,
                      "queued profile must emit a generation-bound ready request");
@@ -153,13 +164,16 @@ int main(int argc, char** argv) {
 
         ok &= expect(daemon.MarkProcessStopped() == firstGeneration,
                      "the first daemon must stop before queueing for its replacement");
+        ok &= expect(!daemon.CurrentInstance().valid() &&
+                         !daemon.MarkProcessReady(firstGeneration, "daemon-1").accepted,
+                     "a late handshake must not revive a stopped daemon identity");
         (void) daemon.QueueProfileForNextStart(23);
-        const auto secondGeneration = daemon.BeginProcessStart();
+        const auto secondGeneration = daemon.BeginProcessStart("daemon-2");
         ok &= expect(secondGeneration > firstGeneration, "daemon generation must be monotonic");
         ok &= expect(!daemon.CanRunCrashRestart(oldCrashToken),
                       "an old crash timer must not restart a newer daemon");
         ok &= expect(daemon.CancelQueuedProfile(), "explicit stop must cancel a queued profile");
-        ok &= expect(!daemon.MarkProcessReady().valid,
+        ok &= expect(!daemon.MarkProcessReady(secondGeneration, "daemon-2").profileStart.valid,
                       "a cancelled profile must not start when the daemon becomes ready");
 
         const auto emittedThenCancelled = daemon.QueueProfileForNextStart(31);
@@ -178,20 +192,20 @@ int main(int argc, char** argv) {
 
         const auto oldDaemonEvent = daemon.QueueProfileForNextStart(41);
         ok &= expect(oldDaemonEvent.valid, "old daemon must emit its queued request");
-        const auto thirdGeneration = daemon.BeginProcessStart();
+        const auto thirdGeneration = daemon.BeginProcessStart("daemon-3");
         ok &= expect(!daemon.ConsumeReadyProfile(oldDaemonEvent),
                      "a ready event from an older daemon must not reach a newer daemon");
         ok &= expect(!daemon.IsReady(thirdGeneration),
                      "a newly starting daemon must not be reported ready");
-        const auto reboundEvent = daemon.MarkProcessReady();
+        const auto reboundEvent = daemon.MarkProcessReady(thirdGeneration, "daemon-3").profileStart;
         ok &= expect(!reboundEvent.valid,
                      "an already-emitted old request must not be rebound to a replacement daemon");
     }
 
     {
         NekoGui_Runtime::DaemonGenerationState daemon;
-        const auto generation = daemon.BeginProcessStart();
-        ok &= expect(!daemon.MarkProcessReady().valid && daemon.IsReady(generation),
+        const auto generation = daemon.BeginProcessStart("daemon-ready-first");
+        ok &= expect(!daemon.MarkProcessReady(generation, "daemon-ready-first").profileStart.valid && daemon.IsReady(generation),
                      "a daemon may become ready before a profile is queued");
         const auto immediate = daemon.QueueProfileForNextStart(47);
         ok &= expect(immediate.valid && immediate.daemonGeneration == generation &&
@@ -203,7 +217,7 @@ int main(int argc, char** argv) {
 
     {
         NekoGui_Runtime::DaemonGenerationState daemon;
-        const auto generation = daemon.BeginProcessStart();
+        const auto generation = daemon.BeginProcessStart("daemon-concurrent");
         NekoGui_Runtime::DaemonProfileStartRequest fromReady;
         NekoGui_Runtime::DaemonProfileStartRequest fromQueue;
         std::atomic_int rendezvous = 0;
@@ -213,7 +227,7 @@ int main(int argc, char** argv) {
         };
         std::thread readyThread([&] {
             meet();
-            fromReady = daemon.MarkProcessReady();
+            fromReady = daemon.MarkProcessReady(generation, "daemon-concurrent").profileStart;
         });
         std::thread queueThread([&] {
             meet();
@@ -236,8 +250,8 @@ int main(int argc, char** argv) {
     {
         NekoGui_Runtime::DaemonGenerationState daemon;
         (void) daemon.QueueProfileForNextStart(53);
-        const auto generation = daemon.BeginProcessStart();
-        const auto request = daemon.MarkProcessReady();
+        const auto generation = daemon.BeginProcessStart("daemon-cancel");
+        const auto request = daemon.MarkProcessReady(generation, "daemon-cancel").profileStart;
         std::atomic_bool cancelled = false;
         std::atomic_bool consumed = false;
         std::thread cancelThread([&] { cancelled = daemon.CancelQueuedProfile(); });

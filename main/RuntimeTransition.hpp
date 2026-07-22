@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstdint>
 #include <mutex>
+#include <string>
 
 namespace NekoGui_Runtime {
     enum class TransitionKind {
@@ -71,13 +72,28 @@ namespace NekoGui_Runtime {
         bool valid = false;
     };
 
+    struct DaemonInstanceSnapshot {
+        std::uint64_t generation = 0;
+        std::string instanceId;
+        bool ready = false;
+
+        [[nodiscard]] bool valid() const {
+            return generation != 0 && !instanceId.empty();
+        }
+    };
+
+    struct DaemonReadyResult {
+        bool accepted = false;
+        DaemonProfileStartRequest profileStart;
+    };
+
     // Pure generation bookkeeping for QProcess restart timers and a profile
     // queued for the next daemon. CoreProcess owns the actual process; this
     // state prevents a timer belonging to an old daemon from killing a newer
     // one and lets an explicit Stop cancel a queued profile start.
     class DaemonGenerationState {
     public:
-        [[nodiscard]] std::uint64_t BeginProcessStart();
+        [[nodiscard]] std::uint64_t BeginProcessStart(const std::string& instanceId);
 
         // Atomically queues a profile for a starting daemon, or returns an
         // immediately consumable request when that daemon is already ready.
@@ -90,7 +106,9 @@ namespace NekoGui_Runtime {
         // Marks the current daemon ready and moves a queued request into an
         // emitted-but-not-consumed state. Explicit Stop can still invalidate
         // that state before the UI consumes its event.
-        [[nodiscard]] DaemonProfileStartRequest MarkProcessReady();
+        [[nodiscard]] DaemonReadyResult MarkProcessReady(
+            std::uint64_t expectedGeneration,
+            const std::string& expectedInstanceId);
 
         [[nodiscard]] std::uint64_t MarkProcessStopped();
 
@@ -105,9 +123,12 @@ namespace NekoGui_Runtime {
 
         [[nodiscard]] std::uint64_t CurrentGeneration() const;
 
+        [[nodiscard]] DaemonInstanceSnapshot CurrentInstance() const;
+
     private:
         mutable std::mutex mutex;
         std::uint64_t generation = 0;
+        std::string instanceId;
         std::uint64_t nextProfileRequestGeneration = 0;
         bool ready = false;
         DaemonProfileStartRequest queuedProfile;

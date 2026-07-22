@@ -23,7 +23,16 @@ import (
 )
 
 type BaseServer struct {
-	gen.LibcoreServiceServer
+	gen.UnimplementedLibcoreServiceServer
+}
+
+const LifecycleProtocolVersion uint32 = 1
+
+func (s *BaseServer) GetDaemonInfo(ctx context.Context, in *gen.EmptyReq) (*gen.DaemonInfoResp, error) {
+	return &gen.DaemonInfoResp{
+		DaemonInstanceId:         auth.DaemonInstanceID(ctx),
+		LifecycleProtocolVersion: LifecycleProtocolVersion,
+	}, nil
 }
 
 func (s *BaseServer) Exit(ctx context.Context, in *gen.EmptyReq) (out *gen.EmptyResp, _ error) {
@@ -38,6 +47,7 @@ func RunCore(setupCore func(), server gen.LibcoreServiceServer) {
 	_token := flag.String("token", "", "")
 	_port := flag.Int("port", 19810, "")
 	_debug := flag.Bool("debug", false, "")
+	_instanceID := flag.String("instance-id", "", "")
 	flag.CommandLine.Parse(os.Args[2:])
 
 	neko_common.Debug = *_debug
@@ -82,10 +92,15 @@ func RunCore(setupCore func(), server gen.LibcoreServiceServer) {
 		fmt.Println("You must set a token")
 		os.Exit(0)
 	}
+	instanceID := strings.TrimSpace(*_instanceID)
+	if instanceID == "" {
+		log.Fatalln("daemon instance id is required")
+	}
 	os.Stderr.WriteString("token is set\n")
 
 	auther := auth.Authenticator{
-		Token: token,
+		Token:            token,
+		DaemonInstanceID: instanceID,
 	}
 
 	s := grpc.NewServer(

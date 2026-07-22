@@ -3,6 +3,8 @@
 状态：已接受（阶段 3 基础）
 日期：2026-07-22
 
+修订说明：本 ADR 的 GUI/core 串行化基础继续有效；跨 daemon 身份、ready 与超时对账部分已由 [ADR 0011](0011-daemon-identity-and-lifecycle-reconciliation.md) 收紧。下文已按现行实现更新，不得再使用本地 generation 上界替代 RPC receiver 身份。
+
 ## 背景
 
 当前 GUI、`CoreProcess` 和 `nekobox_core` 都属于同一 GUI 生命周期。旧实现用两个 `QMutex` 分别防止 Start/Stop 重入，但锁可能由 UI 线程取得、worker 线程释放，既违反 mutex 所有权，也无法封住两次调用之间的空窗。core 崩溃后的延迟重启没有 daemon generation，旧 timer 可能作用于已经重建的新进程。Go wrapper 则用无锁全局 instance/cancel/stats，`Start`、`Stop`、dial 和 stats 可能并发访问不同生命周期状态。
@@ -14,16 +16,16 @@
 ### C++ GUI 与 daemon
 
 1. GUI 用单一 `TransitionCoordinator` 为每次 Start/Stop/CrashCleanup 分配单调 generation ticket。同一时刻只允许一个 transition；只有持有当前 ticket 的完成回调可以释放它，迟到回调不能释放更新的一代。coordinator 在同一 mutex 临界区内同步 participating-mutation depth gate：`busy || crashCleanupPending` 时为 1，仅真正 quiescent 时为 0，因此失败获取或旧代完成不能把新 owner/pending cleanup 的 gate 写成 0。core crash 会先登记 pending cleanup；当前 transition 完成时直接把所有权原子 handoff 给新的 CrashCleanup generation，中间不暴露可被普通 Start/Stop 抢占的 idle 窗口。
-2. Start 在读取恢复状态、group/TUN guard 和构建 candidate 之前取得 ticket。通过最终配置校验后，序列化 core config、SHA-256、连接统计选项、“candidate 是否包含受管内部 TUN”和**发送前本地捕获的** candidate daemon generation 均按值冻结；Start RPC 后不得再从可变 UI 设置反推该 generation 的 TUN 状态。RPC 协议没有 expected daemon generation，且 channel/token/port 会在同一 GUI session 的 daemon restart 间复用，因此本地 generation 只能用于保守记账，不能证明哪一代 daemon 实际接收了请求。最终 gate 只串行参与 mutation 的路径，并复核 recovery、当前 transition ticket 与已捕获 daemon readiness；它**不会**重建 candidate 或比较完整 model revision，不能证明构建期间所有模型读取仍与最终模型一致。
-3. 旧 generation 未能明确 Stop 时，新 Start 中止。Start 请求出现应用错误、transport 失败，或本地 candidate daemon 在 acknowledgement 后、最终 UI commit 前失去 readiness 时，GUI 会把 candidate/profile/TUN 标为 indeterminate，并把清理归属保守记为 `max(candidateDaemonGeneration, CurrentDaemonGeneration)`。这样旧 daemon crash 不能过早清除一个可能跨 restart 落到新 daemon 的请求；代价是状态可能保留过久，直到该上界 generation crash 或显式 Stop 被确认。Stop RPC 失败或结果不确定时也保留原 observed profile/TUN 状态并显示 indeterminate，不把失败伪装成已停止。TrafficLooper 的统计 binding 只有最终 UI runtime commit 确认成功后才发布，失败/迟到 Start 不得发布遥测 generation。这些都只是 fail-closed 记账，没有证明实际 RPC receiver，也没有解决跨 daemon 对账。
-4. `CoreProcess` 单独维护 daemon generation 和 profile-request generation。queue 与“daemon 已 ready”判断在同一状态锁内完成：尚未 ready 时排队，已经 ready 时立即返回 generation-bound one-shot request，关闭旧的 `IsDaemonReady(false)` 与排队之间恰逢 ready 而永久搁置的窗口。排队 profile、daemon ready event 与消费动作必须同时匹配两代 token；UI 先保留 ready 请求，busy 时等待当前 transition 排空，只有成功取得 Start ticket 后才一次消费。显式 Stop/退出、新的直接 user/reload Start 或 daemon stop 会取消排队或已经发出但尚未消费的旧请求。崩溃延迟 timer 必须同时匹配 generation 且进程仍为未运行，不能结束或重启后来的一代。
+2. Start 在读取恢复状态、group/TUN guard 和构建 candidate 之前取得 ticket。通过最终配置校验后，序列化 core config、SHA-256、连接统计选项、“candidate 是否包含受管内部 TUN”及发送前本地捕获的 `{candidate daemon generation, UUID}` 均按值冻结；Start RPC 后不得从可变 UI 设置或 current daemon 反推身份/TUN 状态。所有 RPC 在 handler 前验证 UUID，跨 restart 的新 daemon 会拒绝旧请求。最终 gate 只串行参与 mutation 的路径，并复核 recovery、当前 ticket 与已捕获 daemon readiness；它仍不会重建 candidate 或比较完整 model revision。
+3. 旧 generation 未能明确 Stop 时，新 Start 中止。Start/Stop 出现应用错误或 transport 失败后，GUI 会向同一 UUID 发出更高 sequence 的 `ReconcileLifecycle` barrier；只有 target command、服务端 config hash、phase 与 active sequence 构成精确 active/stopped 结论时才收敛。这里的 active/stopped 只描述该 daemon 的进程内 `managedCore`，不是 Windows 接口、路由、Mixed、TUN 或 WFP 的事实。barrier 再次超时、blocked、superseded 或字段不一致时保留 observed profile/TUN 与 indeterminate，不把失败伪装成停止。TrafficLooper binding 仍只有最终 UI runtime commit 成功后才发布。
+4. `CoreProcess` 单独维护 daemon generation、不可变 UUID 和 profile-request generation。stdout/stderr 日志只触发 `GetDaemonInfo`；只有回显 UUID/协议版本的结果被同一状态锁接受后才 ready。queue 与 ready 判断仍原子化；排队 profile、ready event 与消费动作必须匹配 generation/request token。daemon stop 会清除身份，迟到握手不能复活旧进程。旧进程未确认退出时不得发布 replacement UUID；崩溃 timer 也必须匹配 generation 与进程状态。
 5. core 崩溃只允许重启**空控制 core**；不自动恢复 profile、TUN 或辅助线路。这样避免隐式改变用户模式，但当前数据面仍会消失，所以仍是发布阻断。
-6. 跨 CoreProcess/UI/worker 使用的 `DataStore::core_running` 与 `prepare_exit` 改为 atomic bool；CoreProcess 不再跨线程读取 `spmode_vpn` 来选择恢复行为，所有异常退出统一只重建空控制 core。退出/重启必须取得 Stop completion：Stop 失败或不确定时不调用 core Exit、也不 quit GUI，而是在 UI 线程撤销 `prepare_exit`/save freeze、恢复 hotkey/control 并保留 observed runtime；只有响应 daemon 已接受且按序完成的 Stop 才继续退出。该响应仍不证明 daemon generation，也不会改变系统代理或 TUN。
-7. legacy gRPC `Call` 不再用一个线程 lock、另一个线程 unlock 同一 `QMutex` 来通知完成，改为 worker `QSemaphore::release`、等待方 `acquire`，使响应写入经同步边可见。每个 `Client` 为 Start/Stop/Exit 生成单调 command sequence 并放入鉴权后的 gRPC metadata；Go lifecycle 在持锁后、检查 phase 前先推进最高序号。即使 handler 取得 mutex 的顺序与 GUI 发出顺序不同，较新的 Stop/Exit 也会让随后执行的旧 Start 以 stale sequence 失败。Start/Stop HTTP/2 client 另设置 30 秒 abort 上限，只界定 GUI 等待；超时视为 indeterminate，不能据此推断 Go handler 已停止或服务端状态未改变。
+6. 跨 CoreProcess/UI/worker 使用的 `DataStore::core_running` 与 `prepare_exit` 为 atomic bool；异常退出统一只重建空控制 core。退出/重启必须取得同一 UUID 的 Stop completion，或目标 outcome/phase/hash 均匹配的 daemon 内存态 stopped 对账；失败/unknown 时不调用 core Exit、也不 quit GUI，而是恢复 UI 控制并保留 observed runtime。该 stopped 结论不是 Windows OS 清理证明。Exit 本身仍未形成可靠 ACK + 等待精确 QProcess finished，因此退出协议尚未闭环。
+7. gRPC `Call` 使用 `QSemaphore` 建立跨线程完成同步。每个 `Client` 为 Start/Stop/Exit/Reconcile 生成单调 command sequence；Go lifecycle 在同一 mutex 内推进 watermark。`ReconcileLifecycle` 的更高序号会推进 watermark，但不会覆盖最后一条 lifecycle command 记录：目标先锁则 barrier 等待其终态，barrier 先锁则迟到目标因 stale sequence 被拒绝。它不是只读状态查询。30 秒 Start/Stop 与 5 秒对账上限都只界定 GUI 等待；超时不会取消服务端 handler/barrier，不能据此推断服务端已停止，unknown 也不能盲目重试。
 
 ### Go core
 
-1. 单一 lifecycle mutex 串行化 candidate 创建/发布、Stop、dial、stats 和 Exit 状态检查。Start/Stop/Exit 在 phase 检查前验证并记录 session-local command sequence；零值、重复或低于已接受序号的命令 fail closed。candidate 只有完整启动成功后才发布。
+1. 单一 lifecycle mutex 串行化 candidate 创建/发布、Stop、dial、stats 和 Exit 状态检查。Start/Stop/Exit 在 phase 检查前验证 command sequence、推进 session-local ordering watermark，并记录各自 lifecycle outcome；零值、重复或低于已接受序号的命令 fail closed。candidate 只有完整启动成功后才发布。
 2. Stop 先使旧 generation reference 失效，再 cancel/close。candidate 清理或 active Close 失败属于不确定状态：保留不可使用的 blocked generation，拒绝新的 Start、dial、stats、重复 Stop 和 Exit，要求替换 daemon 进程，绝不把它当作干净 stopped。
 3. 默认/current-core 的代理 HTTP client 和 dial 使用 generation-bound reference；旧 reference、stopped 时取得的 reference 或 blocked generation 均 fail closed。generation-bound HTTP transport 禁止连接复用，避免旧连接跨代存活。显式传入临时 `*box.Box` 的隔离 Test 路径仍由该请求自身持有，不应与持久 current generation 混写。
 4. Exit 只在 lifecycle 精确为 stopped 时允许；它不会隐式 Stop active/blocked generation，因为 Stop 可能移除 TUN 或其它保护状态。
@@ -37,17 +39,17 @@
 - 没有稳定 Mixed/TUN anchor、A/B worker 切换、persistent WFP kill-switch 或 IPv4/IPv6/DNS 故障注入验收。
 - 没有 `validate/prepare → protection active → start/health → commit / 用户显式选择且重验后的 rollback` 的 OS 级事务。
 - 没有完整 `BuildModelSnapshot` 或 model revision CAS；final Start gate 不会重新构建/比较已冻结 candidate。
-- gRPC token 每个 GUI session 随机生成，同一 GUI 内 daemon 重启会沿用；session-local command sequence 只排列一个 daemon 收到的 lifecycle 命令，`Start`/`Stop` 请求仍未携带 expected daemon generation。新 daemon 接受其收到的首个有效序号；C++ 在 RPC 前后检查 daemon readiness 只能缩小窗口，不能让具体 daemon generation 与服务端处理原子绑定。
-- GUI Start/Stop HTTP/2 client 虽有 30 秒 abort，但没有服务端可取消的端到端 deadline 和“请求已送达但响应丢失”后的状态查询/对账协议。Go handler 未按该 context 中止生命周期操作，client 超时后服务端仍可能完成；现有 indeterminate 标记只保守阻断，不能确认请求实际作用于哪一代，也不能用超时后盲目重试解决。
+- token 与每代 UUID 已分别承担会话鉴权和进程实例 fence，但都不是持久 runtime owner、配置授权或 Windows OS generation。
+- Start/Stop 虽有 process-local 对账协议，仍没有服务端可取消的端到端 deadline；对账自身超时后 handler/barrier 可能继续，GUI 必须保持 indeterminate。
 - Go core 仍未独立重复 C++ ConfigBuilder 的全部 Mixed/TUN/系统代理/resolver 产品策略校验。
-- Stop 的 client wait 会在 30 秒 abort 后返回不确定；退出链随后保持应用/observed runtime，不把超时自动转成父进程结束 core。服务端操作可能仍在继续且无法查询，这是安全止损，不是可恢复的退出协议。
+- Exit 尚未返回可靠 ACK 并等待精确 UUID 的 QProcess finished；这仍是安全止损，不是完整可恢复退出协议。
 
 因此现有 TUN reload/退出 guard 必须保留，产品仍为 Alpha/不可发布；不得把本 ADR 用作真实 Windows TUN/WFP、退出或无泄漏切线验收证据。
 
 ## 验证边界
 
-- `test/runtime_transition_test.cpp` 覆盖 transition 单一 owner、跨线程完成、迟到完成不得释放新 generation/清除新代 depth gate、失败获取保留 owner/pending gate、pending crash cleanup 的连续 handoff/重复 crash 链，以及 daemon/profile-request generation、ready 后 queue 的 immediate one-shot 顺序用例、`MarkProcessReady`/Queue 真并发恰好一次、旧 crash timer、ready event 单次消费、显式取消、新请求覆盖旧事件、跨 daemon 失效和 cancel/consume 竞争。
-- `go/cmd/nekobox_core/core_lifecycle_test.go` 覆盖失败 candidate 不发布、清理/Close 失败进入 blocked、旧 reference/HTTP client 不得跨代、dial/stats 与 Stop 互斥、并发 Start 只发布一次、较新 Stop 拒绝迟到旧 Start，以及 active/blocked lifecycle 拒绝 Exit；gRPC server 测试另拒绝缺失/零 command sequence 的 Exit。
+- `test/runtime_transition_test.cpp` 覆盖原 transition/queue/crash 竞态，以及 `{generation, UUID}` 快照、错误身份拒绝、stop 后迟到握手拒绝等纯状态逻辑。
+- Go lifecycle/auth/gRPC 测试覆盖失败 candidate、blocked、旧 reference、命令排序，以及 barrier 先于/后于 Start/Stop、精确 target/hash/outcome、token + UUID 和握手版本。
 - `go/cmd/nekobox_core/internal/boxapi/boxapi_test.go` 覆盖 generation-bound HTTP transport 禁止 keep-alive 复用。
 
 这些是进程内状态机单元证据；仍没有真实 QProcess/GUI crash→commit、HTTP/2 client abort/服务端迟到完成集成、父进程死亡或 Windows TUN/WFP 测试。

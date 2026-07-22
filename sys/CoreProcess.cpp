@@ -2,6 +2,7 @@
 #include "main/NekoGui.hpp"
 
 #include <QElapsedTimer>
+#include <QUuid>
 
 namespace NekoGui_sys {
 
@@ -14,29 +15,14 @@ namespace NekoGui_sys {
 
         connect(this, &QProcess::readyReadStandardOutput, this, [&]() {
             auto log = readAllStandardOutput();
-            if (!NekoGui::dataStore->core_running) {
-                if (log.contains("grpc server listening")) {
-                    // The core really started
-                    NekoGui::dataStore->core_running = true;
-                    const auto request = daemonGeneration.MarkProcessReady();
-                    if (request.valid) {
-                        MW_dialog_message(
-                            "CoreProcess",
-                            QStringLiteral("CoreStarted,%1,%2,%3")
-                                .arg(request.daemonGeneration)
-                                .arg(request.requestGeneration)
-                                .arg(request.profileId));
-                    }
-                } else if (log.contains("failed to serve")) {
-                    // The core failed to start
-                    QProcess::kill();
-                }
-            }
+            HandleCoreLog(stdoutProbeBuffer, log);
             if (logCounter.fetchAndAddRelaxed(log.count("\n")) > NekoGui::dataStore->max_log_line) return;
             MW_show_log(log);
         });
         connect(this, &QProcess::readyReadStandardError, this, [&]() {
-            auto log = readAllStandardError().trimmed();
+            const auto rawLog = readAllStandardError();
+            HandleCoreLog(stderrProbeBuffer, rawLog);
+            auto log = rawLog.trimmed();
             if (show_stderr) {
                 MW_show_log(log);
                 return;
@@ -44,6 +30,12 @@ namespace NekoGui_sys {
             if (log.contains("token is set")) {
                 show_stderr = true;
             }
+        });
+        connect(this, &QProcess::started, this, [&]() {
+            // Process creation is not RPC readiness. Proactively begin the
+            // authenticated probe so readiness does not depend on a log line
+            // arriving in one particular stream or read chunk.
+            RequestDaemonHandshake();
         });
         connect(this, &QProcess::errorOccurred, this, [&](QProcess::ProcessError error) {
             if (error == QProcess::ProcessError::FailedToStart) {
@@ -104,24 +96,53 @@ namespace NekoGui_sys {
         started = true;
         failed_to_start = false;
         show_stderr = false;
-        (void) daemonGeneration.BeginProcessStart();
+        stdoutProbeBuffer.clear();
+        stderrProbeBuffer.clear();
+        const auto instanceId = QUuid::createUuid()
+                                    .toString(QUuid::WithoutBraces)
+                                    .toStdString();
+        (void) daemonGeneration.BeginProcessStart(instanceId);
+        auto processArguments = arguments;
+        processArguments.push_back(QStringLiteral("-instance-id"));
+        processArguments.push_back(QString::fromStdString(instanceId));
         // cwd: same as GUI, at ./config
         QProcess::setEnvironment(env);
-        QProcess::start(program, arguments);
+        QProcess::start(program, processArguments);
         write((NekoGui::dataStore->core_token + "\n").toUtf8());
     }
 
     void CoreProcess::Restart() {
         restarting = true;
-        QProcess::kill();
-        QProcess::waitForFinished(500);
+        if (state() != QProcess::NotRunning) {
+            QProcess::kill();
+            if (!QProcess::waitForFinished(500)) {
+                MW_show_log("[Error] " + QObject::tr(
+                    "The old core process did not confirm exit; refusing to publish a replacement daemon identity."));
+                restarting = false;
+                return;
+            }
+        }
         started = false;
         Start();
         restarting = false;
     }
 
     void CoreProcess::EnsureStarted() {
-        if (state() == QProcess::NotRunning) Restart();
+        if (state() == QProcess::NotRunning) {
+            Restart();
+            return;
+        }
+        const auto instance = daemonGeneration.CurrentInstance();
+        if (instance.valid() && !instance.ready) {
+            // A previous localhost handshake may have raced the server's
+            // accept loop. An explicit profile start may safely request a new
+            // handshake for the same empty control daemon.
+            MW_dialog_message(
+                "CoreProcess",
+                QStringLiteral("CoreListening,%1,%2,0")
+                    .arg(instance.generation)
+                    .arg(QString::fromStdString(instance.instanceId)));
+        }
     }
 
     NekoGui_Runtime::DaemonProfileStartRequest
@@ -149,8 +170,41 @@ namespace NekoGui_sys {
         return daemonGeneration.CurrentGeneration();
     }
 
+    NekoGui_Runtime::DaemonInstanceSnapshot CoreProcess::CurrentDaemonInstance() const {
+        return daemonGeneration.CurrentInstance();
+    }
+
+    NekoGui_Runtime::DaemonReadyResult CoreProcess::ConfirmDaemonReady(
+        std::uint64_t expectedGeneration,
+        const QString& expectedInstanceId) {
+        return daemonGeneration.MarkProcessReady(
+            expectedGeneration,
+            expectedInstanceId.toStdString());
+    }
+
     bool CoreProcess::IsDaemonReady(std::uint64_t daemonGenerationValue) const {
         return daemonGeneration.IsReady(daemonGenerationValue);
+    }
+
+    void CoreProcess::HandleCoreLog(QByteArray& probeBuffer, const QByteArray& log) {
+        probeBuffer.append(log);
+        if (probeBuffer.size() > 512) probeBuffer = probeBuffer.right(512);
+        if (!probeBuffer.contains("grpc server listening")) return;
+        probeBuffer.clear();
+
+        RequestDaemonHandshake();
+    }
+
+    void CoreProcess::RequestDaemonHandshake() {
+        // Process/log signals only prompt authentication. They are not
+        // readiness proof: the loopback port may belong to an old daemon.
+        const auto instance = daemonGeneration.CurrentInstance();
+        if (!instance.valid() || instance.ready) return;
+        MW_dialog_message(
+            "CoreProcess",
+            QStringLiteral("CoreListening,%1,%2,0")
+                .arg(instance.generation)
+                .arg(QString::fromStdString(instance.instanceId)));
     }
 
 } // namespace NekoGui_sys

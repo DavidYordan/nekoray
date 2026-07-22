@@ -29,6 +29,7 @@ type fakeManagedCore struct {
 	queryEnter  chan struct{}
 	queryWait   chan struct{}
 	closeEnter  chan struct{}
+	closeWait   chan struct{}
 }
 
 func (f *fakeManagedCore) candidate() *managedCore {
@@ -44,6 +45,9 @@ func (f *fakeManagedCore) candidate() *managedCore {
 				default:
 					close(f.closeEnter)
 				}
+			}
+			if f.closeWait != nil {
+				<-f.closeWait
 			}
 			return f.closeErr
 		},
@@ -81,7 +85,7 @@ func (f *fakeManagedCore) candidate() *managedCore {
 func TestLifecycleDoesNotPublishFailedCandidate(t *testing.T) {
 	lifecycle := newCoreLifecycle()
 	fake := &fakeManagedCore{}
-	err := lifecycle.start(1, func() (*managedCore, error) {
+	err := lifecycle.start(1, "", func() (*managedCore, error) {
 		return fake.candidate(), errFakeCreate
 	})
 	if !errors.Is(err, errFakeCreate) {
@@ -108,7 +112,7 @@ func TestLifecycleDoesNotPublishFailedCandidate(t *testing.T) {
 func TestCandidateCleanupFailureBlocksLifecycle(t *testing.T) {
 	lifecycle := newCoreLifecycle()
 	fake := &fakeManagedCore{closeErr: errFakeClose}
-	err := lifecycle.start(1, func() (*managedCore, error) {
+	err := lifecycle.start(1, "", func() (*managedCore, error) {
 		return fake.candidate(), errFakeCreate
 	})
 	if !errors.Is(err, errCoreLifecycleBlocked) || !errors.Is(err, errFakeClose) {
@@ -123,7 +127,7 @@ func TestCandidateCleanupFailureBlocksLifecycle(t *testing.T) {
 	}
 
 	factoryCalled := false
-	err = lifecycle.start(2, func() (*managedCore, error) {
+	err = lifecycle.start(2, "", func() (*managedCore, error) {
 		factoryCalled = true
 		return (&fakeManagedCore{}).candidate(), nil
 	})
@@ -135,7 +139,7 @@ func TestCandidateCleanupFailureBlocksLifecycle(t *testing.T) {
 func TestStopCloseFailureRetainsBlockedState(t *testing.T) {
 	lifecycle := newCoreLifecycle()
 	fake := &fakeManagedCore{closeErr: errFakeClose}
-	if err := lifecycle.start(1, func() (*managedCore, error) { return fake.candidate(), nil }); err != nil {
+	if err := lifecycle.start(1, "", func() (*managedCore, error) { return fake.candidate(), nil }); err != nil {
 		t.Fatalf("start failed: %v", err)
 	}
 	reference := lifecycle.currentReference()
@@ -177,7 +181,7 @@ func TestStopCloseFailureRetainsBlockedState(t *testing.T) {
 func TestOldReferenceAndHTTPClientCannotUseNewGeneration(t *testing.T) {
 	lifecycle := newCoreLifecycle()
 	first := &fakeManagedCore{}
-	if err := lifecycle.start(1, func() (*managedCore, error) { return first.candidate(), nil }); err != nil {
+	if err := lifecycle.start(1, "", func() (*managedCore, error) { return first.candidate(), nil }); err != nil {
 		t.Fatalf("first start failed: %v", err)
 	}
 	oldReference := lifecycle.currentReference()
@@ -187,7 +191,7 @@ func TestOldReferenceAndHTTPClientCannotUseNewGeneration(t *testing.T) {
 	}
 
 	second := &fakeManagedCore{}
-	if err := lifecycle.start(3, func() (*managedCore, error) { return second.candidate(), nil }); err != nil {
+	if err := lifecycle.start(3, "", func() (*managedCore, error) { return second.candidate(), nil }); err != nil {
 		t.Fatalf("second start failed: %v", err)
 	}
 	if _, err := lifecycle.dial(context.Background(), oldReference, "tcp", "unit.test:443"); !errors.Is(err, errStaleCoreGeneration) {
@@ -206,7 +210,7 @@ func TestStoppedReferenceCannotBindToLaterGeneration(t *testing.T) {
 	stoppedReference := lifecycle.currentReference()
 	client := generationBoundHTTPClient(stoppedReference)
 	started := &fakeManagedCore{}
-	if err := lifecycle.start(1, func() (*managedCore, error) { return started.candidate(), nil }); err != nil {
+	if err := lifecycle.start(1, "", func() (*managedCore, error) { return started.candidate(), nil }); err != nil {
 		t.Fatalf("start failed: %v", err)
 	}
 	if _, err := client.Get("http://unit.test/"); !errors.Is(err, errStaleCoreGeneration) {
@@ -225,7 +229,7 @@ func TestQueryStatsHoldsLifecycleMutexAgainstStop(t *testing.T) {
 		queryWait:  make(chan struct{}),
 		closeEnter: make(chan struct{}),
 	}
-	if err := lifecycle.start(1, func() (*managedCore, error) { return fake.candidate(), nil }); err != nil {
+	if err := lifecycle.start(1, "", func() (*managedCore, error) { return fake.candidate(), nil }); err != nil {
 		t.Fatalf("start failed: %v", err)
 	}
 
@@ -273,7 +277,7 @@ func TestConcurrentStartPublishesOnce(t *testing.T) {
 	releaseFirstFactory := make(chan struct{})
 	firstDone := make(chan error, 1)
 	go func() {
-		firstDone <- lifecycle.start(1, func() (*managedCore, error) {
+		firstDone <- lifecycle.start(1, "", func() (*managedCore, error) {
 			close(firstFactoryEntered)
 			<-releaseFirstFactory
 			return first.candidate(), nil
@@ -284,7 +288,7 @@ func TestConcurrentStartPublishesOnce(t *testing.T) {
 	var secondFactoryCalls atomic.Int32
 	secondDone := make(chan error, 1)
 	go func() {
-		secondDone <- lifecycle.start(2, func() (*managedCore, error) {
+		secondDone <- lifecycle.start(2, "", func() (*managedCore, error) {
 			secondFactoryCalls.Add(1)
 			return (&fakeManagedCore{}).candidate(), nil
 		})
@@ -314,7 +318,7 @@ func TestNewerStopSupersedesDelayedOlderStart(t *testing.T) {
 	}
 
 	factoryCalled := false
-	err := lifecycle.start(1, func() (*managedCore, error) {
+	err := lifecycle.start(1, "", func() (*managedCore, error) {
 		factoryCalled = true
 		return (&fakeManagedCore{}).candidate(), nil
 	})
@@ -332,6 +336,178 @@ func TestNewerStopSupersedesDelayedOlderStart(t *testing.T) {
 	}
 }
 
+func TestReconcileBarrierFencesDelayedStart(t *testing.T) {
+	lifecycle := newCoreLifecycle()
+	const configHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	snapshot, err := lifecycle.reconcile(
+		2,
+		1,
+		coreLifecycleCommandStart,
+		configHash,
+	)
+	if err != nil {
+		t.Fatalf("reconcile stopped lifecycle: %v", err)
+	}
+	if snapshot.phase != coreLifecycleStopped || snapshot.hasCurrent ||
+		snapshot.orderingWatermark != 2 ||
+		snapshot.targetCommand.outcome != coreLifecycleOutcomeFencedNotAdmitted {
+		t.Fatalf("unexpected fenced snapshot: %#v", snapshot)
+	}
+
+	factoryCalled := false
+	err = lifecycle.start(1, configHash, func() (*managedCore, error) {
+		factoryCalled = true
+		return (&fakeManagedCore{}).candidate(), nil
+	})
+	if !errors.Is(err, errStaleCommandSequence) || factoryCalled {
+		t.Fatalf("delayed Start crossed reconcile barrier: err=%v factory=%v", err, factoryCalled)
+	}
+}
+
+func TestReconcileWaitsForStartAndReturnsExactOutcome(t *testing.T) {
+	lifecycle := newCoreLifecycle()
+	const configHash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	factoryEntered := make(chan struct{})
+	releaseFactory := make(chan struct{})
+	startDone := make(chan error, 1)
+	go func() {
+		startDone <- lifecycle.start(1, configHash, func() (*managedCore, error) {
+			close(factoryEntered)
+			<-releaseFactory
+			return (&fakeManagedCore{}).candidate(), nil
+		})
+	}()
+	<-factoryEntered
+
+	reconcileDone := make(chan coreLifecycleSnapshot, 1)
+	reconcileErr := make(chan error, 1)
+	go func() {
+		snapshot, err := lifecycle.reconcile(2, 1, coreLifecycleCommandStart, configHash)
+		reconcileDone <- snapshot
+		reconcileErr <- err
+	}()
+	select {
+	case <-reconcileDone:
+		t.Fatal("reconcile escaped while Start still owned the lifecycle mutex")
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	close(releaseFactory)
+	if err := <-startDone; err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	snapshot := <-reconcileDone
+	if err := <-reconcileErr; err != nil {
+		t.Fatalf("reconcile failed: %v", err)
+	}
+	if snapshot.phase != coreLifecycleActive || !snapshot.hasCurrent ||
+		snapshot.orderingWatermark != 2 ||
+		snapshot.activeStartCommandSequence != 1 ||
+		snapshot.currentConfigSHA256 != configHash ||
+		snapshot.targetCommand.outcome != coreLifecycleOutcomeSucceeded ||
+		!snapshot.targetConfigMatches {
+		t.Fatalf("unexpected active reconciliation: %#v", snapshot)
+	}
+}
+
+func TestReconcileDistinguishesCleanAndBlockedStartFailure(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		closeErr    error
+		wantPhase   coreLifecyclePhase
+		wantOutcome coreLifecycleCommandOutcome
+		wantCurrent bool
+	}{
+		{name: "failed-clean", wantPhase: coreLifecycleStopped, wantOutcome: coreLifecycleOutcomeFailedClean},
+		{name: "blocked", closeErr: errFakeClose, wantPhase: coreLifecycleBlocked, wantOutcome: coreLifecycleOutcomeBlocked, wantCurrent: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			lifecycle := newCoreLifecycle()
+			const configHash = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+			fake := &fakeManagedCore{closeErr: test.closeErr}
+			startErr := lifecycle.start(1, configHash, func() (*managedCore, error) {
+				return fake.candidate(), errFakeCreate
+			})
+			if !errors.Is(startErr, errFakeCreate) {
+				t.Fatalf("start error: %v", startErr)
+			}
+			snapshot, err := lifecycle.reconcile(2, 1, coreLifecycleCommandStart, configHash)
+			if err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
+			if snapshot.phase != test.wantPhase ||
+				snapshot.hasCurrent != test.wantCurrent ||
+				snapshot.targetCommand.outcome != test.wantOutcome ||
+				!snapshot.targetConfigMatches {
+				t.Fatalf("unexpected failed Start reconciliation: %#v", snapshot)
+			}
+		})
+	}
+}
+
+func TestReconcileWaitsForStopCloseOutcome(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		closeErr    error
+		wantPhase   coreLifecyclePhase
+		wantOutcome coreLifecycleCommandOutcome
+		wantCurrent bool
+	}{
+		{name: "stopped", wantPhase: coreLifecycleStopped, wantOutcome: coreLifecycleOutcomeSucceeded},
+		{name: "blocked", closeErr: errFakeClose, wantPhase: coreLifecycleBlocked, wantOutcome: coreLifecycleOutcomeBlocked, wantCurrent: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			lifecycle := newCoreLifecycle()
+			const configHash = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+			fake := &fakeManagedCore{
+				closeErr:   test.closeErr,
+				closeEnter: make(chan struct{}),
+				closeWait:  make(chan struct{}),
+			}
+			if err := lifecycle.start(1, configHash, func() (*managedCore, error) {
+				return fake.candidate(), nil
+			}); err != nil {
+				t.Fatalf("start: %v", err)
+			}
+			stopDone := make(chan error, 1)
+			go func() { stopDone <- lifecycle.stop(2) }()
+			<-fake.closeEnter
+
+			reconcileDone := make(chan coreLifecycleSnapshot, 1)
+			reconcileErr := make(chan error, 1)
+			go func() {
+				snapshot, err := lifecycle.reconcile(3, 2, coreLifecycleCommandStop, configHash)
+				reconcileDone <- snapshot
+				reconcileErr <- err
+			}()
+			select {
+			case <-reconcileDone:
+				t.Fatal("reconcile escaped while Stop still owned the lifecycle mutex")
+			case <-time.After(25 * time.Millisecond):
+			}
+
+			close(fake.closeWait)
+			stopErr := <-stopDone
+			if test.closeErr == nil && stopErr != nil {
+				t.Fatalf("stop: %v", stopErr)
+			}
+			if test.closeErr != nil && !errors.Is(stopErr, errCoreLifecycleBlocked) {
+				t.Fatalf("blocked stop: %v", stopErr)
+			}
+			snapshot := <-reconcileDone
+			if err := <-reconcileErr; err != nil {
+				t.Fatalf("reconcile: %v", err)
+			}
+			if snapshot.phase != test.wantPhase ||
+				snapshot.hasCurrent != test.wantCurrent ||
+				snapshot.targetCommand.outcome != test.wantOutcome ||
+				!snapshot.targetConfigMatches {
+				t.Fatalf("unexpected Stop reconciliation: %#v", snapshot)
+			}
+		})
+	}
+}
+
 func TestDialHoldsLifecycleMutexAgainstStop(t *testing.T) {
 	lifecycle := newCoreLifecycle()
 	fake := &fakeManagedCore{
@@ -339,7 +515,7 @@ func TestDialHoldsLifecycleMutexAgainstStop(t *testing.T) {
 		dialWait:   make(chan struct{}),
 		closeEnter: make(chan struct{}),
 	}
-	if err := lifecycle.start(1, func() (*managedCore, error) { return fake.candidate(), nil }); err != nil {
+	if err := lifecycle.start(1, "", func() (*managedCore, error) { return fake.candidate(), nil }); err != nil {
 		t.Fatalf("start failed: %v", err)
 	}
 	reference := lifecycle.currentReference()
@@ -396,7 +572,7 @@ func TestExitRequiresPreciselyStoppedLifecycle(t *testing.T) {
 	}
 
 	fake := &fakeManagedCore{}
-	if err := lifecycle.start(2, func() (*managedCore, error) { return fake.candidate(), nil }); err != nil {
+	if err := lifecycle.start(2, "", func() (*managedCore, error) { return fake.candidate(), nil }); err != nil {
 		t.Fatalf("start failed: %v", err)
 	}
 	if err := lifecycle.exitWhenStopped(3, fakeExit); !errors.Is(err, errCoreExitRequiresStop) {

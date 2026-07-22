@@ -66,4 +66,4 @@ nekobox_core.exe run -c <config.json>
 - `run` 直接启动给定 sing-box 配置。仓内构建和隔离测试工具依赖这一入口，但都会先生成或收紧临时副本并核对精确 PID；它不是普通 GUI 操作，也不得用于未经审计的配置。
 - 两者还接受 sing-box 兼容的 `-C/--config-directory` 和 `-D/--directory`。正式产品流程不得用目录合并或工作目录切换规避 ConfigBuilder。
 
-普通 GUI 使用的是 `nekobox` 内部模式：core 只监听 `127.0.0.1`，GUI 每次启动生成随机 token，并经 stdin 传入；每个 gRPC 请求都验证 token。该事实意味着普通 GUI 不是无认证任意入口，但不构成完整安全边界：Go `Start` 会执行 sing-box 的配置与启动流程，却尚未重复 C++ ConfigBuilder 的 Managed Mixed、TUN、系统代理和 provider resolver 策略校验。后续应在受控 core/Runtime 中补第二层校验，不能把随机 token 或 `check` 成功当作配置授权。
+普通 GUI 使用的是 `nekobox` 内部模式：core 只监听 `127.0.0.1`，GUI 每次启动生成随机 token，并经 stdin 传入；每次 core 启动另有 UUID，所有 gRPC 请求同时验证 token 与实例身份，ready 还需回显 UUID/协议版本。UUID 是跨重启 fence，不是凭据或配置授权。Go `Start` 会执行 sing-box 的配置与启动流程，却尚未重复 C++ ConfigBuilder 的 Managed Mixed、TUN、系统代理和 provider resolver 策略校验。后续应在受控 core/Runtime 中补第二层校验，不能把 token、UUID 或 `check` 成功当作配置授权。

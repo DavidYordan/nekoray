@@ -6,17 +6,22 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $repoRoot "tools\path_safety.ps1")
 if ([string]::IsNullOrWhiteSpace($ExecutablePath)) {
     $ExecutablePath = Join-Path $repoRoot "build-package-windows64\nekobox.exe"
 }
 $ExecutablePath = (Resolve-Path -LiteralPath $ExecutablePath).Path
+$ExecutablePath = Assert-PathOutsideProtectedProduction $ExecutablePath "Config-preservation GUI executable"
+Assert-DirectoryTreeHasNoReparsePoints (Split-Path -Parent $ExecutablePath) "Config-preservation GUI directory tree"
 
 $mingwBin = Join-Path $repoRoot "qtsdk\tools\Tools\mingw1310_64\bin"
 $qtBin = Join-Path $repoRoot "qtsdk\qt\6.5.3\mingw_64\bin"
 $env:PATH = "$mingwBin;$qtBin;$env:PATH"
 $env:QT_QPA_PLATFORM_PLUGIN_PATH = Join-Path $repoRoot "qtsdk\qt\6.5.3\mingw_64\plugins\platforms"
 
-$tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')
+$tempRoot = Assert-PathOutsideProtectedProduction `
+    ([IO.Path]::GetFullPath([IO.Path]::GetTempPath())) `
+    "Config-preservation temporary root"
 
 function New-TestLab {
     $path = Join-Path $tempRoot ("nekoray-config-preservation-" + [Guid]::NewGuid().ToString("N"))

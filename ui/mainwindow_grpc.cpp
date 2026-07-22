@@ -65,11 +65,18 @@ namespace {
 void MainWindow::setup_grpc() {
 #ifndef NKR_NO_GRPC
     // Setup Connection
+    const auto process = GetMainWindow() == nullptr ? nullptr : GetMainWindow()->core_process;
     defaultClient = new Client(
         [=](const QString& errStr) {
             MW_show_log("[Error] gRPC: " + errStr);
         },
-        "127.0.0.1:" + Int2String(NekoGui::dataStore->core_port), NekoGui::dataStore->core_token);
+        "127.0.0.1:" + Int2String(NekoGui::dataStore->core_port),
+        NekoGui::dataStore->core_token,
+        [process] {
+            if (process == nullptr) return QString{};
+            const auto instance = process->CurrentDaemonInstance();
+            return QString::fromStdString(instance.instanceId);
+        });
 
     // Looper
     runOnNewThread([=] { NekoGui_traffic::trafficLooper->Loop(); });
@@ -616,7 +623,13 @@ void MainWindow::speedtest_current() {
 
 void MainWindow::stop_core_daemon() {
 #ifndef NKR_NO_GRPC
-    NekoGui_rpc::defaultClient->Exit();
+    const auto window = GetMainWindow();
+    if (window == nullptr || window->core_process == nullptr ||
+        NekoGui_rpc::defaultClient == nullptr) {
+        return;
+    }
+    const auto instance = window->core_process->CurrentDaemonInstance();
+    NekoGui_rpc::defaultClient->Exit(QString::fromStdString(instance.instanceId));
 #endif
 }
 
@@ -755,6 +768,10 @@ void MainWindow::neko_start(
     std::uint64_t expectedDaemonGeneration,
     std::uint64_t expectedRequestGeneration) {
     if (NekoGui::dataStore->prepare_exit) return;
+    if (core_process == nullptr) {
+        MW_show_log(tr("The core controller is still initializing; no profile was started."));
+        return;
+    }
 
     auto ents = get_now_selected_list();
     auto ent = (_id < 0 && !ents.isEmpty()) ? ents.first() : NekoGui::profileManager->GetProfile(_id);
@@ -889,7 +906,10 @@ void MainWindow::neko_start(
     const auto candidateInternalTun = result->managedInternalTun;
     const auto candidateConnectionStatistics = NekoGui::dataStore->connection_statistics;
     const auto candidateTrafficLoopInterval = NekoGui::dataStore->traffic_loop_interval;
-    const auto candidateDaemonGeneration = core_process->CurrentDaemonGeneration();
+    const auto candidateDaemonInstance = core_process->CurrentDaemonInstance();
+    const auto candidateDaemonGeneration = candidateDaemonInstance.generation;
+    const auto candidateDaemonInstanceId =
+        QString::fromStdString(candidateDaemonInstance.instanceId);
 
     if (expectedDaemonGeneration != 0 &&
         candidateDaemonGeneration != expectedDaemonGeneration) {
@@ -898,7 +918,9 @@ void MainWindow::neko_start(
         return;
     }
 
-    if (!core_process->IsDaemonReady(candidateDaemonGeneration)) {
+    if (!candidateDaemonInstance.valid() || candidateDaemonInstanceId.isEmpty() ||
+        !candidateDaemonInstance.ready ||
+        !core_process->IsDaemonReady(candidateDaemonGeneration)) {
         if (expectedDaemonGeneration != 0) {
             MW_show_log(tr("Discarded a queued profile start because its core daemon is no longer ready."));
             finishTransition();
@@ -917,13 +939,14 @@ void MainWindow::neko_start(
                 DS_cores);
         }
         finishTransition();
-        return; // a generation-bound CoreStarted event will resume this request
+        return; // an identity-authenticated daemon-ready event resumes this request
     }
 
     auto neko_start_stage2 = [=] {
         struct StartRpcResult {
             bool requestSent = false;
             bool confirmed = false;
+            bool confirmedStopped = false;
             QString indeterminateReason;
         };
 
@@ -972,56 +995,90 @@ void MainWindow::neko_start(
                 req.add_stats_outbounds("bypass");
             }
             bool rpcOK;
-            const auto error = defaultClient->Start(&rpcOK, req);
+            std::uint64_t commandSequence = 0;
+            const auto error = defaultClient->Start(
+                &rpcOK,
+                req,
+                candidateDaemonInstanceId,
+                &commandSequence);
             if (rpcOK && !error.isEmpty()) {
                 runOnUiThread([=] { MessageBoxWarning("LoadConfig return error", error); });
+                const auto reconciliation = defaultClient->ReconcileStart(
+                    candidateDaemonInstanceId,
+                    commandSequence,
+                    candidateConfigSha256);
+                if (reconciliation.disposition ==
+                    NekoGui_rpc::LifecycleReconcileDisposition::Active) {
+                    MW_show_log(tr("The exact Start command was confirmed active by the daemon reconciliation barrier."));
+                    return {true, true, false, {}};
+                }
+                if (reconciliation.disposition ==
+                    NekoGui_rpc::LifecycleReconcileDisposition::Stopped) {
+                    MW_show_log(tr("The failed Start command was fenced and confirmed stopped."));
+                    return {true, false, true, {}};
+                }
                 return {
                     true,
                     false,
-                    tr("The Start RPC returned an application error after the candidate may have acquired resources: %1")
-                        .arg(error),
+                    false,
+                    tr("The Start RPC returned an application error and reconciliation remained indeterminate: %1 (%2)")
+                        .arg(error, reconciliation.detail),
                 };
             } else if (!rpcOK) {
+                const auto reconciliation = defaultClient->ReconcileStart(
+                    candidateDaemonInstanceId,
+                    commandSequence,
+                    candidateConfigSha256);
+                if (reconciliation.disposition ==
+                    NekoGui_rpc::LifecycleReconcileDisposition::Active) {
+                    MW_show_log(tr("A lost Start response was reconciled to the exact active command."));
+                    return {true, true, false, {}};
+                }
+                if (reconciliation.disposition ==
+                    NekoGui_rpc::LifecycleReconcileDisposition::Stopped) {
+                    MW_show_log(tr("A lost Start response was fenced and confirmed stopped."));
+                    return {true, false, true, {}};
+                }
                 return {
                     true,
                     false,
-                    tr("The Start RPC transport failed after request delivery became indeterminate."),
+                    false,
+                    tr("The Start RPC transport failed and its reconciliation barrier remained indeterminate: %1")
+                        .arg(reconciliation.detail),
                 };
             }
             if (!core_process->IsDaemonReady(candidateDaemonGeneration)) {
                 return {
                     true,
                     false,
+                    false,
                     tr("The core daemon changed or stopped before the successful Start response could be committed."),
                 };
             }
 #endif
-            return {true, true, {}};
+            return {true, true, false, {}};
         };
         const auto startRpcResult = startRpc();
         if (!startRpcResult.requestSent) return false;
+        if (startRpcResult.confirmedStopped) return false;
         if (!startRpcResult.confirmed) {
             bool indeterminateStateRecorded = false;
             QMetaObject::invokeMethod(
                 this,
                 [=, &indeterminateStateRecorded] {
                     if (!runtime_transition.IsCurrent(transition)) return;
-                    const auto conservativeDaemonGeneration = std::max(
-                        candidateDaemonGeneration,
-                        core_process->CurrentDaemonGeneration());
                     NekoGui::dataStore->ignoreConnTag = result->ignoreConnTag;
                     NekoGui::dataStore->UpdateStartedId(candidateProfileId);
                     // A candidate that requested Tun is conservatively treated
-                    // as active until a sequenced, confirmed Stop or a crash of
-                    // its possible daemon generation proves otherwise.
+                    // as active until this exact daemon identity reports a
+                    // stable outcome or that QProcess generation exits.
                     running_internal_tun = running_internal_tun || candidateInternalTun;
                     running_generation = transition.generation;
-                    // The RPC protocol is not generation-bound yet. Attribute
-                    // uncertainty to the newest local daemon observed by this
-                    // commit. This can retain state longer than necessary, but
-                    // cannot let an older crash clear a request that may have
-                    // crossed a daemon restart on the reused channel.
-                    running_daemon_generation = conservativeDaemonGeneration;
+                    // Every RPC is bound to this exact process identity. A new
+                    // daemon rejects the old identity before it can advance
+                    // its lifecycle ordering watermark.
+                    running_daemon_generation = candidateDaemonGeneration;
+                    running_daemon_instance_id = candidateDaemonInstanceId;
                     running_config_sha256 = candidateConfigSha256;
                     running = ent;
                     runtime_state_indeterminate = true;
@@ -1047,13 +1104,11 @@ void MainWindow::neko_start(
                 this,
                 [=] {
                     if (!runtime_transition.IsCurrent(transition)) return;
-                    const auto conservativeDaemonGeneration = std::max(
-                        candidateDaemonGeneration,
-                        core_process->CurrentDaemonGeneration());
                     NekoGui::dataStore->UpdateStartedId(candidateProfileId);
                     running_internal_tun = running_internal_tun || candidateInternalTun;
                     running_generation = transition.generation;
-                    running_daemon_generation = conservativeDaemonGeneration;
+                    running_daemon_generation = candidateDaemonGeneration;
+                    running_daemon_instance_id = candidateDaemonInstanceId;
                     running_config_sha256 = candidateConfigSha256;
                     running = ent;
                     runtime_state_indeterminate = true;
@@ -1074,18 +1129,13 @@ void MainWindow::neko_start(
                 if (!runtime_transition.IsCurrent(transition)) return;
                 if (!core_process->IsDaemonReady(candidateDaemonGeneration)) {
                     // The daemon can stop after the worker's acknowledgement
-                    // check but before this UI-thread commit. Retain the
-                    // candidate observation under the newest local generation
-                    // seen at commit. This conservative upper bound prevents
-                    // an older crash from clearing a possibly cross-restart
-                    // request; it does not identify the actual RPC receiver.
-                    const auto conservativeDaemonGeneration = std::max(
-                        candidateDaemonGeneration,
-                        core_process->CurrentDaemonGeneration());
+                    // check but before this UI-thread commit. The request was
+                    // still authenticated against the immutable candidate ID.
                     NekoGui::dataStore->UpdateStartedId(candidateProfileId);
                     running_internal_tun = running_internal_tun || candidateInternalTun;
                     running_generation = transition.generation;
-                    running_daemon_generation = conservativeDaemonGeneration;
+                    running_daemon_generation = candidateDaemonGeneration;
+                    running_daemon_instance_id = candidateDaemonInstanceId;
                     running_config_sha256 = candidateConfigSha256;
                     running = ent;
                     runtime_state_indeterminate = true;
@@ -1101,6 +1151,7 @@ void MainWindow::neko_start(
                 running_internal_tun = candidateInternalTun;
                 running_generation = transition.generation;
                 running_daemon_generation = candidateDaemonGeneration;
+                running_daemon_instance_id = candidateDaemonInstanceId;
                 running_config_sha256 = candidateConfigSha256;
                 running = ent;
                 runtime_state_indeterminate = false;
@@ -1186,6 +1237,15 @@ void MainWindow::neko_stop(bool crash, bool sem, CoreStopReason reason,
                            const NekoGui_Runtime::TransitionTicket& ownerTransition,
                            std::uint64_t expectedCrashDaemonGeneration) {
     if (completionResult != nullptr) completionResult->store(false);
+    if (core_process == nullptr) {
+        const auto nothingRunning = NekoGui::dataStore->started_id < 0;
+        if (completionResult != nullptr) completionResult->store(nothingRunning);
+        if (sem) sem_stopped.release();
+        if (!nothingRunning) {
+            MW_show_log(tr("The core controller is unavailable; refusing to clear observed runtime state."));
+        }
+        return;
+    }
     // Explicit Stop revokes both queued and already-emitted daemon-ready
     // requests even when another transition currently owns the coordinator.
     if (reason == CoreStopReason::UserAction || reason == CoreStopReason::AppExit) {
@@ -1245,6 +1305,7 @@ void MainWindow::neko_stop(bool crash, bool sem, CoreStopReason reason,
             running_internal_tun = false;
             running_generation = 0;
             running_daemon_generation = 0;
+            running_daemon_instance_id.clear();
             running_config_sha256.clear();
             running = nullptr;
             runtime_state_indeterminate = false;
@@ -1269,6 +1330,8 @@ void MainWindow::neko_stop(bool crash, bool sem, CoreStopReason reason,
     const auto runningName = running == nullptr || running->bean == nullptr
                                  ? QStringLiteral("#%1").arg(id)
                                  : running->bean->DisplayTypeAndName();
+    const auto expectedStopDaemonInstanceId = running_daemon_instance_id;
+    const auto expectedStopConfigSha256 = running_config_sha256;
     const auto persistTrafficOnStop = NekoGui::dataStore->traffic_loop_interval != 0;
 
     auto neko_stop_stage2 = [=] {
@@ -1322,25 +1385,43 @@ void MainWindow::neko_stop(bool crash, bool sem, CoreStopReason reason,
 
         if (!crash) {
             bool rpcOK;
-            QString error = defaultClient->Stop(&rpcOK);
-            if (rpcOK && !error.isEmpty()) {
-                {
-                    QMutexLocker trafficLock(&NekoGui_traffic::trafficLooper->loop_mutex);
-                    NekoGui_traffic::trafficLooper->loop_enabled.store(trafficLoopWasEnabled);
+            std::uint64_t commandSequence = 0;
+            QString error = defaultClient->Stop(
+                &rpcOK,
+                expectedStopDaemonInstanceId,
+                &commandSequence);
+            if (!rpcOK || !error.isEmpty()) {
+                const auto reconciliation = defaultClient->ReconcileStop(
+                    expectedStopDaemonInstanceId,
+                    commandSequence,
+                    expectedStopConfigSha256);
+                if (reconciliation.disposition ==
+                    NekoGui_rpc::LifecycleReconcileDisposition::Stopped) {
+                    MW_show_log(tr("The Stop command was confirmed stopped by the daemon reconciliation barrier."));
+                } else {
+                    {
+                        QMutexLocker trafficLock(&NekoGui_traffic::trafficLooper->loop_mutex);
+                        NekoGui_traffic::trafficLooper->loop_enabled.store(trafficLoopWasEnabled);
+                    }
+                    if (reconciliation.disposition ==
+                        NekoGui_rpc::LifecycleReconcileDisposition::Active) {
+                        MW_show_log(tr("The Stop command did not take effect; the exact prior runtime remains active."));
+                        if (!error.isEmpty()) {
+                            runOnUiThread([=] { MessageBoxWarning("Stop return error", error); });
+                        }
+                        return false;
+                    }
+                    const auto detail = !error.isEmpty()
+                                            ? tr("The Stop RPC returned an application error and reconciliation remained indeterminate: %1 (%2)")
+                                                  .arg(error, reconciliation.detail)
+                                            : tr("The Stop RPC transport failed and reconciliation remained indeterminate: %1")
+                                                  .arg(reconciliation.detail);
+                    markStopIndeterminate(detail);
+                    if (!error.isEmpty()) {
+                        runOnUiThread([=] { MessageBoxWarning("Stop return error", error); });
+                    }
+                    return false;
                 }
-                markStopIndeterminate(
-                    tr("The Stop RPC returned an application error; retained runtime resources cannot be ruled out: %1")
-                        .arg(error));
-                runOnUiThread([=] { MessageBoxWarning("Stop return error", error); });
-                return false;
-            } else if (!rpcOK) {
-                {
-                    QMutexLocker trafficLock(&NekoGui_traffic::trafficLooper->loop_mutex);
-                    NekoGui_traffic::trafficLooper->loop_enabled.store(trafficLoopWasEnabled);
-                }
-                markStopIndeterminate(
-                    tr("The Stop RPC transport failed; whether the daemon stopped the runtime is unknown."));
-                return false;
             }
         }
 #endif
@@ -1356,6 +1437,7 @@ void MainWindow::neko_stop(bool crash, bool sem, CoreStopReason reason,
                 running_internal_tun = false;
                 running_generation = 0;
                 running_daemon_generation = 0;
+                running_daemon_instance_id.clear();
                 running_config_sha256.clear();
                 running = nullptr;
                 runtime_state_indeterminate = false;

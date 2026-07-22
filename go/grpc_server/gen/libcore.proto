@@ -9,6 +9,8 @@ service LibcoreService {
   //
   rpc Start(LoadConfigReq) returns (ErrorResp) {}
   rpc Stop(EmptyReq) returns (ErrorResp) {}
+  rpc GetDaemonInfo(EmptyReq) returns (DaemonInfoResp) {}
+  rpc ReconcileLifecycle(LifecycleReconcileReq) returns (LifecycleStateResp) {}
   rpc Test(TestReq) returns (TestResp) {}
   rpc QueryStats(QueryStatsReq) returns (QueryStatsResp) {}
   rpc ListConnections(EmptyReq) returns (ListConnectionsResp) {}
@@ -26,6 +28,62 @@ message LoadConfigReq {
   string core_config = 1;
   bool enable_nekoray_connections = 2;
   repeated string stats_outbounds = 3;
+}
+
+message DaemonInfoResp {
+  string daemon_instance_id = 1;
+  uint32 lifecycle_protocol_version = 2;
+}
+
+enum LifecyclePhase {
+  LIFECYCLE_PHASE_UNSPECIFIED = 0;
+  LIFECYCLE_PHASE_STOPPED = 1;
+  LIFECYCLE_PHASE_STARTING = 2;
+  LIFECYCLE_PHASE_ACTIVE = 3;
+  LIFECYCLE_PHASE_STOPPING = 4;
+  LIFECYCLE_PHASE_BLOCKED = 5;
+}
+
+enum LifecycleCommandKind {
+  LIFECYCLE_COMMAND_UNSPECIFIED = 0;
+  LIFECYCLE_COMMAND_START = 1;
+  LIFECYCLE_COMMAND_STOP = 2;
+  LIFECYCLE_COMMAND_EXIT = 3;
+}
+
+enum LifecycleCommandOutcome {
+  LIFECYCLE_OUTCOME_UNSPECIFIED = 0;
+  LIFECYCLE_OUTCOME_SUCCEEDED = 1;
+  LIFECYCLE_OUTCOME_FAILED_CLEAN = 2;
+  LIFECYCLE_OUTCOME_REJECTED_CLEAN = 3;
+  LIFECYCLE_OUTCOME_BLOCKED = 4;
+  LIFECYCLE_OUTCOME_FENCED_NOT_ADMITTED = 5;
+  LIFECYCLE_OUTCOME_SUPERSEDED_UNKNOWN = 6;
+}
+
+message LifecycleReconcileReq {
+  uint64 target_command_sequence = 1;
+  LifecycleCommandKind target_command_kind = 2;
+  string target_config_sha256 = 3;
+}
+
+message LifecycleCommandRecord {
+  uint64 sequence = 1;
+  LifecycleCommandKind kind = 2;
+  LifecycleCommandOutcome outcome = 3;
+  string config_sha256 = 4;
+  bool requested_config_matches = 5;
+}
+
+message LifecycleStateResp {
+  string daemon_instance_id = 1;
+  uint64 ordering_watermark = 2;
+  LifecyclePhase phase = 3;
+  uint64 runtime_generation = 4;
+  bool has_current = 5;
+  uint64 active_start_command_sequence = 6;
+  string current_config_sha256 = 7;
+  LifecycleCommandRecord target_command = 8;
 }
 
 enum TestMode {

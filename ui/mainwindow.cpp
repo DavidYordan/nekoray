@@ -7,6 +7,7 @@
 #include "db/ProfileFilter.hpp"
 #include "db/ConfigBuilder.hpp"
 #include "sub/GroupUpdater.hpp"
+#include "rpc/gRPC.h"
 #include "sys/CoreProcess.hpp"
 #include "sys/AutoRun.hpp"
 
@@ -539,8 +540,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), ui(new Ui::MainWi
                 (void) core_process->QueueProfileStartWhenCoreIsUp(NekoGui::dataStore->remember_id);
             }
             // Setup
-            core_process->Start();
             setup_grpc();
+            core_process->Start();
         },
         DS_cores);
 
@@ -725,29 +726,111 @@ void MainWindow::dialog_message_impl(const QString& sender, const QString& info)
             } else {
                 queue_core_crash_cleanup(daemonGeneration);
             }
-        } else if (info.startsWith("CoreStarted")) {
+        } else if (info.startsWith("CoreListening,")) {
             const auto fields = info.split(',');
             bool daemonGenerationOK = false;
-            bool requestGenerationOK = false;
-            bool profileIdOK = false;
+            bool handshakeAttemptOK = false;
             const auto daemonGeneration = fields.size() == 4
                                               ? fields[1].toULongLong(&daemonGenerationOK)
                                               : 0;
-            const auto requestGeneration = fields.size() == 4
-                                               ? fields[2].toULongLong(&requestGenerationOK)
-                                               : 0;
-            const auto profileId = fields.size() == 4
-                                       ? fields[3].toInt(&profileIdOK)
-                                       : -1;
-            if (!daemonGenerationOK || !requestGenerationOK || !profileIdOK ||
-                daemonGeneration == 0 || requestGeneration == 0 || profileId < 0) {
-                show_log_impl(tr("Ignored a malformed queued core-start event."));
+            const auto daemonInstanceId = fields.size() == 4 ? fields[2].trimmed() : QString{};
+            const auto handshakeAttempt = fields.size() == 4
+                                              ? fields[3].toInt(&handshakeAttemptOK)
+                                              : -1;
+            if (!daemonGenerationOK || daemonGeneration == 0 || daemonInstanceId.isEmpty() ||
+                !handshakeAttemptOK || handshakeAttempt < 0 || handshakeAttempt > 10) {
+                show_log_impl(tr("Ignored a malformed core-listening event."));
             } else {
-                queue_daemon_profile_start({
-                    daemonGeneration,
-                    requestGeneration,
-                    profileId,
-                    true,
+                const auto handshakeKey = QStringLiteral("%1:%2")
+                                              .arg(daemonGeneration)
+                                              .arg(daemonInstanceId);
+                const auto [attemptIt, inserted] = pending_core_handshake_attempts.emplace(
+                    handshakeKey,
+                    handshakeAttempt);
+                if (!inserted) {
+                    if (handshakeAttempt <= attemptIt->second) {
+                        // QProcess::started, stdout/stderr markers and an
+                        // explicit EnsureStarted may all prompt the same
+                        // instance. Keep one bounded retry chain.
+                        return;
+                    }
+                    if (handshakeAttempt != attemptIt->second + 1) {
+                        show_log_impl(tr("Ignored an out-of-order core RPC handshake retry."));
+                        return;
+                    }
+                    attemptIt->second = handshakeAttempt;
+                }
+                runOnNewThread([=] {
+#ifndef NKR_NO_GRPC
+                    bool rpcOK = false;
+                    QString detail;
+                    const auto verified = NekoGui_rpc::defaultClient != nullptr &&
+                                          NekoGui_rpc::defaultClient->VerifyDaemon(
+                                              &rpcOK,
+                                              daemonInstanceId,
+                                              &detail);
+                    runOnUiThread([=] {
+                        if (!verified || !rpcOK) {
+                            const auto current = core_process->CurrentDaemonInstance();
+                            if (current.generation != daemonGeneration ||
+                                current.instanceId != daemonInstanceId.toStdString() ||
+                                current.ready) {
+                                pending_core_handshake_attempts.erase(handshakeKey);
+                                show_log_impl(tr("Ignored a stale core RPC handshake failure."));
+                                return;
+                            }
+                            if (handshakeAttempt < 10) {
+                                const auto nextAttempt = handshakeAttempt + 1;
+                                const auto retryDelayMs = 100 * nextAttempt;
+                                setTimeout(
+                                    [=] {
+                                        const auto retryInstance = core_process->CurrentDaemonInstance();
+                                        if (retryInstance.generation != daemonGeneration ||
+                                            retryInstance.instanceId != daemonInstanceId.toStdString() ||
+                                            retryInstance.ready) {
+                                            pending_core_handshake_attempts.erase(handshakeKey);
+                                            return;
+                                        }
+                                        MW_dialog_message(
+                                            "CoreProcess",
+                                            QStringLiteral("CoreListening,%1,%2,%3")
+                                                .arg(daemonGeneration)
+                                                .arg(daemonInstanceId)
+                                                .arg(nextAttempt));
+                                    },
+                                    this,
+                                    retryDelayMs);
+                                return;
+                            }
+                            pending_core_handshake_attempts.erase(handshakeKey);
+                            show_log_impl(tr(
+                                "Core RPC handshake failed after bounded retries; this daemon remains unavailable and no profile was started: %1")
+                                              .arg(detail));
+                            return;
+                        }
+                        const auto confirmation = core_process->ConfirmDaemonReady(
+                            daemonGeneration,
+                            daemonInstanceId);
+                        if (!confirmation.accepted) {
+                            pending_core_handshake_attempts.erase(handshakeKey);
+                            show_log_impl(tr("Ignored a stale core RPC handshake response."));
+                            return;
+                        }
+                        pending_core_handshake_attempts.erase(handshakeKey);
+                        NekoGui::dataStore->core_running = true;
+                        show_log_impl(tr("Core RPC identity handshake accepted for daemon generation %1.")
+                                          .arg(daemonGeneration));
+                        if (confirmation.profileStart.valid) {
+                            queue_daemon_profile_start(confirmation.profileStart);
+                        }
+                    });
+#else
+                    Q_UNUSED(daemonGeneration)
+                    Q_UNUSED(daemonInstanceId)
+                    runOnUiThread([=] {
+                        pending_core_handshake_attempts.erase(handshakeKey);
+                    });
+#endif
                 });
             }
         }
@@ -1126,7 +1209,7 @@ void MainWindow::refresh_status(const QString& traffic_update) {
     ui->checkBox_VPN->setChecked(tunRequested);
     if (runtime_state_indeterminate && tunWorkerActive) {
         ui->checkBox_VPN->setText(tr("Tun Mode (STATE INDETERMINATE)"));
-        ui->checkBox_VPN->setToolTip(tr("The Start request may have acquired Tun resources, but daemon ownership could not be confirmed. Keep the application running and explicitly disable Tun; only a permitted Stop accepted and sequenced by the responding core may clear this state."));
+        ui->checkBox_VPN->setToolTip(tr("The exact daemon received a Start whose lifecycle outcome or Windows resource state could not be confirmed. Keep the application running and explicitly disable Tun; only a permitted Stop with a stable reconciliation result may clear this state."));
     } else if (tunWorkerActive && tunRequested) {
         ui->checkBox_VPN->setText(tr("Tun Mode (worker active)"));
         ui->checkBox_VPN->setToolTip(tr("The current worker confirmed that its managed Tun configuration started. OS-level continuity is not yet observable."));

@@ -68,7 +68,7 @@
 
 ## 阶段 3：Windows 持久 fail-closed 运行时
 
-本批完成的 lifecycle mutex/generation 只是在现有 GUI/core 进程内封住直接竞态；下列 RuntimeStateMachine、独立 service、stable anchor 和 persistent WFP 仍全部是发布阻断，详见 [ADR 0010](architecture/decisions/0010-process-local-lifecycle-generation-fencing.md)。
+已完成的 lifecycle mutex/generation、daemon UUID 与对账屏障只是在现有 GUI/core 进程内封住直接竞态；下列 RuntimeStateMachine、独立 service、stable anchor 和 persistent WFP 仍全部是发布阻断，详见 [ADR 0010](architecture/decisions/0010-process-local-lifecycle-generation-fencing.md) 与 [ADR 0011](architecture/decisions/0011-daemon-identity-and-lifecycle-reconciliation.md)。
 
 1. [x] 完成本地 sing-box 生命周期调查：当前无原地 reload，选定持久 service + stable anchor + generation 架构。
 2. [ ] 建立单线程 RuntimeStateMachine，分离 desired/observed/owner/health。
@@ -79,8 +79,8 @@
 7. [ ] 系统代理只通过用户手动、按 SID 的 broker操作；关闭时 compare-and-restore完整快照。
 8. [x] 过渡期最终配置拒绝任意 sing-box inbound `set_system_proxy=true`、未授权 TUN，并锁定受管 TUN 完整对象及接口策略；同时拒绝已知系统 endpoint/时钟副作用。`internal-full` 与产品 TUN/辅助并发/测试隔离，默认导出与测试导出均走 OS 副作用 guard。
 9. [x] UI 区分 TUN requested 与 worker-observed 状态；core 崩溃只重启空控制 core，不自动恢复 profile/TUN。该止损不等于持久 OS 状态或 kill-switch。
-10. [x] 建立进程内 lifecycle mutex/generation 基础：GUI 以单一 transition ticket 串行 Start/Stop/CrashCleanup，并在 coordinator mutex 内同步 participating-mutation depth gate，旧 completion/失败获取不能清除新 owner 或 pending cleanup 的 fence；pending crash cleanup 由当前 transition 连续 handoff，不暴露普通操作可抢占的 idle 窗口。daemon/profile-request generation 阻止旧 crash timer/ready event/排队 profile 作用于新进程。legacy gRPC `Call` 的跨线程完成通知已由“一线程 lock、另一线程 unlock”的 `QMutex` 改为 `QSemaphore` release/acquire。Start/Stop/Exit 的 session-local monotonic command sequence 让同一 daemon 的新 Stop/Exit 拒绝迟到旧 Start。Go core 串行 candidate 发布、Stop、dial、stats 和 Exit，并使旧/blocked generation fail closed。`core_running`/`prepare_exit` 已原子化；退出链只在收到响应 daemon 已接受且按序完成的 Stop 后调用 Exit/quit，失败或不确定时恢复 UI 控制并保留 observed runtime。core 崩溃只重启空控制 core，不自动恢复 profile/TUN。该项不拥有 OS 状态，也不等于 expected daemon generation、完整模型锁、RuntimeStateMachine、service、stable anchor、WFP 或无泄漏切线。
-11. [ ] 在受控 core/Runtime 入口重复关键产品策略校验；让 RPC 绑定 expected daemon/runtime generation，并建立真正的端到端 deadline、请求结果不确定后的状态查询/对账，避免盲目重试。GUI 的 Start/Stop HTTP/2 调用现有 30 秒 client abort，只界定 GUI 等待；超时仍按 indeterminate 处理，Go handler 不会据此按 context 中止正在进行的 Start/Stop，也没有服务端状态查询，因此本项未关闭。session-local command sequence 只解决同一 daemon 的命令反超，不是 generation 绑定。token 每个 GUI session 随机但在该会话内 daemon 重启时沿用，既不替代配置授权，也不构成 generation 绑定；进程内 generation 同样不替代持久 runtime transaction。补 QProcess/GUI crash→commit/退出和 HTTP/2 超时集成测试；`MarkProcessReady`/Queue 真并发恰好一次已有纯状态单测。
+10. [x] 建立进程内 lifecycle mutex/generation 与 daemon identity 基础：GUI 以单一 transition ticket 串行 Start/Stop/CrashCleanup；每次 QProcess 启动生成 UUID，所有 RPC 在 handler 前验证该身份，日志只触发 UUID/协议握手，旧进程未确认退出时不发布 replacement identity。Start/Stop/Exit 使用单调 command sequence；更高序号的对账与 lifecycle 命令共用 mutex，并返回目标 command outcome、config hash 和稳定 phase。Go core 串行 candidate 发布、Stop、dial、stats 和 Exit，并使旧/blocked generation fail closed。超时对账成功时只接受精确 active/stopped 结论，再次超时或不一致仍保留 indeterminate。详见 ADR 0010/0011。
+11. [ ] 在受控 core/Runtime 入口重复关键产品策略校验，并建立真正可取消的端到端 deadline 与持久 OS 事实对账。daemon UUID、握手和 process-local `ReconcileLifecycle` 已完成，可防止 reused port/token 把旧请求改绑新 daemon，也可对响应丢失建立排序屏障；但 client abort 仍不会取消正在运行的 Go Start/Stop，对账再次超时仍是 unknown，Exit 尚未 ACK + 等待精确 QProcess finished。还需补 QProcess/GUI crash→commit/退出、真实 HTTP/2 超时、父进程死亡与 Windows 资源集成测试。token/UUID/进程内 generation 均不替代持久 runtime transaction、service 或 WFP，因此本项保持未关闭。
 
 完成门：GUI退出/重启、worker crash、候选启动失败和切线都不改变系统代理/TUN模式，也没有物理直连；失败可以全阻断。
 

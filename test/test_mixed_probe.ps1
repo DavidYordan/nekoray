@@ -7,12 +7,14 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $Root = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
+. (Join-Path $Root "tools\path_safety.ps1")
 $probeScript = Join-Path $Root "tools\verify_mixed_inbound.ps1"
 $coreFull = if ([System.IO.Path]::IsPathRooted($CorePath)) {
     [System.IO.Path]::GetFullPath($CorePath)
 } else {
     [System.IO.Path]::GetFullPath((Join-Path $Root $CorePath))
 }
+$coreFull = Assert-PathOutsideProtectedProduction $coreFull "Mixed-probe core executable"
 if (!(Test-Path -LiteralPath $probeScript -PathType Leaf)) { throw "Probe script not found: $probeScript" }
 if (!(Test-Path -LiteralPath $coreFull -PathType Leaf)) { throw "Core not found: $coreFull" }
 
@@ -92,9 +94,16 @@ $originPort = 18090
 $originScript = Join-Path $PSScriptRoot "fixtures\http_204_server.py"
 if (!(Test-Path -LiteralPath $originScript -PathType Leaf)) { throw "Origin fixture not found: $originScript" }
 if (@(Get-ListenerSnapshot @($originPort)).Count -gt 0) { throw "Origin fixture port is already occupied: $originPort" }
+$tempRoot = Assert-PathOutsideProtectedProduction `
+    ([IO.Path]::GetFullPath([IO.Path]::GetTempPath())) `
+    "Mixed-probe fixture temporary root"
 $originId = [Guid]::NewGuid().ToString("N")
-$originStdout = Join-Path ([IO.Path]::GetTempPath()) "nekoray-origin-$originId.stdout.log"
-$originStderr = Join-Path ([IO.Path]::GetTempPath()) "nekoray-origin-$originId.stderr.log"
+$originStdout = Assert-NewFileOutsideProtectedProduction `
+    (Join-Path $tempRoot "nekoray-origin-$originId.stdout.log") `
+    "Mixed-probe fixture stdout path"
+$originStderr = Assert-NewFileOutsideProtectedProduction `
+    (Join-Path $tempRoot "nekoray-origin-$originId.stderr.log") `
+    "Mixed-probe fixture stderr path"
 $originProcess = $null
 $script:OriginUrl = "http://127.0.0.1:$originPort/health"
 $extraBefore = @(Get-ListenerSnapshot @(18082, 18083))

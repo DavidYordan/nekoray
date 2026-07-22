@@ -24,6 +24,8 @@ Get-NetTCPConnection -State Listen -LocalPort 12080 |
 
 结果必须回查 PID 的 `ExecutablePath`。`2080` 可用只能证明外部生产实例在工作，不能证明本项目成功；`12080` 未监听则先查本项目是否启动、配置 schema、端口占用和 core 日志。
 
+GUI 与 `nekobox_core.exe` 必须来自同一轮构建。每次 core 启动后，日志中的 `grpc server listening` 只会触发控制面探测；只有出现 `Core RPC identity handshake accepted for daemon generation ...` 才表示 GUI 已核对 UUID 和协议版本并允许发送 Start。握手失败会明确记录 bounded retry 后仍 unavailable，旧 core/新 GUI 组合不会兼容回退。即便握手成功，也只表示精确控制 daemon 可用，不表示 profile 已启动、`12080` 已监听或线路/TUN/WFP 健康。
+
 配置端口位于 `<package-dir>/config/groups/nekobox.json`。UI 显示的 `Mixed: 地址:端口` 只是配置值，不是健康状态。
 
 ## 2. 核对端口到逻辑线路
@@ -71,7 +73,9 @@ powershell -NoProfile -ExecutionPolicy Bypass `
   -ConfigPath <exported-config.json> -Json
 ```
 
-脚本只支持主 `mixed-in -> proxy` 连通性诊断，传入其它 `InboundTag` 会拒绝；它不是辅助端口映射 contract 测试器。脚本只保留目标 loopback Mixed 和从 `proxy` 可达的精确 outbound detour 闭包，拒绝 TUN、非空 top-level endpoints、`ntp.write_to_system=true` 与占用端口，并移除无系统写入的 NTP 服务。它核对监听 PID，并只结束自己创建的精确 PID。诊断选项只修改临时副本：
+脚本只支持主 `mixed-in -> proxy` 连通性诊断，传入其它 `InboundTag` 会拒绝；它不是辅助端口映射 contract 测试器。脚本只保留目标 loopback Mixed 和从 `proxy` 可达的精确 outbound detour 闭包，拒绝 TUN、非空 top-level endpoints、`ntp.write_to_system=true` 与占用端口，并移除无系统写入的 NTP 服务。它核对监听 PID，并只结束自己创建的精确 PID。`CorePath`、配置和临时路径规范化后必须解析为本地固定磁盘的盘符路径；共享护栏拒绝生产根、UNC/设备路径、网络映射或可移动盘、SUBST/DOS 设备重定向、8.3 短路径与 ReparsePoint/junction，并会比对与 `D:` 指向同一物理卷的盘符别名。诊断选项只修改临时副本：
+
+这个护栏不通过最终文件句柄验证 final-file identity，所以不能识别所有已存在 hardlink。不要把另一路径下的同文件当作隔离副本；对可执行文件、输入配置和临时根仍需核对实际来源。
 
 ```powershell
 # 底层接口对照；不是逻辑线路自动选择，也不保证绕过生产 TUN

@@ -16,6 +16,7 @@ $Root = Split-Path -Parent $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($Root)) {
     $Root = (Get-Location).Path
 }
+. (Join-Path $PSScriptRoot "path_safety.ps1")
 
 function Get-FullPath([string] $Path) {
     if ([System.IO.Path]::IsPathRooted($Path)) {
@@ -32,16 +33,19 @@ function Require-File([string] $Path, [string] $Name) {
 }
 
 $packageFull = Get-FullPath $PackageDir
+$packageFull = Assert-PathOutsideProtectedProduction $packageFull "Profile-export package directory"
+Assert-DirectoryTreeHasNoReparsePoints $packageFull "Profile-export package tree"
 $nekobox = Require-File (Join-Path $packageFull "nekobox.exe") "nekobox.exe"
 $core = Require-File (Join-Path $packageFull "nekobox_core.exe") "nekobox_core.exe"
 
 if ([string]::IsNullOrWhiteSpace($OutputPath)) {
     $auditDir = Join-Path $packageFull "runtime_audit"
-    New-Item -ItemType Directory -Path $auditDir -Force | Out-Null
-    $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
-    $OutputPath = Join-Path $auditDir "profile_${ProfileId}_core_config_$stamp.json"
+    $stamp = Get-Date -Format "yyyyMMdd_HHmmss_fff"
+    $uniqueId = [Guid]::NewGuid().ToString("N").Substring(0, 8)
+    $OutputPath = Join-Path $auditDir "profile_${ProfileId}_core_config_${stamp}_${uniqueId}.json"
 }
 $outputFull = Get-FullPath $OutputPath
+$outputFull = Assert-NewFileOutsideProtectedProduction $outputFull "Profile-export output"
 $outputDir = Split-Path -Parent $outputFull
 New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
 

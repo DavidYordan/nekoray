@@ -76,9 +76,10 @@ namespace NekoGui_Runtime {
         return currentGeneration;
     }
 
-    std::uint64_t DaemonGenerationState::BeginProcessStart() {
+    std::uint64_t DaemonGenerationState::BeginProcessStart(const std::string& newInstanceId) {
         std::lock_guard<std::mutex> lock(mutex);
         ++generation;
+        instanceId = newInstanceId;
         ready = false;
         emittedProfile = {};
         if (queuedProfile.valid) queuedProfile.daemonGeneration = generation;
@@ -111,21 +112,28 @@ namespace NekoGui_Runtime {
         return hadQueuedProfile;
     }
 
-    DaemonProfileStartRequest DaemonGenerationState::MarkProcessReady() {
+    DaemonReadyResult DaemonGenerationState::MarkProcessReady(
+        std::uint64_t expectedGeneration,
+        const std::string& expectedInstanceId) {
         std::lock_guard<std::mutex> lock(mutex);
-        if (generation == 0) return {};
+        if (generation == 0 || expectedGeneration != generation ||
+            expectedInstanceId.empty() || expectedInstanceId != instanceId) {
+            return {};
+        }
+        if (ready) return {true, {}};
         ready = true;
         if (!queuedProfile.valid || queuedProfile.daemonGeneration != generation) {
-            return {};
+            return {true, {}};
         }
         emittedProfile = queuedProfile;
         queuedProfile = {};
-        return emittedProfile;
+        return {true, emittedProfile};
     }
 
     std::uint64_t DaemonGenerationState::MarkProcessStopped() {
         std::lock_guard<std::mutex> lock(mutex);
         ready = false;
+        instanceId.clear();
         queuedProfile = {};
         emittedProfile = {};
         return generation;
@@ -163,5 +171,10 @@ namespace NekoGui_Runtime {
     std::uint64_t DaemonGenerationState::CurrentGeneration() const {
         std::lock_guard<std::mutex> lock(mutex);
         return generation;
+    }
+
+    DaemonInstanceSnapshot DaemonGenerationState::CurrentInstance() const {
+        std::lock_guard<std::mutex> lock(mutex);
+        return {generation, instanceId, ready};
     }
 } // namespace NekoGui_Runtime

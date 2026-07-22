@@ -7,12 +7,14 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $Root = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
+. (Join-Path $Root "tools\path_safety.ps1")
 $auditScript = Join-Path $Root "tools\verify_runtime_connectivity.ps1"
 $coreFull = if ([System.IO.Path]::IsPathRooted($CorePath)) {
     [System.IO.Path]::GetFullPath($CorePath)
 } else {
     [System.IO.Path]::GetFullPath((Join-Path $Root $CorePath))
 }
+$coreFull = Assert-PathOutsideProtectedProduction $coreFull "Runtime-connectivity core executable"
 $runtimeFixture = Join-Path $PSScriptRoot "fixtures\runtime-connectivity-direct.json"
 $groupsFixture = Join-Path $PSScriptRoot "fixtures\runtime-connectivity-groups.json"
 $listenPort = 18087
@@ -58,9 +60,13 @@ function Invoke-Audit([int] $ExpectedStatus, [string] $OutputPath) {
     }
 }
 
-$tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) "nekoray-runtime-connectivity-test-$([Guid]::NewGuid().ToString('N'))"
-$tempRoot = [System.IO.Path]::GetFullPath($tempRoot)
-$expectedPrefix = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd('\') + "\nekoray-runtime-connectivity-test-"
+$safeTempRoot = Assert-PathOutsideProtectedProduction `
+    ([System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())) `
+    "Runtime-connectivity temporary root"
+$tempRoot = Assert-PathOutsideProtectedProduction `
+    (Join-Path $safeTempRoot "nekoray-runtime-connectivity-test-$([Guid]::NewGuid().ToString('N'))") `
+    "Runtime-connectivity temporary test directory"
+$expectedPrefix = $safeTempRoot.TrimEnd('\') + "\nekoray-runtime-connectivity-test-"
 if (!$tempRoot.StartsWith($expectedPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
     throw "Unsafe temporary path: $tempRoot"
 }
@@ -169,6 +175,7 @@ try {
         if (!$resolved.StartsWith($expectedPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
             throw "Refusing unsafe cleanup: $resolved"
         }
+        Assert-DirectoryTreeHasNoReparsePoints $resolved "Runtime-connectivity cleanup tree"
         Get-ChildItem -LiteralPath $resolved -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object {
             try { $_.Attributes = "Normal" } catch {}
         }

@@ -78,9 +78,9 @@ foreach ($file in $workflowFiles) {
 }
 
 $powershellFiles = @(
-    Get-ChildItem -LiteralPath $repoRoot -File -Filter *.ps1
-    Get-ChildItem -LiteralPath (Join-Path $repoRoot "test") -Recurse -File -Filter *.ps1 -ErrorAction SilentlyContinue
-    Get-ChildItem -LiteralPath (Join-Path $repoRoot "tools") -Recurse -File -Filter *.ps1 -ErrorAction SilentlyContinue
+    $tracked |
+        Where-Object { [IO.Path]::GetExtension($_).Equals(".ps1", [StringComparison]::OrdinalIgnoreCase) } |
+        ForEach-Object { Get-Item -LiteralPath (Join-Path $repoRoot $_) }
 )
 foreach ($file in $powershellFiles) {
     $tokens = $null
@@ -88,6 +88,36 @@ foreach ($file in $powershellFiles) {
     [Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref] $tokens, [ref] $errors) | Out-Null
     foreach ($parseError in $errors) {
         Add-Failure "$($file.FullName):$($parseError.Extent.StartLineNumber): $($parseError.Message)"
+    }
+}
+
+$pathSafetyScript = Join-Path $repoRoot "tools\path_safety.ps1"
+. $pathSafetyScript
+try {
+    $safePath = Assert-PathOutsideProtectedProduction $repoRoot "Repository root"
+    if (!$safePath.Equals([IO.Path]::GetFullPath($repoRoot).TrimEnd('\', '/'),
+            [StringComparison]::OrdinalIgnoreCase)) {
+        Add-Failure "production path guard changed the safe repository path: $safePath"
+    }
+} catch {
+    Add-Failure "production path guard rejected the repository root: $($_.Exception.Message)"
+}
+$forbiddenProductionPaths = @(
+    'D:\Program Files\nekoray',
+    'D:\Program Files\nekoray\nekobox.exe',
+    'D:\PROGRA~1\nekoray\nekobox.exe',
+    '\\localhost\d$\Program Files\nekoray\nekobox.exe',
+    '\\?\D:\Program Files\nekoray\nekobox.exe',
+    'D:\Program Files\nekoray ',
+    'D:\Program Files\nekoray.\nekobox.exe',
+    'D:\Program Files\nekoray:shadow\report.json'
+)
+foreach ($forbiddenPath in $forbiddenProductionPaths) {
+    try {
+        $null = Assert-PathOutsideProtectedProduction $forbiddenPath "Self-test path"
+        Add-Failure "production path guard accepted forbidden path: $forbiddenPath"
+    } catch {
+        # Expected: exact/subtree paths and ambiguous short-name paths fail.
     }
 }
 
@@ -166,6 +196,7 @@ $result = [ordered]@{
     passed = $failures.Count -eq 0
     tracked_files = $tracked.Count
     powershell_files = $powershellFiles.Count
+    production_path_guards = 1 + $forbiddenProductionPaths.Count
     json_fixtures = $jsonFixtures.Count
     markdown_files = $markdownFiles.Count
     local_markdown_links = $linkCount

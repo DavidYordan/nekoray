@@ -107,7 +107,7 @@ AnyTLS 对照每次单独运行，不能把多个变量合并成一个结论：
 | 移除 detour，并改用原生 AnyTLS client | 整轮失败 | 服务端返回 internal error | 不能把“移除 client 标记”作为修复 |
 | 独立 profile 2 Trojan（完整对象与 `g-2` 相同） | HTTP/CONNECT/SOCKS5h 均为 204 | 三种入口协议均命中目标 outbound | detour 对象本身可用 |
 
-这组对照已排除“Mixed 根本不能连接”、AnyTLS mihomo client 单独不可用、以及 `g-2` Trojan 对象单独不可用。现有证据把故障收敛到 “AnyTLS mihomo client 经 `g-2` detour” 这一组合或其生成/运行语义；它尚不能单独证明具体是哪一层实现缺陷。
+这组对照只排除了“相同 core 的 loopback Mixed listener 根本不能连接”、AnyTLS mihomo client 单独不可用、以及 `g-2` Trojan 对象单独不可用。它不覆盖 Windows GUI→core ready/Start 控制链；旧 GUI 的 stdout-only ready 缺陷可独立造成产品 `12080` 从未启动。对已经发送 Start 的配置，现有证据把故障收敛到 “AnyTLS mihomo client 经 `g-2` detour” 这一组合或其生成/运行语义；它尚不能单独证明具体是哪一层实现缺陷。
 
 ## 结果解释
 

@@ -2,14 +2,18 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
 	"net"
 	"os"
 	"strconv"
+	"strings"
 
 	"grpc_server"
+	"grpc_server/auth"
 	"grpc_server/gen"
 
 	"github.com/matsuridayo/libneko/neko_common"
@@ -108,12 +112,124 @@ func (s *server) Start(ctx context.Context, in *gen.LoadConfigReq) (out *gen.Err
 		out.Error = err.Error()
 		return
 	}
-	if err := activeCoreLifecycle.start(commandSequence, func() (*managedCore, error) {
+	configSHA256 := ""
+	if in != nil {
+		configSHA256 = fmt.Sprintf("%x", sha256.Sum256([]byte(in.CoreConfig)))
+	}
+	if err := activeCoreLifecycle.start(commandSequence, configSHA256, func() (*managedCore, error) {
 		return buildCoreCandidate(in)
 	}); err != nil {
 		out.Error = err.Error()
 	}
 	return
+}
+
+func lifecycleCommandKindFromProto(kind gen.LifecycleCommandKind) coreLifecycleCommandKind {
+	switch kind {
+	case gen.LifecycleCommandKind_LIFECYCLE_COMMAND_START:
+		return coreLifecycleCommandStart
+	case gen.LifecycleCommandKind_LIFECYCLE_COMMAND_STOP:
+		return coreLifecycleCommandStop
+	case gen.LifecycleCommandKind_LIFECYCLE_COMMAND_EXIT:
+		return coreLifecycleCommandExit
+	default:
+		return coreLifecycleCommandUnspecified
+	}
+}
+
+func lifecyclePhaseToProto(phase coreLifecyclePhase) gen.LifecyclePhase {
+	switch phase {
+	case coreLifecycleStopped:
+		return gen.LifecyclePhase_LIFECYCLE_PHASE_STOPPED
+	case coreLifecycleStarting:
+		return gen.LifecyclePhase_LIFECYCLE_PHASE_STARTING
+	case coreLifecycleActive:
+		return gen.LifecyclePhase_LIFECYCLE_PHASE_ACTIVE
+	case coreLifecycleStopping:
+		return gen.LifecyclePhase_LIFECYCLE_PHASE_STOPPING
+	case coreLifecycleBlocked:
+		return gen.LifecyclePhase_LIFECYCLE_PHASE_BLOCKED
+	default:
+		return gen.LifecyclePhase_LIFECYCLE_PHASE_UNSPECIFIED
+	}
+}
+
+func lifecycleCommandKindToProto(kind coreLifecycleCommandKind) gen.LifecycleCommandKind {
+	switch kind {
+	case coreLifecycleCommandStart:
+		return gen.LifecycleCommandKind_LIFECYCLE_COMMAND_START
+	case coreLifecycleCommandStop:
+		return gen.LifecycleCommandKind_LIFECYCLE_COMMAND_STOP
+	case coreLifecycleCommandExit:
+		return gen.LifecycleCommandKind_LIFECYCLE_COMMAND_EXIT
+	default:
+		return gen.LifecycleCommandKind_LIFECYCLE_COMMAND_UNSPECIFIED
+	}
+}
+
+func lifecycleCommandOutcomeToProto(outcome coreLifecycleCommandOutcome) gen.LifecycleCommandOutcome {
+	switch outcome {
+	case coreLifecycleOutcomeSucceeded:
+		return gen.LifecycleCommandOutcome_LIFECYCLE_OUTCOME_SUCCEEDED
+	case coreLifecycleOutcomeFailedClean:
+		return gen.LifecycleCommandOutcome_LIFECYCLE_OUTCOME_FAILED_CLEAN
+	case coreLifecycleOutcomeRejectedClean:
+		return gen.LifecycleCommandOutcome_LIFECYCLE_OUTCOME_REJECTED_CLEAN
+	case coreLifecycleOutcomeBlocked:
+		return gen.LifecycleCommandOutcome_LIFECYCLE_OUTCOME_BLOCKED
+	case coreLifecycleOutcomeFencedNotAdmitted:
+		return gen.LifecycleCommandOutcome_LIFECYCLE_OUTCOME_FENCED_NOT_ADMITTED
+	case coreLifecycleOutcomeSupersededUnknown:
+		return gen.LifecycleCommandOutcome_LIFECYCLE_OUTCOME_SUPERSEDED_UNKNOWN
+	default:
+		return gen.LifecycleCommandOutcome_LIFECYCLE_OUTCOME_UNSPECIFIED
+	}
+}
+
+func (s *server) ReconcileLifecycle(
+	ctx context.Context,
+	in *gen.LifecycleReconcileReq,
+) (*gen.LifecycleStateResp, error) {
+	if in == nil {
+		return nil, status.Error(codes.InvalidArgument, "lifecycle reconcile request is missing")
+	}
+	if len(in.TargetConfigSha256) != sha256.Size*2 ||
+		in.TargetConfigSha256 != strings.ToLower(in.TargetConfigSha256) {
+		return nil, status.Error(codes.InvalidArgument, "target config SHA-256 must be lowercase hexadecimal")
+	}
+	if _, err := hex.DecodeString(in.TargetConfigSha256); err != nil {
+		return nil, status.Error(codes.InvalidArgument, "target config SHA-256 must be lowercase hexadecimal")
+	}
+	barrierSequence, err := lifecycleCommandSequence(ctx)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	targetKind := lifecycleCommandKindFromProto(in.TargetCommandKind)
+	snapshot, err := activeCoreLifecycle.reconcile(
+		barrierSequence,
+		in.TargetCommandSequence,
+		targetKind,
+		in.TargetConfigSha256,
+	)
+	if err != nil {
+		return nil, status.Error(codes.FailedPrecondition, err.Error())
+	}
+	return &gen.LifecycleStateResp{
+		DaemonInstanceId:           auth.DaemonInstanceID(ctx),
+		OrderingWatermark:          snapshot.orderingWatermark,
+		Phase:                      lifecyclePhaseToProto(snapshot.phase),
+		RuntimeGeneration:          snapshot.runtimeGeneration,
+		HasCurrent:                 snapshot.hasCurrent,
+		ActiveStartCommandSequence: snapshot.activeStartCommandSequence,
+		CurrentConfigSha256:        snapshot.currentConfigSHA256,
+		TargetCommand: &gen.LifecycleCommandRecord{
+			Sequence:               snapshot.targetCommand.sequence,
+			Kind:                   lifecycleCommandKindToProto(snapshot.targetCommand.kind),
+			Outcome:                lifecycleCommandOutcomeToProto(snapshot.targetCommand.outcome),
+			ConfigSha256:           snapshot.targetCommand.configSHA256,
+			RequestedConfigMatches: snapshot.targetConfigMatches,
+		},
+	}, nil
 }
 
 func (s *server) Stop(ctx context.Context, in *gen.EmptyReq) (out *gen.ErrorResp, _ error) {

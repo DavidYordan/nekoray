@@ -17,6 +17,9 @@ $Root = $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($Root)) {
     $Root = (Get-Location).Path
 }
+. (Join-Path $Root "tools\path_safety.ps1")
+$Root = Assert-PathOutsideProtectedProduction $Root "Repository root"
+$SafeTempRoot = Assert-PathOutsideProtectedProduction ([IO.Path]::GetFullPath([IO.Path]::GetTempPath())) "Windows package temporary directory"
 $RouteFluentSingBoxVersion = "1.13.12-routefluent-anytls-client.7"
 $RouteFluentSingBoxPatchId = "routefluent-anytls-client-dns-resolver-group-check-v1"
 $RouteFluentSingBoxFeatures = @(
@@ -69,36 +72,6 @@ function Get-FullPath([string] $Path) {
     return [System.IO.Path]::GetFullPath((Join-Path $Root $Path))
 }
 
-function Assert-ReferenceDirIsNotProduction([string] $Path) {
-    $candidate = [System.IO.Path]::GetFullPath($Path).TrimEnd('\', '/')
-    $protected = [System.IO.Path]::GetFullPath('D:\Program Files\nekoray').TrimEnd('\', '/')
-    $candidateRoot = [System.IO.Path]::GetPathRoot($candidate)
-    $candidateParts = $candidate.Substring($candidateRoot.Length) -split '[\\/]'
-    if ($candidateParts | Where-Object { $_.Contains('~') }) {
-        Fail "ReferenceDir rejects ambiguous Windows short-name components: $candidate"
-    }
-    if ($candidate.Equals($protected, [StringComparison]::OrdinalIgnoreCase) -or
-        $candidate.StartsWith($protected + [System.IO.Path]::DirectorySeparatorChar,
-                              [StringComparison]::OrdinalIgnoreCase)) {
-        Fail "ReferenceDir must not read from the protected production NekoRay installation: $candidate"
-    }
-}
-
-function Assert-ReferenceDirHasNoReparseComponents([string] $Path) {
-    $candidate = [System.IO.Path]::GetFullPath($Path)
-    $pathRoot = [System.IO.Path]::GetPathRoot($candidate)
-    $current = $pathRoot
-    foreach ($component in ($candidate.Substring($pathRoot.Length) -split '[\\/]')) {
-        if ([string]::IsNullOrWhiteSpace($component)) { continue }
-        $current = Join-Path $current $component
-        if (!(Test-Path -LiteralPath $current)) { return }
-        $item = Get-Item -LiteralPath $current -Force -ErrorAction Stop
-        if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-            Fail "ReferenceDir rejects reparse/junction components: $current"
-        }
-    }
-}
-
 function Require-File([string] $Path, [string] $Name) {
     if (!(Test-Path -LiteralPath $Path -PathType Leaf)) {
         Fail "$Name not found: $Path"
@@ -114,12 +87,13 @@ function Require-Directory([string] $Path, [string] $Name) {
 }
 
 function Remove-SafeDirectory([string] $Path, [string] $AllowedRoot) {
-    $full = [System.IO.Path]::GetFullPath($Path)
-    $allowed = [System.IO.Path]::GetFullPath($AllowedRoot).TrimEnd('\')
+    $full = Assert-PathOutsideProtectedProduction ([System.IO.Path]::GetFullPath($Path)) "Recursive removal target"
+    $allowed = (Assert-PathOutsideProtectedProduction ([System.IO.Path]::GetFullPath($AllowedRoot)) "Recursive removal boundary").TrimEnd('\')
     if (!$full.StartsWith($allowed + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
         Fail "Refusing to remove directory outside allowed root: $full"
     }
     if (Test-Path -LiteralPath $full) {
+        Assert-DirectoryTreeHasNoReparsePoints $full "Recursive removal target"
         Remove-Item -LiteralPath $full -Recurse -Force
     }
 }
@@ -161,61 +135,87 @@ function Assert-PackageNotRunning([string] $PackageDir) {
     )
 }
 
-function Backup-PackageConfig([string] $PackageConfigDir, [string] $PackageConfigBackupDir, [string] $DeployRoot) {
-    Remove-SafeDirectory $PackageConfigBackupDir $DeployRoot
+function Backup-PackageConfig([string] $PackageConfigDir, [string] $PackageConfigBackupDir) {
+    if (Test-Path -LiteralPath $PackageConfigBackupDir) {
+        Fail "Stale package config backup exists and must be reviewed manually before building: $PackageConfigBackupDir"
+    }
     if (!(Test-Path -LiteralPath $PackageConfigDir -PathType Container)) {
         Write-Host "No existing package config to preserve."
-        return
+        return $false
     }
 
-    Copy-Item -LiteralPath $PackageConfigDir -Destination $PackageConfigBackupDir -Recurse -Force
+    Assert-DirectoryTreeHasNoReparsePoints $PackageConfigDir "Package config backup source"
+    try {
+        Copy-Item -LiteralPath $PackageConfigDir -Destination $PackageConfigBackupDir -Recurse -Force
+    } catch {
+        if (Test-Path -LiteralPath $PackageConfigBackupDir) {
+            Remove-SafeDirectory $PackageConfigBackupDir (Split-Path -Parent $PackageConfigBackupDir)
+        }
+        throw
+    }
     $fileCount = (Get-ChildItem -LiteralPath $PackageConfigBackupDir -Recurse -File -Force | Measure-Object).Count
     Write-Host "Preserved package config: $PackageConfigBackupDir ($fileCount file(s))"
+    return $true
 }
 
-function Restore-PackageConfig([string] $PackageConfigDir, [string] $PackageConfigBackupDir, [string] $PackageDir, [string] $DeployRoot) {
+function Restore-PackageConfig([string] $PackageConfigDir, [string] $PackageConfigBackupDir, [string] $PackageDir) {
     if (!(Test-Path -LiteralPath $PackageConfigBackupDir -PathType Container)) {
-        return
+        Fail "Owned package config backup is missing or is not a directory: $PackageConfigBackupDir"
     }
 
+    Assert-DirectoryTreeHasNoReparsePoints $PackageConfigBackupDir "Package config restore source"
     New-Item -ItemType Directory -Force -Path $PackageDir | Out-Null
     Remove-SafeDirectory $PackageConfigDir $PackageDir
     Copy-Item -LiteralPath $PackageConfigBackupDir -Destination $PackageConfigDir -Recurse -Force
     $fileCount = (Get-ChildItem -LiteralPath $PackageConfigDir -Recurse -File -Force | Measure-Object).Count
     Write-Host "Restored package config: $PackageConfigDir ($fileCount file(s))"
-    Remove-SafeDirectory $PackageConfigBackupDir $DeployRoot
 }
 
-function Backup-PackageBinaries([string] $PackageDir, [string] $PackageBinaryBackupDir, [string] $DeployRoot) {
-    Remove-SafeDirectory $PackageBinaryBackupDir $DeployRoot
-    New-Item -ItemType Directory -Force -Path $PackageBinaryBackupDir | Out-Null
-    $copied = 0
+function Backup-PackageBinaries([string] $PackageDir, [string] $PackageBinaryBackupDir) {
+    if (Test-Path -LiteralPath $PackageBinaryBackupDir) {
+        Fail "Stale package binary backup exists and must be reviewed manually before building: $PackageBinaryBackupDir"
+    }
+    Assert-DirectoryTreeHasNoReparsePoints $PackageDir "Package binary backup source"
+    $sources = @()
     foreach ($name in @("updater.exe", "nekobox_core.exe")) {
-        $source = Join-Path $PackageDir $name
+        $source = Assert-PathOutsideProtectedProduction (Join-Path $PackageDir $name) "Package binary backup source file"
         if (Test-Path -LiteralPath $source -PathType Leaf) {
-            Copy-Item -LiteralPath $source -Destination (Join-Path $PackageBinaryBackupDir $name) -Force
-            $copied++
+            $sources += [pscustomobject]@{ name = $name; path = $source }
         }
     }
-    if ($copied -eq 0) {
+    if ($sources.Count -eq 0) {
         Write-Warning "SkipGoBuild requested but no existing Go binaries were found under $PackageDir."
-    } else {
-        Write-Host "Preserved package Go binaries: $PackageBinaryBackupDir ($copied file(s))"
+        return $false
     }
+
+    New-Item -ItemType Directory -Path $PackageBinaryBackupDir | Out-Null
+    try {
+        foreach ($sourceInfo in $sources) {
+            $destination = Assert-NewFileOutsideProtectedProduction (Join-Path $PackageBinaryBackupDir $sourceInfo.name) "Package binary backup destination"
+            Copy-Item -LiteralPath $sourceInfo.path -Destination $destination
+        }
+    } catch {
+        Remove-SafeDirectory $PackageBinaryBackupDir (Split-Path -Parent $PackageBinaryBackupDir)
+        throw
+    }
+    Write-Host "Preserved package Go binaries: $PackageBinaryBackupDir ($($sources.Count) file(s))"
+    return $true
 }
 
-function Restore-PackageBinaries([string] $PackageDir, [string] $PackageBinaryBackupDir, [string] $DeployRoot) {
+function Restore-PackageBinaries([string] $PackageDir, [string] $PackageBinaryBackupDir) {
     if (!(Test-Path -LiteralPath $PackageBinaryBackupDir -PathType Container)) {
-        return
+        Fail "Owned package binary backup is missing or is not a directory: $PackageBinaryBackupDir"
     }
+    Assert-DirectoryTreeHasNoReparsePoints $PackageBinaryBackupDir "Package binary restore source"
+    $PackageDir = Assert-PathOutsideProtectedProduction $PackageDir "Package binary restore directory"
     New-Item -ItemType Directory -Force -Path $PackageDir | Out-Null
     foreach ($name in @("updater.exe", "nekobox_core.exe")) {
-        $source = Join-Path $PackageBinaryBackupDir $name
+        $source = Assert-PathOutsideProtectedProduction (Join-Path $PackageBinaryBackupDir $name) "Package binary restore source file"
         if (Test-Path -LiteralPath $source -PathType Leaf) {
-            Copy-Item -LiteralPath $source -Destination (Join-Path $PackageDir $name) -Force
+            $destination = Initialize-NewBuildFile (Join-Path $PackageDir $name) "Package binary restore destination"
+            Copy-Item -LiteralPath $source -Destination $destination
         }
     }
-    Remove-SafeDirectory $PackageBinaryBackupDir $DeployRoot
 }
 
 function Find-QtDir {
@@ -277,15 +277,12 @@ function Download-Or-Fallback {
         [switch] $Refresh
     )
 
-    $target = Join-Path $TargetDir $Name
+    $target = Assert-PathOutsideProtectedProduction (Join-Path $TargetDir $Name) "Downloaded package resource"
     if (!$Refresh -and (Test-Path -LiteralPath $target) -and ((Get-Item -LiteralPath $target).Length -gt 0)) {
         return
     }
 
-    $tmp = "$target.download"
-    if (Test-Path -LiteralPath $tmp) {
-        Remove-Item -LiteralPath $tmp -Force
-    }
+    $tmp = Initialize-NewBuildFile "$target.download" "Package resource download staging file"
 
     try {
         Write-Host "Downloading $Name"
@@ -293,7 +290,8 @@ function Download-Or-Fallback {
         if (!(Test-Path -LiteralPath $tmp) -or ((Get-Item -LiteralPath $tmp).Length -le 0)) {
             Fail "Downloaded file is empty: $Name"
         }
-        Move-Item -LiteralPath $tmp -Destination $target -Force
+        $newTarget = Initialize-NewBuildFile $target "Downloaded package resource"
+        Move-Item -LiteralPath $tmp -Destination $newTarget
         return
     } catch {
         if (Test-Path -LiteralPath $tmp) {
@@ -306,7 +304,7 @@ function Download-Or-Fallback {
         }
         if (![string]::IsNullOrWhiteSpace($fallback) -and (Test-Path -LiteralPath $fallback -PathType Leaf)) {
             Write-Warning "Download failed for $Name, using reference copy: $fallback"
-            Copy-Item -LiteralPath $fallback -Destination $target -Force
+            Copy-BuildFile $fallback $target "Fallback package resource"
             return
         }
         throw
@@ -315,8 +313,28 @@ function Download-Or-Fallback {
 
 function Copy-IfExists([string] $Source, [string] $DestinationDir) {
     if (Test-Path -LiteralPath $Source -PathType Leaf) {
-        Copy-Item -LiteralPath $Source -Destination $DestinationDir -Force
+        Copy-BuildFile $Source (Join-Path $DestinationDir ([IO.Path]::GetFileName($Source))) "Optional package dependency"
     }
+}
+
+function Initialize-NewBuildFile([string] $Path, [string] $Purpose) {
+    $safePath = Assert-PathOutsideProtectedProduction ([IO.Path]::GetFullPath($Path)) $Purpose
+    if (Test-Path -LiteralPath $safePath) {
+        if (Test-Path -LiteralPath $safePath -PathType Container) {
+            Fail "$Purpose expected a file but found a directory: $safePath"
+        }
+        Remove-Item -LiteralPath $safePath -Force
+    }
+    return Assert-NewFileOutsideProtectedProduction $safePath $Purpose
+}
+
+function Copy-BuildFile([string] $Source, [string] $Destination, [string] $Purpose) {
+    $safeSource = Assert-PathOutsideProtectedProduction ([IO.Path]::GetFullPath($Source)) "$Purpose source"
+    if (!(Test-Path -LiteralPath $safeSource -PathType Leaf)) {
+        Fail "$Purpose source file not found: $safeSource"
+    }
+    $safeDestination = Initialize-NewBuildFile $Destination "$Purpose destination"
+    Copy-Item -LiteralPath $safeSource -Destination $safeDestination
 }
 
 function Require-PackageFile([string] $RelativePath) {
@@ -356,60 +374,87 @@ function Assert-RouteFluentManifest([string] $ManifestPath) {
     }
 }
 
+$packageConfigBackupOwned = $false
+$packageBinaryBackupOwned = $false
+$packageReplacementStarted = $false
 Push-Location $Root
 try {
     Write-Step "Resolve local toolchain"
 
     $QtDir = Find-QtDir $QtDir
     $MingwDir = Find-MingwDir $MingwDir
-    $QtBin = Join-Path $QtDir "bin"
-    $MingwBin = Join-Path $MingwDir "bin"
+    $QtDir = Assert-PathOutsideProtectedProduction $QtDir "Qt toolchain directory"
+    $MingwDir = Assert-PathOutsideProtectedProduction $MingwDir "MinGW toolchain directory"
+    $QtBin = Assert-PathOutsideProtectedProduction (Join-Path $QtDir "bin") "Qt executable directory"
+    $MingwBin = Assert-PathOutsideProtectedProduction (Join-Path $MingwDir "bin") "MinGW executable directory"
+    $WinDeployQt = Assert-PathOutsideProtectedProduction (Require-File (Join-Path $QtBin "windeployqt.exe") "windeployqt.exe") "windeployqt executable"
+    $QtPaths = Assert-PathOutsideProtectedProduction (Require-File (Join-Path $QtBin "qtpaths.exe") "qtpaths.exe") "qtpaths executable"
+    $Gcc = Assert-PathOutsideProtectedProduction (Require-File (Join-Path $MingwBin "gcc.exe") "gcc.exe") "GCC executable"
+    $Gxx = Assert-PathOutsideProtectedProduction (Require-File (Join-Path $MingwBin "g++.exe") "g++.exe") "G++ executable"
     $DepsDir = if ([string]::IsNullOrWhiteSpace($DepsDir)) {
         Join-Path $Root "libs\deps\built"
     } else {
         Get-FullPath $DepsDir
     }
+    $DepsDir = Assert-PathOutsideProtectedProduction $DepsDir "CMake dependency prefix"
     Require-Directory $DepsDir "CMake dependency prefix" | Out-Null
+    $DepsBin = Assert-PathOutsideProtectedProduction (Join-Path $DepsDir "bin") "Dependency executable directory"
 
     $CMake = Find-CommandPath "cmake.exe"
     if ([string]::IsNullOrWhiteSpace($CMake)) {
         Fail "cmake.exe was not found."
     }
+    $CMake = Assert-PathOutsideProtectedProduction $CMake "CMake executable"
     $Go = Find-CommandPath "go.exe"
     if ([string]::IsNullOrWhiteSpace($Go)) {
         Fail "go.exe was not found."
     }
+    $Go = Assert-PathOutsideProtectedProduction $Go "Go executable"
     $Python = Find-Python
+    $Python = Assert-PathOutsideProtectedProduction $Python "Python executable"
     $Git = Find-CommandPath "git.exe"
     if ([string]::IsNullOrWhiteSpace($Git)) {
         Fail "git.exe was not found. RouteFluent patched sing-box source preparation requires Git."
     }
+    $Git = Assert-PathOutsideProtectedProduction $Git "Git executable"
 
     $Ninja = Find-CommandPath "ninja.exe"
     if (![string]::IsNullOrWhiteSpace($Ninja)) {
+        $Ninja = Assert-PathOutsideProtectedProduction $Ninja "Ninja executable"
         $Generator = "Ninja"
         $MakeProgram = $Ninja
     } else {
         $Generator = "MinGW Makefiles"
-        $MakeProgram = Require-File (Join-Path $MingwBin "mingw32-make.exe") "mingw32-make.exe"
+        $MakeProgram = Assert-PathOutsideProtectedProduction (Require-File (Join-Path $MingwBin "mingw32-make.exe") "mingw32-make.exe") "MinGW Make executable"
     }
 
     $Version = (Get-Content -LiteralPath (Join-Path $Root "nekoray_version.txt") -Raw).Trim()
     $VersionStandalone = "nekoray-$Version"
     $BuildDirFull = Get-FullPath $BuildDir
-    $DeployRoot = Join-Path $Root "deployment"
-    $PackageDir = Join-Path $DeployRoot "windows64"
-    $PackageConfigDir = Join-Path $PackageDir "config"
-    $PackageConfigBackupDir = Join-Path $DeployRoot "windows64-config-preserve"
-    $PackageBinaryBackupDir = Join-Path $DeployRoot "windows64-binary-preserve"
-    $PublicResDir = Join-Path $DeployRoot "public_res"
-    $RouteFluentWorkDir = Join-Path $Root "third_party\routefluent-sing-box\work"
-    $RouteFluentCoreBuildDir = Join-Path $Root "build-routefluent-sing-box"
-    $RouteFluentCoreExe = Join-Path $RouteFluentCoreBuildDir "sing-box-windows-amd64.exe"
-    $RouteFluentCoreManifest = Join-Path $RouteFluentCoreBuildDir "sing-box-windows-amd64.routefluent-anytls-client.json"
-    $ZipStageRoot = Join-Path $DeployRoot "zip-stage"
-    $ZipStagePackage = Join-Path $ZipStageRoot "nekoray"
-    $ZipPath = Join-Path $DeployRoot "$VersionStandalone-windows64.zip"
+    $BuildDirFull = Assert-PathOutsideProtectedProduction $BuildDirFull "Windows package build directory"
+    $DeployRoot = Assert-PathOutsideProtectedProduction (Join-Path $Root "deployment") "Windows package deployment root"
+    $PackageDir = Assert-PathOutsideProtectedProduction (Join-Path $DeployRoot "windows64") "Windows package directory"
+    $PackageConfigDir = Assert-PathOutsideProtectedProduction (Join-Path $PackageDir "config") "Preserved package config directory"
+    $PackageConfigBackupDir = Assert-PathOutsideProtectedProduction (Join-Path $DeployRoot "windows64-config-preserve") "Package config backup directory"
+    $PackageBinaryBackupDir = Assert-PathOutsideProtectedProduction (Join-Path $DeployRoot "windows64-binary-preserve") "Package binary backup directory"
+    $PublicResDir = Assert-PathOutsideProtectedProduction (Join-Path $DeployRoot "public_res") "Package public resource directory"
+    $RouteFluentWorkDir = Assert-PathOutsideProtectedProduction (Join-Path $Root "third_party\routefluent-sing-box\work") "RouteFluent source work directory"
+    $RouteFluentCoreBuildDir = Assert-PathOutsideProtectedProduction (Join-Path $Root "build-routefluent-sing-box") "RouteFluent core build directory"
+    $RouteFluentCoreExe = Assert-PathOutsideProtectedProduction (Join-Path $RouteFluentCoreBuildDir "sing-box-windows-amd64.exe") "RouteFluent core output"
+    $RouteFluentCoreManifest = Assert-PathOutsideProtectedProduction (Join-Path $RouteFluentCoreBuildDir "sing-box-windows-amd64.routefluent-anytls-client.json") "RouteFluent manifest output"
+    $ZipStageRoot = Assert-PathOutsideProtectedProduction (Join-Path $DeployRoot "zip-stage") "Windows package zip staging root"
+    $ZipStagePackage = Assert-PathOutsideProtectedProduction (Join-Path $ZipStageRoot "nekoray") "Windows package zip staging directory"
+    $ZipPath = Assert-PathOutsideProtectedProduction (Join-Path $DeployRoot "$VersionStandalone-windows64.zip") "Windows package archive"
+
+    Assert-DirectoryTreeHasNoReparsePoints $DeployRoot "Windows package deployment tree"
+    Assert-DirectoryTreeHasNoReparsePoints $BuildDirFull "Windows GUI build tree"
+    Assert-DirectoryTreeHasNoReparsePoints $RouteFluentWorkDir "RouteFluent source work tree"
+    Assert-DirectoryTreeHasNoReparsePoints $RouteFluentCoreBuildDir "RouteFluent core build tree"
+    foreach ($staleBackup in @($PackageConfigBackupDir, $PackageBinaryBackupDir)) {
+        if (Test-Path -LiteralPath $staleBackup) {
+            Fail "Stale package backup exists. Review and recover it manually before building; this run will not delete or restore it: $staleBackup"
+        }
+    }
 
     Write-Host "Root:       $Root"
     Write-Host "Qt:         $QtDir"
@@ -427,7 +472,7 @@ try {
     $oldQtPluginPath = $env:QT_PLUGIN_PATH
     $oldQtQpaPlatformPluginPath = $env:QT_QPA_PLATFORM_PLUGIN_PATH
     $oldQml2ImportPath = $env:QML2_IMPORT_PATH
-    $env:PATH = "$MingwBin;$QtBin;$(Join-Path $DepsDir 'bin');$oldPath"
+    $env:PATH = "$MingwBin;$QtBin;$DepsBin;$oldPath"
     $env:QT_PLUGIN_PATH = Join-Path $QtDir "plugins"
     $env:QT_QPA_PLATFORM_PLUGIN_PATH = Join-Path $QtDir "plugins\platforms"
     $env:QML2_IMPORT_PATH = Join-Path $QtDir "qml"
@@ -437,10 +482,11 @@ try {
 
     New-Item -ItemType Directory -Force -Path $DeployRoot | Out-Null
     Assert-PackageNotRunning $PackageDir
-    Backup-PackageConfig $PackageConfigDir $PackageConfigBackupDir $DeployRoot
+    $packageConfigBackupOwned = [bool](Backup-PackageConfig $PackageConfigDir $PackageConfigBackupDir)
     if ($SkipGoBuild) {
-        Backup-PackageBinaries $PackageDir $PackageBinaryBackupDir $DeployRoot
+        $packageBinaryBackupOwned = [bool](Backup-PackageBinaries $PackageDir $PackageBinaryBackupDir)
     }
+    $packageReplacementStarted = $true
     Remove-SafeDirectory $PackageDir $DeployRoot
     Remove-SafeDirectory $ZipStageRoot $DeployRoot
     New-Item -ItemType Directory -Force -Path $PackageDir | Out-Null
@@ -448,6 +494,8 @@ try {
     Write-Step "Prepare RouteFluent patched sing-box"
     Invoke-Checked $Git @("submodule", "update", "--init", "--recursive", "third_party/routefluent-sing-box") "RouteFluent sing-box submodule init"
     $RouteFluentSingBoxScript = Require-File (Join-Path $Root "third_party\routefluent-sing-box\build_routefluent_sing_box.py") "RouteFluent sing-box build script"
+    $RouteFluentCoreExe = Initialize-NewBuildFile $RouteFluentCoreExe "RouteFluent core output"
+    $RouteFluentCoreManifest = Initialize-NewBuildFile $RouteFluentCoreManifest "RouteFluent manifest output"
     Invoke-Checked $Python @(
         $RouteFluentSingBoxScript,
         "--goos", "windows",
@@ -472,8 +520,8 @@ try {
             "-DCMAKE_POLICY_VERSION_MINIMUM=3.5",
             "-DCMAKE_PREFIX_PATH=$QtDir",
             "-DNKR_LIBS=$DepsDir",
-            "-DCMAKE_C_COMPILER=$(Join-Path $MingwBin 'gcc.exe')",
-            "-DCMAKE_CXX_COMPILER=$(Join-Path $MingwBin 'g++.exe')",
+            "-DCMAKE_C_COMPILER=$Gcc",
+            "-DCMAKE_CXX_COMPILER=$Gxx",
             "-DCMAKE_MAKE_PROGRAM=$MakeProgram"
         )
         Invoke-Checked $CMake $cmakeArgs "CMake configure"
@@ -483,30 +531,33 @@ try {
     }
 
     $GuiExe = Require-File (Join-Path $BuildDirFull "nekobox.exe") "nekobox.exe"
-    Copy-Item -LiteralPath $GuiExe -Destination (Join-Path $PackageDir "nekobox.exe") -Force
+    Copy-BuildFile $GuiExe (Join-Path $PackageDir "nekobox.exe") "Windows GUI package binary"
 
     Write-Step "Deploy Qt runtime"
-    Invoke-Checked (Join-Path $QtBin "windeployqt.exe") @(
+    Invoke-Checked $WinDeployQt @(
         (Join-Path $PackageDir "nekobox.exe"),
         "--force",
         "--no-compiler-runtime",
         "--no-system-d3d-compiler",
         "--no-opengl-sw",
         "--no-translations",
-        "--qtpaths", (Join-Path $QtBin "qtpaths.exe"),
+        "--qtpaths", $QtPaths,
         "--verbose", "1"
     ) "windeployqt"
 
     foreach ($unneeded in @("translations", "d3dcompiler_47.dll", "opengl32sw.dll", "libEGL.dll", "libGLESv2.dll", "Qt6Pdf.dll")) {
-        $path = Join-Path $PackageDir $unneeded
+        $path = Assert-PathOutsideProtectedProduction (Join-Path $PackageDir $unneeded) "Optional package cleanup target"
         if (Test-Path -LiteralPath $path) {
+            if (Test-Path -LiteralPath $path -PathType Container) {
+                Assert-DirectoryTreeHasNoReparsePoints $path "Optional package cleanup target"
+            }
             Remove-Item -LiteralPath $path -Recurse -Force
         }
     }
 
     Write-Step "Copy compiler runtime and public assets"
     foreach ($runtimeDll in @("libgcc_s_seh-1.dll", "libstdc++-6.dll", "libwinpthread-1.dll")) {
-        Copy-Item -LiteralPath (Require-File (Join-Path $MingwBin $runtimeDll) $runtimeDll) -Destination $PackageDir -Force
+        Copy-BuildFile (Require-File (Join-Path $MingwBin $runtimeDll) $runtimeDll) (Join-Path $PackageDir $runtimeDll) "Compiler runtime $runtimeDll"
     }
     foreach ($opensslDll in @("libcrypto-3-x64.dll", "libssl-3-x64.dll", "libcrypto-1_1-x64.dll", "libssl-1_1-x64.dll")) {
         Copy-IfExists (Join-Path $QtBin $opensslDll) $PackageDir
@@ -514,15 +565,16 @@ try {
     }
 
     New-Item -ItemType Directory -Force -Path $PublicResDir | Out-Null
-    Copy-Item -Path (Join-Path $Root "res\public\*") -Destination $PublicResDir -Force
+    foreach ($publicAsset in Get-ChildItem -LiteralPath (Join-Path $Root "res\public") -File) {
+        Copy-BuildFile $publicAsset.FullName (Join-Path $PublicResDir $publicAsset.Name) "Public package asset"
+    }
     $fallback = if (![string]::IsNullOrWhiteSpace($ReferenceDir)) {
         $referenceCandidate = Get-FullPath $ReferenceDir
         # Reject the protected path before even probing its existence.
-        Assert-ReferenceDirIsNotProduction $referenceCandidate
-        Assert-ReferenceDirHasNoReparseComponents $referenceCandidate
+        $referenceCandidate = Assert-PathOutsideProtectedProduction $referenceCandidate "Reference geodata directory"
         if (Test-Path -LiteralPath $referenceCandidate -PathType Container) {
             $resolvedReference = (Resolve-Path -LiteralPath $referenceCandidate).Path
-            Assert-ReferenceDirIsNotProduction $resolvedReference
+            $resolvedReference = Assert-PathOutsideProtectedProduction $resolvedReference "Resolved reference geodata directory"
             $resolvedReference
         } else {
             ""
@@ -532,7 +584,10 @@ try {
     }
     Download-Or-Fallback "geoip.db" "https://github.com/SagerNet/sing-geoip/releases/latest/download/geoip.db" $PublicResDir $fallback -Refresh:$RefreshGeodata
     Download-Or-Fallback "geosite.db" "https://github.com/SagerNet/sing-geosite/releases/latest/download/geosite.db" $PublicResDir $fallback -Refresh:$RefreshGeodata
-    Copy-Item -Path (Join-Path $PublicResDir "*") -Destination $PackageDir -Force -Exclude @("geoip.dat", "geosite.dat")
+    foreach ($publicResource in Get-ChildItem -LiteralPath $PublicResDir -File |
+        Where-Object { $_.Name -notin @("geoip.dat", "geosite.dat") }) {
+        Copy-BuildFile $publicResource.FullName (Join-Path $PackageDir $publicResource.Name) "Prepared package resource"
+    }
 
     if (!$SkipGoBuild) {
         Write-Step "Build updater.exe"
@@ -553,11 +608,15 @@ try {
         }
     } else {
         Write-Step "Skip Go build"
-        Restore-PackageBinaries $PackageDir $PackageBinaryBackupDir $DeployRoot
+        if ($packageBinaryBackupOwned) {
+            Restore-PackageBinaries $PackageDir $PackageBinaryBackupDir
+            $packageBinaryBackupOwned = $false
+            Remove-SafeDirectory $PackageBinaryBackupDir $DeployRoot
+        }
         Require-File (Join-Path $PackageDir "updater.exe") "updater.exe" | Out-Null
         Require-File (Join-Path $PackageDir "nekobox_core.exe") "nekobox_core.exe" | Out-Null
     }
-    Copy-Item -LiteralPath $RouteFluentCoreManifest -Destination (Join-Path $PackageDir "routefluent-sing-box-manifest.json") -Force
+    Copy-BuildFile $RouteFluentCoreManifest (Join-Path $PackageDir "routefluent-sing-box-manifest.json") "RouteFluent package manifest"
 
     Write-Step "Validate package contents"
     foreach ($required in @(
@@ -606,7 +665,8 @@ try {
     if ($versionOutputText -notmatch [Regex]::Escape($RouteFluentSingBoxVersion)) {
         Fail "nekobox_core version does not contain RouteFluent patched sing-box version: $RouteFluentSingBoxVersion"
     }
-    $checkConfig = Join-Path ([System.IO.Path]::GetTempPath()) "nekoray-anytls-package-check.json"
+    $checkConfig = Join-Path $SafeTempRoot ("nekoray-anytls-package-check-{0}.json" -f [Guid]::NewGuid().ToString('N'))
+    $checkConfig = Assert-NewFileOutsideProtectedProduction $checkConfig "Package smoke-check configuration"
     @'
 {
   "log": { "level": "error" },
@@ -673,6 +733,7 @@ try {
     }
 
     Write-Step "Create formal zip with nekoray root folder"
+    Assert-DirectoryTreeHasNoReparsePoints $PackageDir "Windows package archive source"
     New-Item -ItemType Directory -Force -Path $ZipStagePackage | Out-Null
     Copy-Item -Path (Join-Path $PackageDir "*") -Destination $ZipStagePackage -Recurse -Force
     if (Test-Path -LiteralPath $ZipPath) {
@@ -692,6 +753,7 @@ try {
         }
     }
     if (![string]::IsNullOrWhiteSpace($SevenZip)) {
+        $SevenZip = Assert-PathOutsideProtectedProduction $SevenZip "7-Zip executable"
         Push-Location $ZipStageRoot
         try {
             Invoke-Checked $SevenZip @("a", "-tzip", $ZipPath, ".\nekoray") "7z"
@@ -703,29 +765,50 @@ try {
     }
 
     Remove-SafeDirectory $ZipStageRoot $DeployRoot
-    Restore-PackageConfig $PackageConfigDir $PackageConfigBackupDir $PackageDir $DeployRoot
+    if ($packageConfigBackupOwned) {
+        Restore-PackageConfig $PackageConfigDir $PackageConfigBackupDir $PackageDir
+        $packageConfigBackupOwned = $false
+        Remove-SafeDirectory $PackageConfigBackupDir $DeployRoot
+    }
 
     Write-Step "Done"
     Write-Host "Folder: $PackageDir"
     Write-Host "Zip:    $ZipPath"
 } finally {
-    if ((Get-Variable -Name PackageConfigBackupDir -Scope Local -ErrorAction SilentlyContinue) -and
-        (Get-Variable -Name PackageConfigDir -Scope Local -ErrorAction SilentlyContinue) -and
-        (Get-Variable -Name PackageDir -Scope Local -ErrorAction SilentlyContinue) -and
-        (Get-Variable -Name DeployRoot -Scope Local -ErrorAction SilentlyContinue)) {
-        try {
-            Restore-PackageConfig $PackageConfigDir $PackageConfigBackupDir $PackageDir $DeployRoot
-        } catch {
-            Write-Warning "Could not restore preserved package config: $($_.Exception.Message)"
+    if ($packageConfigBackupOwned) {
+        if (!$packageReplacementStarted) {
+            $packageConfigBackupOwned = $false
+            try {
+                Remove-SafeDirectory $PackageConfigBackupDir $DeployRoot
+            } catch {
+                Write-Warning "Could not remove this run's unused package config backup: $($_.Exception.Message)"
+            }
+        } else {
+            try {
+                Restore-PackageConfig $PackageConfigDir $PackageConfigBackupDir $PackageDir
+                $packageConfigBackupOwned = $false
+                Remove-SafeDirectory $PackageConfigBackupDir $DeployRoot
+            } catch {
+                Write-Warning "Could not restore preserved package config: $($_.Exception.Message)"
+            }
         }
     }
-    if ((Get-Variable -Name PackageBinaryBackupDir -Scope Local -ErrorAction SilentlyContinue) -and
-        (Get-Variable -Name PackageDir -Scope Local -ErrorAction SilentlyContinue) -and
-        (Get-Variable -Name DeployRoot -Scope Local -ErrorAction SilentlyContinue)) {
-        try {
-            Restore-PackageBinaries $PackageDir $PackageBinaryBackupDir $DeployRoot
-        } catch {
-            Write-Warning "Could not restore preserved Go binaries: $($_.Exception.Message)"
+    if ($packageBinaryBackupOwned) {
+        if (!$packageReplacementStarted) {
+            $packageBinaryBackupOwned = $false
+            try {
+                Remove-SafeDirectory $PackageBinaryBackupDir $DeployRoot
+            } catch {
+                Write-Warning "Could not remove this run's unused package binary backup: $($_.Exception.Message)"
+            }
+        } else {
+            try {
+                Restore-PackageBinaries $PackageDir $PackageBinaryBackupDir
+                $packageBinaryBackupOwned = $false
+                Remove-SafeDirectory $PackageBinaryBackupDir $DeployRoot
+            } catch {
+                Write-Warning "Could not restore preserved Go binaries: $($_.Exception.Message)"
+            }
         }
     }
     if (Get-Variable -Name oldPath -Scope Local -ErrorAction SilentlyContinue) { $env:PATH = $oldPath }

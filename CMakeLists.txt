@@ -76,7 +76,7 @@ endif ()
 
 # grpc
 if (NKR_NO_GRPC)
-    nkr_add_compile_definitions(NKR_NO_GRPC)
+    message(FATAL_ERROR "This Windows RouteFluent build requires the authenticated GUI/core RPC protocol; NKR_NO_GRPC is unsupported.")
 else ()
     # My proto
     include("cmake/myproto.cmake")

@@ -20,6 +20,7 @@
 #include <QMutex>
 
 #include <atomic>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -188,7 +189,7 @@ private:
     QShortcut *shortcut_ctrl_f = new QShortcut(QKeySequence("Ctrl+F"), this);
     QShortcut *shortcut_esc = new QShortcut(QKeySequence("Esc"), this);
     //
-    NekoGui_sys::CoreProcess *core_process;
+    NekoGui_sys::CoreProcess *core_process = nullptr;
     qint64 vpn_pid = 0;
     //
     bool qvLogAutoScoll = true;
@@ -210,11 +211,13 @@ private:
     std::mutex pending_profile_start_mutex;
     std::optional<NekoGui_Runtime::DaemonProfileStartRequest> pending_profile_start;
     bool pending_profile_start_dispatch_queued = false;
+    std::map<QString, int> pending_core_handshake_attempts;
     int exit_reason = 0;
     int exit_had_profile_id = -1919;
     bool running_internal_tun = false;
     std::uint64_t running_generation = 0;
     std::uint64_t running_daemon_generation = 0;
+    QString running_daemon_instance_id;
     QByteArray running_config_sha256;
     bool runtime_state_indeterminate = false;
     QString runtime_state_indeterminate_reason;

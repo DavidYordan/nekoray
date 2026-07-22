@@ -22,6 +22,7 @@
 - [ADR 0008：持久 Windows Runtime 与无直连切换（候选架构）](architecture/decisions/0008-persistent-windows-runtime.md)
 - [ADR 0009：配置事务与显式恢复方向](architecture/decisions/0009-config-transaction-recovery.md)
 - [ADR 0010：进程内生命周期串行化与 generation fencing](architecture/decisions/0010-process-local-lifecycle-generation-fencing.md)
+- [ADR 0011：daemon 实例身份与生命周期对账屏障](architecture/decisions/0011-daemon-identity-and-lifecycle-reconciliation.md)
 
 ADR 0005（MultiMapper）已撤出产品决策序列；相关材料只保留在历史归档。
 

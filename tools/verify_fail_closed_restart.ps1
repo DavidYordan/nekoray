@@ -15,10 +15,12 @@ Set-StrictMode -Version Latest
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Root = [System.IO.Path]::GetFullPath((Join-Path $ScriptDir ".."))
+. (Join-Path $ScriptDir "path_safety.ps1")
 if ([string]::IsNullOrWhiteSpace($PackageDir)) {
     $PackageDir = Join-Path $Root "deployment\windows64"
 }
 $PackageDir = [System.IO.Path]::GetFullPath($PackageDir)
+$PackageDir = Assert-PathOutsideProtectedProduction $PackageDir "Fail-closed audit package directory"
 $ProductionDir = [System.IO.Path]::GetFullPath($ProductionDir)
 
 function Write-Step([string] $Message) {
@@ -374,9 +376,11 @@ $ports = @($ports | Where-Object { $_ -gt 0 } | Sort-Object -Unique)
 
 if ([string]::IsNullOrWhiteSpace($OutputPath)) {
     $auditDir = Join-Path $PackageDir "fail_closed_audit"
-    New-Item -ItemType Directory -Force -Path $auditDir | Out-Null
     $OutputPath = Join-Path $auditDir ("fail_closed_{0}_{1}.json" -f (Get-Date -Format "yyyyMMdd_HHmmss_fff"), ([System.Guid]::NewGuid().ToString("N").Substring(0, 8)))
 }
+$OutputPath = Assert-NewFileOutsideProtectedProduction $OutputPath "Fail-closed audit report"
+$outputDir = Split-Path -Parent $OutputPath
+New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
 
 Write-Step "Collect baseline"
 $samples = New-Object System.Collections.Generic.List[object]
