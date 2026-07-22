@@ -22,6 +22,7 @@
 #include <QUuid>
 #include <QtEndian>
 
+#include <algorithm>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -36,6 +37,7 @@
 
 namespace {
     constexpr auto ServiceName = "libcore.LibcoreService";
+    constexpr int GrpcServerDeadlineLeadMs = 250;
 
     struct ProxySnapshot {
         QVariant enabled;
@@ -378,6 +380,11 @@ namespace {
         if (commandSequence != 0) {
             request.setRawHeader("nekoray_command_sequence", QByteArray::number(commandSequence));
         }
+        if (timeoutMs > 0) {
+            request.setRawHeader(
+                "grpc-timeout",
+                QByteArray::number(std::max(1, timeoutMs - GrpcServerDeadlineLeadMs)) + 'm');
+        }
 
         const auto serializedBytes = QByteArray::fromStdString(serialized);
         QByteArray body(5, '\0');
@@ -636,14 +643,14 @@ int main(int argc, char** argv) {
             750);
         if (parseResponse(call, &response, &detail) &&
             response.daemon_instance_id() == daemonId.toStdString() &&
-            response.lifecycle_protocol_version() == 2) {
+            response.lifecycle_protocol_version() == 3) {
             authenticatedReady = true;
             break;
         }
         QThread::msleep(50);
     }
     if (!authenticatedReady) {
-        logFailure(QStringLiteral("authenticated lifecycle-v2 handshake did not become ready"));
+        logFailure(QStringLiteral("authenticated lifecycle-v3 handshake did not become ready"));
         passed = false;
     }
 

@@ -4,11 +4,13 @@
 
 ## 产品边界
 
-本分支遵循“最小化扩展”原则：NekoRay 原有能力默认保留；只有 Xray 核心因不支持 AnyTLS 被明确删除。产品新增需求只有三项：
+本分支遵循“最小化扩展”原则：NekoRay 原有能力默认保留；只有 Xray 核心因不支持 AnyTLS 被明确删除。核心新增需求有三项：
 
 1. AnyTLS 协议支持；
 2. 多线路并发：主 Mixed 端口和各辅助 Mixed 端口分别绑定确定的逻辑线路；
 3. 读取 Clash `dns.proxy-server-nameserver`，用于解析代理节点的 server domain。
+
+2026-07-22 另明确追加一个私人导出便利功能：线路右键多选在保留上游含 remark 链接和 Neko Links 的同时，新增不含 URI fragment 的原生链接，以及严格的 `ip:port:user:pass` 凭据列表；完整边界见[产品契约](docs/PRODUCT.md#34-批量分享格式2026-07-22-用户明确追加)。
 
 旧能力只有在证明与上述扩展存在真实冲突后，才可以提出窄范围修改；不能因名称含 `v2ray`、依赖外置 core，或为了本机测试方便而删除、改写或硬编码产品行为。
 
@@ -31,7 +33,7 @@
 - 配置导出默认是“不启动线路、剥离产品 TUN/辅助运行态并拒绝已知 OS 副作用”的审计导出；测试模式只允许有界生成配置。TCP Ping 因使用系统直连 socket 已禁用，改用 URL Test。
 - TUN 复选框现区分用户期望状态与当前 worker 回报，但后者不是 Windows OS 事实。core 崩溃后只重启空控制 core，不自动恢复 profile/TUN；TUN 下切线/退出仍靠禁止操作规避，没有独立 Windows fail-closed 层，因此不满足需求。
 - Windows GUI 现忽略 CRT `SIGTERM`/`SIGINT`，避免该窄入口绕过 UI 退出 guard 并直接带走内部 TUN；强制结束、崩溃、系统关机以及 GUI 与 worker 同生共死的问题仍未解决，不能把这一止损当作持久保护。
-- `nekobox_core run/check` 是供构建、审计和隔离测试显式调用的高级入口，不是普通 GUI 操作路径。GUI 使用 localhost、每会话随机令牌和每 daemon UUID 控制 core；所有 RPC 在 handler 前验证精确实例，`GetDaemonInfo` 身份/协议握手通过后才 ready，Start/Stop 响应不确定时使用同一 mutex 内的高序号屏障对账。这些仍只是进程内 fence；Go core 尚未重复执行 C++ 产品策略校验，也没有持久 Runtime/WFP/OS 事实源。
+- `nekobox_core run/check` 是供构建、审计和隔离测试显式调用的高级入口，不是普通 GUI 操作路径。GUI 使用 localhost、每会话随机令牌和每 daemon UUID 控制 core；所有 RPC 在 handler 前验证精确实例，`GetDaemonInfo` 身份/协议握手通过后才 ready，Start/Stop 响应不确定时使用同一 executor 内的高序号屏障对账。协议 v3 可取消未准入命令并仲裁 Start 取消/发布，但这些仍只是进程内 fence；Go core 尚未重复执行 C++ 产品策略校验，也没有持久 Runtime/WFP/OS 事实源。
 
 完整证据见 [接管状态](docs/TAKEOVER_STATUS.md) 和 [偏离审计](docs/archive/audits/2026-07-20-scope-deviation-audit.md)。
 

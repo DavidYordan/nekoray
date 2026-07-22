@@ -1076,6 +1076,24 @@ This needs to be run NekoBox with administrator privileges.</source>
 <context>
     <name>MainWindow</name>
     <message>
+        <source>Copy links of selected (without remarks)</source>
+        <translation>批量复制选中线路的分享链接（不含备注）</translation>
+    </message>
+    <message>
+        <source>Copy selected as ip:port:user:pass</source>
+        <translation>复制选中线路为 ip:port:user:pass</translation>
+    </message>
+    <message>
+        <source>Copy failed</source>
+        <translation>复制失败</translation>
+    </message>
+    <message>
+        <source>Nothing was copied because these profiles cannot use the selected format:
+%1</source>
+        <translation>未复制任何内容，因为以下线路无法使用所选格式：
+%1</translation>
+    </message>
+    <message>
         <source>One or more profiles could not be moved; their original group data was preserved.</source>
         <translation>一个或多个配置无法移动，原分组数据已保留。</translation>
     </message>

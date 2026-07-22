@@ -13,7 +13,7 @@ import (
 )
 
 func TestGetDaemonInfoEchoesAuthenticatedIdentity(t *testing.T) {
-	if LifecycleProtocolVersion != 2 {
+	if LifecycleProtocolVersion != 3 {
 		t.Fatalf("unexpected lifecycle protocol version %d", LifecycleProtocolVersion)
 	}
 	ctx := metadata.NewIncomingContext(

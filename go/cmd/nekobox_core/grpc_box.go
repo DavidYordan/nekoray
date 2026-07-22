@@ -47,6 +47,17 @@ func lifecycleCommandSequence(ctx context.Context) (uint64, error) {
 	return sequence, nil
 }
 
+func lifecycleContextStatus(err error) error {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return status.Error(codes.Canceled, err.Error())
+	case errors.Is(err, context.DeadlineExceeded):
+		return status.Error(codes.DeadlineExceeded, err.Error())
+	default:
+		return nil
+	}
+}
+
 // Exit intentionally overrides the promoted unimplemented RPC. This core must
 // never terminate while an active or indeterminately closed generation is
 // still retained.
@@ -58,8 +69,11 @@ func (s *server) Exit(ctx context.Context, in *gen.EmptyReq) (*gen.LifecycleStat
 	if !s.GracefulShutdownConfigured() {
 		return nil, status.Error(codes.FailedPrecondition, "graceful shutdown is not configured")
 	}
-	snapshot, err := activeCoreLifecycle.requestExit(commandSequence)
+	snapshot, err := activeCoreLifecycle.requestExitContext(ctx, commandSequence)
 	if err != nil {
+		if contextStatus := lifecycleContextStatus(err); contextStatus != nil {
+			return nil, contextStatus
+		}
 		return nil, status.Error(codes.FailedPrecondition, err.Error())
 	}
 	response := lifecycleSnapshotToProto(ctx, snapshot)
@@ -69,12 +83,19 @@ func (s *server) Exit(ctx context.Context, in *gen.EmptyReq) (*gen.LifecycleStat
 	return response, nil
 }
 
-func buildCoreCandidate(in *gen.LoadConfigReq) (*managedCore, error) {
+func buildCoreCandidate(
+	in *gen.LoadConfigReq,
+	execution *lifecycleStartExecution,
+) (*managedCore, error) {
 	if in == nil {
 		return nil, errors.New("start request is missing")
 	}
 
-	candidateBox, cancel, createErr := createSingBoxCandidate([]byte(in.CoreConfig), nekoPlatformWriter{})
+	candidateBox, cancel, createErr := createSingBoxCandidate(
+		[]byte(in.CoreConfig),
+		nekoPlatformWriter{},
+		execution.bindCandidateCancel,
+	)
 	if candidateBox == nil {
 		return nil, createErr
 	}
@@ -123,9 +144,14 @@ func (s *server) Start(ctx context.Context, in *gen.LoadConfigReq) (out *gen.Err
 	if in != nil {
 		configSHA256 = fmt.Sprintf("%x", sha256.Sum256([]byte(in.CoreConfig)))
 	}
-	if err := activeCoreLifecycle.start(commandSequence, configSHA256, func() (*managedCore, error) {
-		return buildCoreCandidate(in)
+	if err := activeCoreLifecycle.startContext(ctx, commandSequence, configSHA256, func(
+		execution *lifecycleStartExecution,
+	) (*managedCore, error) {
+		return buildCoreCandidate(in, execution)
 	}); err != nil {
+		if contextStatus := lifecycleContextStatus(err); contextStatus != nil {
+			return nil, contextStatus
+		}
 		out.Error = err.Error()
 	}
 	return
@@ -247,13 +273,17 @@ func (s *server) ReconcileLifecycle(
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	snapshot, err := activeCoreLifecycle.reconcile(
+	snapshot, err := activeCoreLifecycle.reconcileContext(
+		ctx,
 		barrierSequence,
 		in.TargetCommandSequence,
 		targetKind,
 		in.TargetConfigSha256,
 	)
 	if err != nil {
+		if contextStatus := lifecycleContextStatus(err); contextStatus != nil {
+			return nil, contextStatus
+		}
 		return nil, status.Error(codes.FailedPrecondition, err.Error())
 	}
 	return lifecycleSnapshotToProto(ctx, snapshot), nil
@@ -266,7 +296,10 @@ func (s *server) Stop(ctx context.Context, in *gen.EmptyReq) (out *gen.ErrorResp
 		out.Error = err.Error()
 		return
 	}
-	if err := activeCoreLifecycle.stop(commandSequence); err != nil {
+	if err := activeCoreLifecycle.stopContext(ctx, commandSequence); err != nil {
+		if contextStatus := lifecycleContextStatus(err); contextStatus != nil {
+			return nil, contextStatus
+		}
 		out.Error = err.Error()
 	}
 	return

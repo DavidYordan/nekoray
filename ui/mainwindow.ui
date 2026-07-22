@@ -526,6 +526,8 @@
      <addaction name="menu_export_config"/>
       <addaction name="separator"/>
       <addaction name="menu_copy_links"/>
+      <addaction name="menu_copy_links_without_remarks"/>
+      <addaction name="menu_copy_ip_port_user_pass"/>
       <addaction name="menu_copy_links_nkr"/>
     </widget>
     <widget class="QMenu" name="menuCurrent_Group">
@@ -846,6 +848,16 @@
    </property>
    <property name="shortcut">
     <string notr="true">Ctrl+C</string>
+   </property>
+  </action>
+  <action name="menu_copy_links_without_remarks">
+   <property name="text">
+    <string>Copy links of selected (without remarks)</string>
+   </property>
+  </action>
+  <action name="menu_copy_ip_port_user_pass">
+   <property name="text">
+    <string>Copy selected as ip:port:user:pass</string>
    </property>
   </action>
   <action name="menu_spmode_vpn">

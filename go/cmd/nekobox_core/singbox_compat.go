@@ -195,13 +195,40 @@ func CreateSingBox(config []byte, platformWriter sblog.PlatformWriter) (*box.Box
 	return createSingBoxWithOptions(ctx, options, platformWriter)
 }
 
-func createSingBoxCandidate(config []byte, platformWriter sblog.PlatformWriter) (*box.Box, context.CancelFunc, error) {
-	ctx := singBoxContext()
+func createSingBoxCandidate(
+	config []byte,
+	platformWriter sblog.PlatformWriter,
+	bindOperationCancel func(context.CancelFunc),
+) (*box.Box, context.CancelFunc, error) {
+	ctx, operationCancel := context.WithCancel(singBoxContext())
+	if bindOperationCancel != nil {
+		// Bind before parsing or box construction so an expired RPC cannot
+		// leave a candidate running until the factory eventually returns.
+		bindOperationCancel(operationCancel)
+	}
 	options, err := json.UnmarshalExtendedContext[option.Options](ctx, config)
 	if err != nil {
+		operationCancel()
 		return nil, nil, err
 	}
-	return createSingBoxCandidateWithOptions(ctx, options, platformWriter)
+	instance, candidateCancel, createErr := createSingBoxCandidateWithOptions(
+		ctx,
+		options,
+		platformWriter,
+	)
+	if instance == nil {
+		if candidateCancel != nil {
+			candidateCancel()
+		}
+		operationCancel()
+		return nil, nil, createErr
+	}
+	return instance, func() {
+		if candidateCancel != nil {
+			candidateCancel()
+		}
+		operationCancel()
+	}, createErr
 }
 
 func createSingBoxFromFiles(paths []string, directories []string) (*box.Box, context.CancelFunc, error) {

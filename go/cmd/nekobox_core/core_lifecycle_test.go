@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -28,6 +29,7 @@ type fakeManagedCore struct {
 	dialWait    chan struct{}
 	queryEnter  chan struct{}
 	queryWait   chan struct{}
+	cancelEnter chan struct{}
 	closeEnter  chan struct{}
 	closeWait   chan struct{}
 }
@@ -36,6 +38,13 @@ func (f *fakeManagedCore) candidate() *managedCore {
 	return &managedCore{
 		cancel: func() {
 			f.cancelCount.Add(1)
+			if f.cancelEnter != nil {
+				select {
+				case <-f.cancelEnter:
+				default:
+					close(f.cancelEnter)
+				}
+			}
 		},
 		close: func() error {
 			f.closeCount.Add(1)
@@ -637,10 +646,12 @@ func TestExitRequiresPreciselyStoppedLifecycle(t *testing.T) {
 			t.Fatalf("second Exit returned %v", err)
 		}
 
-		lifecycle.mu.Lock()
+		if err := lifecycle.executor.acquire(context.Background()); err != nil {
+			t.Fatalf("acquire lifecycle executor: %v", err)
+		}
 		watermark := lifecycle.lastCommandSequence
 		lastCommand := lifecycle.lastLifecycleCommand
-		lifecycle.mu.Unlock()
+		lifecycle.executor.release()
 		if watermark != 1 || lastCommand.sequence != 1 ||
 			lastCommand.kind != coreLifecycleCommandExit ||
 			lastCommand.outcome != coreLifecycleOutcomeSucceeded {
@@ -675,4 +686,116 @@ func TestExitRequiresPreciselyStoppedLifecycle(t *testing.T) {
 			t.Fatalf("blocked Exit retried Close %d time(s)", active.closeCount.Load())
 		}
 	})
+}
+
+func TestStartContextCancellationPreventsLatePublication(t *testing.T) {
+	lifecycle := newCoreLifecycle()
+	const configHash = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	fake := &fakeManagedCore{cancelEnter: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	factoryEntered := make(chan struct{})
+	releaseFactory := make(chan struct{})
+	startDone := make(chan error, 1)
+
+	go func() {
+		startDone <- lifecycle.startContext(
+			ctx,
+			1,
+			configHash,
+			func(execution *lifecycleStartExecution) (*managedCore, error) {
+				candidate := fake.candidate()
+				originalCancel := candidate.cancel
+				var cancelOnce sync.Once
+				candidate.cancel = func() { cancelOnce.Do(originalCancel) }
+				execution.bindCandidateCancel(candidate.cancel)
+				close(factoryEntered)
+				<-releaseFactory
+				return candidate, nil
+			},
+		)
+	}()
+
+	<-factoryEntered
+	cancel()
+	select {
+	case <-fake.cancelEnter:
+	case <-time.After(time.Second):
+		t.Fatal("RPC cancellation did not reach the pending candidate")
+	}
+	close(releaseFactory)
+	if err := <-startDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled Start returned %v", err)
+	}
+	phase, _, hasCurrent := lifecycle.snapshot()
+	if phase != coreLifecycleStopped || hasCurrent {
+		t.Fatalf("cancelled Start published late: phase=%v current=%v", phase, hasCurrent)
+	}
+	if fake.cancelCount.Load() != 1 || fake.closeCount.Load() != 1 {
+		t.Fatalf("cancelled candidate cleanup mismatch: cancel=%d close=%d",
+			fake.cancelCount.Load(), fake.closeCount.Load())
+	}
+
+	snapshot, err := lifecycle.reconcile(
+		2,
+		1,
+		coreLifecycleCommandStart,
+		configHash,
+	)
+	if err != nil {
+		t.Fatalf("reconcile cancelled Start: %v", err)
+	}
+	if snapshot.phase != coreLifecycleStopped || snapshot.hasCurrent ||
+		snapshot.targetCommand.outcome != coreLifecycleOutcomeFailedClean ||
+		!snapshot.targetConfigMatches {
+		t.Fatalf("cancelled Start was not recorded failed-clean: %#v", snapshot)
+	}
+}
+
+func TestQueuedStopDeadlineDoesNotAdmitOrMutateRuntime(t *testing.T) {
+	lifecycle := newCoreLifecycle()
+	const configHash = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+	fake := &fakeManagedCore{
+		queryValue: 7,
+		queryEnter: make(chan struct{}),
+		queryWait:  make(chan struct{}),
+	}
+	if err := lifecycle.start(1, configHash, func() (*managedCore, error) {
+		return fake.candidate(), nil
+	}); err != nil {
+		t.Fatalf("start active lifecycle: %v", err)
+	}
+
+	queryDone := make(chan error, 1)
+	go func() {
+		_, err := lifecycle.queryStats(context.Background(), "proxy", false)
+		queryDone <- err
+	}()
+	<-fake.queryEnter
+
+	stopContext, cancelStop := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancelStop()
+	if err := lifecycle.stopContext(stopContext, 2); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("queued Stop deadline returned %v", err)
+	}
+	close(fake.queryWait)
+	if err := <-queryDone; err != nil {
+		t.Fatalf("release query: %v", err)
+	}
+
+	snapshot, err := lifecycle.reconcile(
+		3,
+		2,
+		coreLifecycleCommandStop,
+		configHash,
+	)
+	if err != nil {
+		t.Fatalf("reconcile expired queued Stop: %v", err)
+	}
+	if snapshot.phase != coreLifecycleActive || !snapshot.hasCurrent ||
+		snapshot.currentConfigSHA256 != configHash ||
+		snapshot.targetCommand.outcome != coreLifecycleOutcomeFencedNotAdmitted ||
+		fake.cancelCount.Load() != 0 || fake.closeCount.Load() != 0 {
+		t.Fatalf("expired queued Stop changed the active runtime: snapshot=%#v cancel=%d close=%d",
+			snapshot, fake.cancelCount.Load(), fake.closeCount.Load())
+	}
 }

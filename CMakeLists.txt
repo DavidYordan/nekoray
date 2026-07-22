@@ -156,6 +156,7 @@ set(PROJECT_SOURCES
         fmt/Bean2CoreObj_box.cpp
         fmt/Bean2Link.cpp
         fmt/Link2Bean.cpp
+        fmt/ShareFormats.cpp
         fmt/ChainBean.hpp # translate
 
         sub/GroupUpdater.cpp
@@ -323,6 +324,16 @@ if (BUILD_TESTING)
     target_link_libraries(runtime_transition_test PRIVATE Qt${QT_VERSION_MAJOR}::Core Threads::Threads)
     add_test(NAME runtime_transition_test COMMAND runtime_transition_test)
     set_tests_properties(runtime_transition_test PROPERTIES TIMEOUT 15)
+    add_executable(share_format_test
+            test/share_format_test.cpp
+            fmt/ShareFormats.cpp
+    )
+    target_link_libraries(share_format_test PRIVATE
+            Qt${QT_VERSION_MAJOR}::Core
+            Qt${QT_VERSION_MAJOR}::Network
+    )
+    add_test(NAME share_format_test COMMAND share_format_test)
+    set_tests_properties(share_format_test PROPERTIES TIMEOUT 15)
     if (WIN32)
         add_executable(core_exit_integration_test
                 test/core_exit_integration_test.cpp
@@ -347,6 +358,16 @@ if (BUILD_TESTING)
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 $<TARGET_FILE:Qt${QT_VERSION_MAJOR}::Core>
                 $<TARGET_FILE_DIR:runtime_transition_test>
+        )
+        add_custom_command(TARGET share_format_test POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:Qt${QT_VERSION_MAJOR}::Core>
+                $<TARGET_FILE_DIR:share_format_test>
+        )
+        add_custom_command(TARGET share_format_test POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:Qt${QT_VERSION_MAJOR}::Network>
+                $<TARGET_FILE_DIR:share_format_test>
         )
         add_custom_command(TARGET core_exit_integration_test POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different

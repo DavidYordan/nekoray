@@ -24,6 +24,7 @@ namespace QtGrpc {
     const char *GrpcStatusHeader = "grpc-status";
     const char *GrpcStatusMessage = "grpc-message";
     const int GrpcMessageSizeHeaderSize = 5;
+    const int GrpcServerDeadlineLeadMs = 250;
 
     class NoCache : public QAbstractNetworkCache {
     public:
@@ -64,7 +65,8 @@ namespace QtGrpc {
                             const QString &service,
                             const QByteArray &args,
                             const QByteArray &daemonInstanceId,
-                            std::uint64_t lifecycleCommandSequence) {
+                            std::uint64_t lifecycleCommandSequence,
+                            int timeoutMs) {
             QUrl callUrl = url_base + "/" + service + "/" + method;
             // qDebug() << "Service call url: " << callUrl;
 
@@ -85,6 +87,18 @@ namespace QtGrpc {
                 request.setRawHeader(
                     "nekoray_command_sequence",
                     QByteArray::number(lifecycleCommandSequence));
+            }
+            if (timeoutMs > 0) {
+                // gRPC's standard timeout header gives the Go handler its own
+                // deadline. End it before the local abort timer so normal
+                // scheduling and HTTP/2 cancellation propagation cannot turn
+                // the GUI timeout itself into the server's commit boundary.
+                const auto serverTimeoutMs = std::max(
+                    1,
+                    timeoutMs - GrpcServerDeadlineLeadMs);
+                request.setRawHeader(
+                    "grpc-timeout",
+                    QByteArray::number(serverTimeoutMs) + 'm');
             }
 
             QByteArray msg(GrpcMessageSizeHeaderSize, '\0');
@@ -129,7 +143,8 @@ namespace QtGrpc {
                 service,
                 args,
                 daemonInstanceId,
-                lifecycleCommandSequence);
+                lifecycleCommandSequence,
+                timeout_ms);
 
             QTimer *abortTimer = nullptr;
             if (timeout_ms > 0) {
@@ -231,16 +246,15 @@ namespace QtGrpc {
 namespace NekoGui_rpc {
 
     namespace {
-        // This bounds only the GUI's wait. The server may still finish after
-        // the HTTP/2 request is aborted, so callers must treat timeout as an
-        // indeterminate transition. A later sequenced Stop orders after older
-        // commands in the same daemon, but cross-daemon state still requires
-        // the conservative reconciliation path.
+        // The matching grpc-timeout ends the server context 250 ms before the
+        // GUI abort timer. Commands that have not acquired the lifecycle
+        // executor are fenced, while an admitted Stop/Close may still finish
+        // later. Callers must therefore reconcile every transport timeout.
         constexpr int CoreTransitionRpcTimeoutMs = 30 * 1000;
         constexpr int CoreReconcileRpcTimeoutMs = 5 * 1000;
         constexpr int CoreHandshakeRpcTimeoutMs = 2 * 1000;
         constexpr int CoreExitAckRpcTimeoutMs = 5 * 1000;
-        constexpr std::uint32_t LifecycleProtocolVersion = 2;
+        constexpr std::uint32_t LifecycleProtocolVersion = 3;
 
         bool isSha256(const QByteArray& value) {
             if (value.size() != 64) return false;

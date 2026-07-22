@@ -30,7 +30,7 @@ type BaseServer struct {
 	gracefulShutdownCallback func()
 }
 
-const LifecycleProtocolVersion uint32 = 2
+const LifecycleProtocolVersion uint32 = 3
 
 func (s *BaseServer) GetDaemonInfo(ctx context.Context, in *gen.EmptyReq) (*gen.DaemonInfoResp, error) {
 	return &gen.DaemonInfoResp{

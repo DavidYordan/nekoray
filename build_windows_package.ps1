@@ -640,6 +640,12 @@ try {
         $RuntimeTransitionTest = Require-File `
             $RuntimeTransitionTestPath `
             "runtime transition test"
+        $ShareFormatTestPath = Assert-PathOutsideProtectedProduction `
+            (Join-Path $BuildDirFull "share_format_test.exe") `
+            "share format test executable"
+        $ShareFormatTest = Require-File `
+            $ShareFormatTestPath `
+            "share format test"
         $CoreExitIntegrationWorkRoot = Assert-PathOutsideProtectedProduction `
             (Join-Path $BuildDirFull "core-exit-integration-work") `
             "core Exit integration work root"
@@ -673,6 +679,10 @@ try {
                 $RuntimeTransitionTest `
                 @() `
                 "runtime transition tracker test before core Exit integration"
+            Invoke-Checked `
+                $ShareFormatTest `
+                @() `
+                "share format test before core Exit integration"
             foreach ($entry in $CoreExitEnvironment.GetEnumerator()) {
                 $CoreExitPreviousEnvironment[$entry.Key] = [Environment]::GetEnvironmentVariable(
                     $entry.Key,

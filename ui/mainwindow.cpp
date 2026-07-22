@@ -3,6 +3,7 @@
 
 #include "fmt/includes.h"
 #include "fmt/Preset.hpp"
+#include "fmt/ShareFormats.hpp"
 #include "main/ConfigRecovery.hpp"
 #include "db/ProfileFilter.hpp"
 #include "db/ConfigBuilder.hpp"
@@ -490,6 +491,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), ui(new Ui::MainWi
         ui->menu_export_config->setVisible(name == software_core_name);
         ui->menu_export_config->setText(tr("Export %1 config").arg(name));
         ui->menu_copy_links->setEnabled(!selected.isEmpty());
+        ui->menu_copy_links_without_remarks->setEnabled(!selected.isEmpty());
+        ui->menu_copy_ip_port_user_pass->setEnabled(!selected.isEmpty());
         ui->menu_copy_links_nkr->setEnabled(!selected.isEmpty());
     });
     connect(ui->menu_server, &QMenu::aboutToShow, this, [=] {
@@ -1766,6 +1769,72 @@ void MainWindow::on_menu_copy_links_triggered() {
     if (links.length() == 0) return;
     QApplication::clipboard()->setText(links.join("\n"));
     show_log_impl(tr("Copied %1 item(s)").arg(links.length()));
+}
+
+void MainWindow::on_menu_copy_links_without_remarks_triggered() {
+    const auto ents = get_now_selected_list();
+    QStringList links;
+    QStringList failures;
+    for (const auto& ent: ents) {
+        const auto result = NekoGui_fmt::ShareLinkWithoutRemark(ent->bean->ToShareLink());
+        if (!result.ok()) {
+            failures += QStringLiteral("%1: %2")
+                            .arg(ent->bean->DisplayName(),
+                                 NekoGui_fmt::ShareFormatErrorDescription(result.error));
+            continue;
+        }
+        links += result.text;
+    }
+    if (!failures.isEmpty()) {
+        MessageBoxWarning(
+            tr("Copy failed"),
+            tr("Nothing was copied because these profiles cannot use the selected format:\n%1")
+                .arg(failures.join('\n')));
+        return;
+    }
+    if (links.isEmpty()) return;
+    QApplication::clipboard()->setText(links.join('\n'));
+    show_log_impl(tr("Copied %1 item(s)").arg(links.length()));
+}
+
+void MainWindow::on_menu_copy_ip_port_user_pass_triggered() {
+    const auto ents = get_now_selected_list();
+    QStringList lines;
+    QStringList failures;
+    for (const auto& ent: ents) {
+        const auto* bean = dynamic_cast<NekoGui_fmt::SocksHttpBean*>(ent->bean.get());
+        auto kind = NekoGui_fmt::CredentialProxyKind::Unsupported;
+        if (bean != nullptr && bean->socks_http_type == NekoGui_fmt::SocksHttpBean::type_Socks5) {
+            kind = NekoGui_fmt::CredentialProxyKind::Socks5;
+        } else if (bean != nullptr &&
+                   bean->socks_http_type == NekoGui_fmt::SocksHttpBean::type_HTTP) {
+            kind = NekoGui_fmt::CredentialProxyKind::Http;
+        }
+        const auto result = NekoGui_fmt::IpPortUserPass(
+            kind,
+            ent->bean->serverAddress,
+            ent->bean->serverPort,
+            bean == nullptr ? QString{} : bean->username,
+            bean == nullptr ? QString{} : bean->password,
+            bean != nullptr && bean->stream != nullptr && bean->stream->security == "tls");
+        if (!result.ok()) {
+            failures += QStringLiteral("%1: %2")
+                            .arg(ent->bean->DisplayName(),
+                                 NekoGui_fmt::ShareFormatErrorDescription(result.error));
+            continue;
+        }
+        lines += result.text;
+    }
+    if (!failures.isEmpty()) {
+        MessageBoxWarning(
+            tr("Copy failed"),
+            tr("Nothing was copied because these profiles cannot use the selected format:\n%1")
+                .arg(failures.join('\n')));
+        return;
+    }
+    if (lines.isEmpty()) return;
+    QApplication::clipboard()->setText(lines.join('\n'));
+    show_log_impl(tr("Copied %1 item(s)").arg(lines.length()));
 }
 
 void MainWindow::on_menu_copy_links_nkr_triggered() {

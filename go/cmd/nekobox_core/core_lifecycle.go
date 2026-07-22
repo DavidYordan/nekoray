@@ -73,6 +73,147 @@ type coreLifecycleSnapshot struct {
 	targetConfigMatches        bool
 }
 
+// lifecycleCommandExecutor is the single admission owner for lifecycle state.
+// A channel-backed token preserves the mutex-style memory ordering while also
+// allowing an RPC context to abandon a command before it is admitted. A
+// command whose context loses this race never advances the ordering watermark;
+// a later reconciliation barrier can therefore prove FENCED_NOT_ADMITTED.
+type lifecycleCommandExecutor struct {
+	owner chan struct{}
+}
+
+func newLifecycleCommandExecutor() *lifecycleCommandExecutor {
+	executor := &lifecycleCommandExecutor{owner: make(chan struct{}, 1)}
+	executor.owner <- struct{}{}
+	return executor
+}
+
+func (e *lifecycleCommandExecutor) acquire(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-e.owner:
+		// A deadline may become observable at the same instant as the token.
+		// Give cancellation priority before the caller can admit a command.
+		if err := ctx.Err(); err != nil {
+			e.owner <- struct{}{}
+			return err
+		}
+		return nil
+	}
+}
+
+func (e *lifecycleCommandExecutor) release() {
+	e.owner <- struct{}{}
+}
+
+// lifecycleStartExecution arbitrates one Start candidate between RPC
+// cancellation and publication. Cancellation may stop parsing/box startup,
+// but only while publication is still pending. Once tryCommit wins, later
+// handler-context cancellation cannot tear down the published runtime; a lost
+// response is resolved by the existing sequenced reconciliation barrier.
+type lifecycleStartExecution struct {
+	ctx             context.Context
+	mu              sync.Mutex
+	cancelled       bool
+	committed       bool
+	finished        bool
+	candidateCancel context.CancelFunc
+	stopWatcher     func() bool
+}
+
+func newLifecycleStartExecution(ctx context.Context) *lifecycleStartExecution {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	execution := &lifecycleStartExecution{ctx: ctx}
+	execution.stopWatcher = context.AfterFunc(ctx, execution.cancelBeforeCommit)
+	return execution
+}
+
+func (e *lifecycleStartExecution) cancelBeforeCommit() {
+	e.mu.Lock()
+	if e.committed || e.finished {
+		e.mu.Unlock()
+		return
+	}
+	e.cancelled = true
+	cancel := e.candidateCancel
+	e.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (e *lifecycleStartExecution) bindCandidateCancel(cancel context.CancelFunc) {
+	if cancel == nil {
+		return
+	}
+	e.mu.Lock()
+	if e.committed || e.finished {
+		e.mu.Unlock()
+		return
+	}
+	e.candidateCancel = cancel
+	cancelNow := e.cancelled || e.ctx.Err() != nil
+	if cancelNow {
+		e.cancelled = true
+	}
+	e.mu.Unlock()
+	if cancelNow {
+		cancel()
+	}
+}
+
+func (e *lifecycleStartExecution) tryCommit() error {
+	e.mu.Lock()
+	if e.cancelled || e.ctx.Err() != nil {
+		e.cancelled = true
+		cancel := e.candidateCancel
+		e.mu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+		if err := e.ctx.Err(); err != nil {
+			return err
+		}
+		return context.Canceled
+	}
+	e.committed = true
+	e.candidateCancel = nil
+	stopWatcher := e.stopWatcher
+	e.stopWatcher = nil
+	e.mu.Unlock()
+	if stopWatcher != nil {
+		stopWatcher()
+	}
+	return nil
+}
+
+func (e *lifecycleStartExecution) finish() {
+	e.mu.Lock()
+	if e.finished {
+		e.mu.Unlock()
+		return
+	}
+	e.finished = true
+	cancel := e.candidateCancel
+	e.candidateCancel = nil
+	stopWatcher := e.stopWatcher
+	e.stopWatcher = nil
+	committed := e.committed
+	e.mu.Unlock()
+	if stopWatcher != nil {
+		stopWatcher()
+	}
+	if !committed && cancel != nil {
+		cancel()
+	}
+}
+
 // managedCore contains every capability belonging to one sing-box generation.
 // It is published only after the candidate has started successfully. Callers
 // never retain this object directly; they retain a generation-bound reference
@@ -108,7 +249,7 @@ type coreInstanceReference struct {
 }
 
 type coreLifecycle struct {
-	mu                   sync.Mutex
+	executor             *lifecycleCommandExecutor
 	phase                coreLifecyclePhase
 	generation           uint64
 	current              *managedCore
@@ -118,7 +259,10 @@ type coreLifecycle struct {
 }
 
 func newCoreLifecycle() *coreLifecycle {
-	return &coreLifecycle{phase: coreLifecycleStopped}
+	return &coreLifecycle{
+		executor: newLifecycleCommandExecutor(),
+		phase:    coreLifecycleStopped,
+	}
 }
 
 var activeCoreLifecycle = newCoreLifecycle()
@@ -190,8 +334,24 @@ func (l *coreLifecycle) start(
 	configSHA256 string,
 	factory func() (*managedCore, error),
 ) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	return l.startContext(
+		context.Background(),
+		commandSequence,
+		configSHA256,
+		func(*lifecycleStartExecution) (*managedCore, error) { return factory() },
+	)
+}
+
+func (l *coreLifecycle) startContext(
+	ctx context.Context,
+	commandSequence uint64,
+	configSHA256 string,
+	factory func(*lifecycleStartExecution) (*managedCore, error),
+) error {
+	if err := l.executor.acquire(ctx); err != nil {
+		return err
+	}
+	defer l.executor.release()
 	if l.phase == coreLifecycleExiting {
 		return errCoreLifecycleExiting
 	}
@@ -217,10 +377,17 @@ func (l *coreLifecycle) start(
 		return errCoreLifecycleBusy
 	}
 
+	execution := newLifecycleStartExecution(ctx)
+	defer execution.finish()
 	l.phase = coreLifecycleStarting
-	candidate, createErr := factory()
+	candidate, createErr := factory(execution)
 	if createErr == nil && (candidate == nil || candidate.close == nil || candidate.dial == nil) {
 		createErr = errInvalidCoreCandidate
+	}
+	if createErr == nil {
+		if commitErr := execution.tryCommit(); commitErr != nil {
+			createErr = fmt.Errorf("Start cancelled before runtime publication: %w", commitErr)
+		}
 	}
 	if createErr != nil {
 		if candidate == nil {
@@ -259,8 +426,14 @@ func (l *coreLifecycle) start(
 // and this process refuses all later starts, dials, stats reads, and stop
 // retries. Recovery requires replacing the daemon process.
 func (l *coreLifecycle) stop(commandSequence uint64) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	return l.stopContext(context.Background(), commandSequence)
+}
+
+func (l *coreLifecycle) stopContext(ctx context.Context, commandSequence uint64) error {
+	if err := l.executor.acquire(ctx); err != nil {
+		return err
+	}
+	defer l.executor.release()
 	if l.phase == coreLifecycleExiting {
 		return errCoreLifecycleExiting
 	}
@@ -313,8 +486,8 @@ func (l *coreLifecycle) stop(commandSequence uint64) error {
 }
 
 func (l *coreLifecycle) currentReference() *coreInstanceReference {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	_ = l.executor.acquire(context.Background())
+	defer l.executor.release()
 	return &coreInstanceReference{
 		owner:      l,
 		generation: l.generation,
@@ -347,8 +520,8 @@ func (l *coreLifecycle) validateReferenceLocked(reference *coreInstanceReference
 }
 
 func (l *coreLifecycle) validateReference(reference *coreInstanceReference) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	_ = l.executor.acquire(context.Background())
+	defer l.executor.release()
 	_, err := l.validateReferenceLocked(reference)
 	return err
 }
@@ -359,8 +532,10 @@ func (l *coreLifecycle) dial(
 	network string,
 	address string,
 ) (net.Conn, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	if err := l.executor.acquire(ctx); err != nil {
+		return nil, err
+	}
+	defer l.executor.release()
 	current, err := l.validateReferenceLocked(reference)
 	if err != nil {
 		return nil, err
@@ -369,8 +544,10 @@ func (l *coreLifecycle) dial(
 }
 
 func (l *coreLifecycle) queryStats(ctx context.Context, name string, reset bool) (int64, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	if err := l.executor.acquire(ctx); err != nil {
+		return 0, err
+	}
+	defer l.executor.release()
 	if l.phase == coreLifecycleBlocked {
 		return 0, l.blockedErrorLocked()
 	}
@@ -391,8 +568,17 @@ func (l *coreLifecycle) queryStats(ctx context.Context, name string, reset bool)
 // the gRPC owner to shut down. No later lifecycle command is admitted, closing
 // the check/exit race without implicitly stopping an active or blocked core.
 func (l *coreLifecycle) requestExit(commandSequence uint64) (coreLifecycleSnapshot, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	return l.requestExitContext(context.Background(), commandSequence)
+}
+
+func (l *coreLifecycle) requestExitContext(
+	ctx context.Context,
+	commandSequence uint64,
+) (coreLifecycleSnapshot, error) {
+	if err := l.executor.acquire(ctx); err != nil {
+		return coreLifecycleSnapshot{}, err
+	}
+	defer l.executor.release()
 	if l.phase == coreLifecycleExiting {
 		return coreLifecycleSnapshot{}, errCoreLifecycleExiting
 	}
@@ -418,7 +604,7 @@ func (l *coreLifecycle) requestExit(commandSequence uint64) (coreLifecycleSnapsh
 
 // reconcile is a stateful ordering barrier that returns a runtime snapshot. It
 // shares and advances the lifecycle sequence watermark with Start/Stop/Exit. If
-// the target command acquired the mutex first, reconcile waits for its final
+// the target command acquired the executor first, reconcile waits for its final
 // outcome; if reconcile acquires first, advancing the watermark guarantees
 // that a delayed lower-sequence target can no longer mutate this daemon.
 func (l *coreLifecycle) reconcile(
@@ -427,8 +613,26 @@ func (l *coreLifecycle) reconcile(
 	targetKind coreLifecycleCommandKind,
 	targetConfigSHA256 string,
 ) (coreLifecycleSnapshot, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	return l.reconcileContext(
+		context.Background(),
+		barrierSequence,
+		targetSequence,
+		targetKind,
+		targetConfigSHA256,
+	)
+}
+
+func (l *coreLifecycle) reconcileContext(
+	ctx context.Context,
+	barrierSequence uint64,
+	targetSequence uint64,
+	targetKind coreLifecycleCommandKind,
+	targetConfigSHA256 string,
+) (coreLifecycleSnapshot, error) {
+	if err := l.executor.acquire(ctx); err != nil {
+		return coreLifecycleSnapshot{}, err
+	}
+	defer l.executor.release()
 	if l.phase == coreLifecycleExiting {
 		return coreLifecycleSnapshot{}, errCoreLifecycleExiting
 	}
@@ -478,7 +682,7 @@ func (l *coreLifecycle) snapshotForCommandLocked(
 }
 
 func (l *coreLifecycle) snapshot() (coreLifecyclePhase, uint64, bool) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	_ = l.executor.acquire(context.Background())
+	defer l.executor.release()
 	return l.phase, l.generation, l.current != nil
 }

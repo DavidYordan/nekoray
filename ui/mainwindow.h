@@ -155,6 +155,10 @@ private slots:
 
     void on_menu_copy_links_triggered();
 
+    void on_menu_copy_links_without_remarks_triggered();
+
+    void on_menu_copy_ip_port_user_pass_triggered();
+
     void on_menu_copy_links_nkr_triggered();
 
     void on_menu_export_config_triggered();

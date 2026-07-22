@@ -51,6 +51,61 @@ func configuredExitServer(t *testing.T) (*server, <-chan struct{}) {
 	return service, shutdownRequested
 }
 
+func TestServerStopDeadlineBeforeAdmissionIsNotAnApplicationError(t *testing.T) {
+	originalLifecycle := activeCoreLifecycle
+	defer func() { activeCoreLifecycle = originalLifecycle }()
+	activeCoreLifecycle = newCoreLifecycle()
+	const configHash = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+	fake := &fakeManagedCore{
+		queryValue: 1,
+		queryEnter: make(chan struct{}),
+		queryWait:  make(chan struct{}),
+	}
+	if err := activeCoreLifecycle.start(1, configHash, func() (*managedCore, error) {
+		return fake.candidate(), nil
+	}); err != nil {
+		t.Fatalf("start active lifecycle: %v", err)
+	}
+
+	queryDone := make(chan error, 1)
+	go func() {
+		_, err := activeCoreLifecycle.queryStats(context.Background(), "proxy", false)
+		queryDone <- err
+	}()
+	<-fake.queryEnter
+
+	deadlineContext, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	deadlineContext = metadata.NewIncomingContext(
+		deadlineContext,
+		metadata.Pairs(lifecycleCommandSequenceHeader, "2"),
+	)
+	response, err := (&server{}).Stop(deadlineContext, &gen.EmptyReq{})
+	if response != nil || status.Code(err) != codes.DeadlineExceeded {
+		t.Fatalf("queued Stop returned response=%#v error=%v", response, err)
+	}
+	close(fake.queryWait)
+	if err := <-queryDone; err != nil {
+		t.Fatalf("release query: %v", err)
+	}
+
+	snapshot, err := activeCoreLifecycle.reconcile(
+		3,
+		2,
+		coreLifecycleCommandStop,
+		configHash,
+	)
+	if err != nil {
+		t.Fatalf("reconcile expired Stop: %v", err)
+	}
+	if snapshot.phase != coreLifecycleActive || !snapshot.hasCurrent ||
+		snapshot.targetCommand.outcome != coreLifecycleOutcomeFencedNotAdmitted ||
+		fake.cancelCount.Load() != 0 || fake.closeCount.Load() != 0 {
+		t.Fatalf("expired server Stop mutated runtime: snapshot=%#v cancel=%d close=%d",
+			snapshot, fake.cancelCount.Load(), fake.closeCount.Load())
+	}
+}
+
 func TestIsolatedTestsRequireExplicitBoundedConfig(t *testing.T) {
 	tests := []struct {
 		name string

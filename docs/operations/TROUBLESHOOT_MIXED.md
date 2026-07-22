@@ -24,7 +24,7 @@ Get-NetTCPConnection -State Listen -LocalPort 12080 |
 
 结果必须回查 PID 的 `ExecutablePath`。`2080` 可用只能证明外部生产实例在工作，不能证明本项目成功；`12080` 未监听则先查本项目是否启动、配置 schema、端口占用和 core 日志。
 
-GUI 与 `nekobox_core.exe` 必须来自同一轮构建。每次 core 启动后，日志中的 `grpc server listening` 只会触发控制面探测；只有出现 `Core RPC identity handshake accepted for daemon generation ...` 才表示 GUI 已核对 UUID 和 lifecycle protocol version 2 并允许发送 Start。握手失败会明确记录 bounded retry 后仍 unavailable，v1/v2 或其它旧 core/新 GUI 组合不会兼容回退。即便握手成功，也只表示精确控制 daemon 可用，不表示 profile 已启动、`12080` 已监听或线路/TUN/WFP 健康。
+GUI 与 `nekobox_core.exe` 必须来自同一轮构建。每次 core 启动后，日志中的 `grpc server listening` 只会触发控制面探测；只有出现 `Core RPC identity handshake accepted for daemon generation ...` 才表示 GUI 已核对 UUID 和 lifecycle protocol version 3 并允许发送 Start。握手失败会明确记录 bounded retry 后仍 unavailable，v1/v2 或其它旧 core 与 v3 GUI/core 组合不会兼容回退。即便握手成功，也只表示精确控制 daemon 可用，不表示 profile 已启动、`12080` 已监听或线路/TUN/WFP 健康。
 
 配置端口位于 `<package-dir>/config/groups/nekobox.json`。UI 显示的 `Mixed: 地址:端口` 只是配置值，不是健康状态。
 

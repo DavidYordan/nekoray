@@ -3,7 +3,7 @@
 状态：现行
 最后更新：2026-07-22
 
-原则：先止损和恢复 NekoRay，再收敛三项扩展，最后解决 Windows fail-closed 运行时。未经需求授权不新增第四项产品功能。
+原则：先止损和恢复 NekoRay，再收敛三项核心扩展，最后解决 Windows fail-closed 运行时。除 2026-07-22 已明确追加的批量分享格式外，不新增其它未经需求授权的产品功能。
 
 ## 阶段 0：冻结边界与保护环境
 
@@ -33,6 +33,7 @@
 12. [ ] 为 ConfigBuilder、订阅和其它跨线程读模型操作建立完整 immutable snapshot 或显式模型读写同步。本批只完成第一段止损：ConfigBuilder 不再回写 live `TrafficData.id/tag`，VLESS core 对象生成不再改写 bean `flow`；group speedtest 改为 UI 线程构建 immutable job，结果回到 UI 后以对象身份、bean/profile/config fingerprint 做 CAS 式复核并保存。当前 mutex 仍只串行化参与的 mutation 提交；final Start gate 只复核 recovery、当前 ticket 和已捕获 daemon readiness，不会重建 candidate 或比较完整 model revision。完整 `BuildModelSnapshot`、订阅与其它跨线程读模型同步均未完成，不能宣称整个模型已有读写锁。
 13. [ ] 统一 route/settings/hotkey 等保存失败的强类型传播、用户提示和内存回滚；任何磁盘失败后都必须保持磁盘—内存一致，并纳入故障注入。
 14. [ ] （P2）为 `TrafficData` 建立不可变遥测快照或明确的锁/原子方案，使 counter/rate 的 worker 写入与 UI/JsonStore 读取同步。本批仅把未初始化的 `last_update` 固定为 `0`，消除了该字段的未定义行为；generation-local `TrafficBinding` 只隔离路由身份，不解决共享计数器的数据竞态。
+15. [x] 实现用户于 2026-07-22 明确追加的右键多选分享格式：保留含 remark 原生链接，新增仅删除 URI fragment 的无 remark 链接，以及严格、全有或全无的 `ip:port:user:pass`。后者只接受字面 IPv4、完整凭据的 SOCKS5/非 TLS HTTP，禁止 DNS 解析和凭据日志；`share_format_test` 使用假凭据覆盖纯转换正负例，GUI 菜单已通过 Windows Qt/MinGW 构建。真实剪贴板交互自动化仍列在阶段 4，不把纯函数测试冒充 GUI E2E。
 
 完成门：旧配置不会因本分支首次启动或任一失败路径丢失；已有订阅可以安全刷新。
 
@@ -68,7 +69,7 @@
 
 ## 阶段 3：Windows 持久 fail-closed 运行时
 
-已完成的 lifecycle mutex/generation、daemon UUID 与对账屏障只是在现有 GUI/core 进程内封住直接竞态；下列 RuntimeStateMachine、独立 service、stable anchor 和 persistent WFP 仍全部是发布阻断，详见 [ADR 0010](architecture/decisions/0010-process-local-lifecycle-generation-fencing.md) 与 [ADR 0011](architecture/decisions/0011-daemon-identity-and-lifecycle-reconciliation.md)。
+已完成的 lifecycle executor/generation、daemon UUID 与对账屏障只是在现有 GUI/core 进程内封住直接竞态；下列 RuntimeStateMachine、独立 service、stable anchor 和 persistent WFP 仍全部是发布阻断，详见 [ADR 0010](architecture/decisions/0010-process-local-lifecycle-generation-fencing.md) 与 [ADR 0011](architecture/decisions/0011-daemon-identity-and-lifecycle-reconciliation.md)。
 
 1. [x] 完成本地 sing-box 生命周期调查：当前无原地 reload，选定持久 service + stable anchor + generation 架构。
 2. [ ] 建立单线程 RuntimeStateMachine，分离 desired/observed/owner/health。
@@ -79,8 +80,8 @@
 7. [ ] 系统代理只通过用户手动、按 SID 的 broker操作；关闭时 compare-and-restore完整快照。
 8. [x] 过渡期最终配置拒绝任意 sing-box inbound `set_system_proxy=true`、未授权 TUN，并锁定受管 TUN 完整对象及接口策略；同时拒绝已知系统 endpoint/时钟副作用。`internal-full` 与产品 TUN/辅助并发/测试隔离，默认导出与测试导出均走 OS 副作用 guard。
 9. [x] UI 区分 TUN requested 与 worker-observed 状态；core 崩溃只重启空控制 core，不自动恢复 profile/TUN。该止损不等于持久 OS 状态或 kill-switch。
-10. [x] 建立进程内 lifecycle mutex/generation 与 daemon identity 基础：GUI 以单一 transition ticket 串行 Start/Stop/CrashCleanup；每次 QProcess 启动生成 UUID，所有 RPC 在 handler 前验证该身份，日志只触发 UUID/协议 v2 握手，旧进程未确认退出时不发布 replacement identity。Start/Stop/Exit 使用单调 command sequence；更高序号的对账与 lifecycle 命令共用 mutex，并返回目标 command outcome、config hash 和稳定 phase。Go core 串行 candidate 发布、Stop、dial、stats 和 Exit，并使旧/blocked generation fail closed。超时对账成功时只接受精确 active/stopped 结论，再次超时或不一致仍保留 indeterminate。Exit 子项已闭合到进程边界：只在精确 `STOPPED` 返回结构化 `EXITING` ACK，随后 `GracefulStop`；GUI 冻结 generation/UUID/PID 并等待同一 QProcess `NormalExit/0`，不 kill/replacement，ACK 不确定时只有精确 non-admission 对账才恢复控制。详见 ADR 0010/0011。
-11. [ ] 在受控 core/Runtime 入口重复关键产品策略校验，并建立真正可取消的端到端 deadline 与持久 OS 事实对账。daemon UUID、握手、process-local `ReconcileLifecycle` 和上述 Exit ACK/finished 子项已完成；完整无 Skip package 也会运行 tracker 与安全 raw QProcess/Qt HTTP/2 core gate。但该 raw harness 不调用产品 Client/MainWindow，配置无 listener/TUN，只快照常见 WinINet 五键。client abort 仍不会取消正在运行的 Go Start/Stop，对账再次超时仍是 unknown，`GracefulStop` 也可能等待在途 handler；还需真正 context-aware 的单 owner command executor，以及 GUI→Client、crash→commit、HTTP/2 timeout/ACK 丢失、父进程死亡和 Windows 路由/DNS/TUN/WFP 资源集成测试。token/UUID/进程内 generation 均不替代持久 runtime transaction、service、stable anchor 或 WFP，因此本项保持未关闭。
+10. [x] 建立进程内 lifecycle executor/generation 与 daemon identity 基础：GUI 以单一 transition ticket 串行 Start/Stop/CrashCleanup；每次 QProcess 启动生成 UUID，所有 RPC 在 handler 前验证该身份，日志只触发 UUID/协议 v3 握手，旧进程未确认退出时不发布 replacement identity。Start/Stop/Exit 使用单调 command sequence；更高序号的对账与 lifecycle 命令共用 context-aware single-owner executor，并返回目标 command outcome、config hash 和稳定 phase。等待准入的命令可由服务端 deadline 取消；Start candidate 以原子 cancellation-vs-publication 边界决定清理或提交。Go core 使旧/blocked generation fail closed。超时对账成功时只接受精确 active/stopped 结论，再次超时或不一致仍保留 indeterminate。Exit 子项已闭合到进程边界：只在精确 `STOPPED` 返回结构化 `EXITING` ACK，随后 `GracefulStop`；GUI 冻结 generation/UUID/PID 并等待同一 QProcess `NormalExit/0`，不 kill/replacement，ACK 不确定时只有精确 non-admission 对账才恢复控制。详见 ADR 0010/0011。
+11. [ ] 在受控 core/Runtime 入口重复关键产品策略校验，并建立可恢复的持久 OS 事实对账。daemon UUID、协议 v3 握手、服务端 deadline、process-local `ReconcileLifecycle`、Start 取消/发布仲裁和 Exit ACK/finished 子项已完成；完整无 Skip package 也会运行 tracker、分享格式纯测试与安全 raw QProcess/Qt HTTP/2 core gate。但该 raw harness 不调用产品 Client/MainWindow，配置无 listener/TUN，只快照常见 WinINet 五键。已准入 Stop/Close 仍不可中断，对账再次超时仍是 unknown，`GracefulStop` 也可能等待在途 handler；还缺 GUI→Client、crash→commit、真实 timeout/ACK 丢失、父进程死亡和 Windows 路由/DNS/TUN/WFP 资源集成测试。token/UUID/进程内 generation 均不替代持久 runtime transaction、service、stable anchor 或 WFP，因此本项保持未关闭。
 
 完成门：GUI退出/重启、worker crash、候选启动失败和切线都不改变系统代理/TUN模式，也没有物理直连；失败可以全阻断。
 
@@ -91,6 +92,7 @@
 - [ ] 如确需恢复 Resolve domain，只能经对应 provider resolver、保留原始域名并提供可验证回退；不得把它重建成探测/改线平台。
 - [ ] 把 `test/test_final_config_guards.ps1` 的导出 fixture 下沉为 C++ 配置生成 golden/负向测试，并覆盖 Mixed 完整快照、live/test 的 TUN on/off 四象限、export 删除 `auto_detect_interface` 边界、NTP/嵌套 route direct-action bind 拒绝和产品 TUN 精确对象。
 - [ ] 建立 C++配置生成/导入/数据测试和本地 mock outbound矩阵；继续扩展已经落地的 Go nil-config/system-fallback/FullTest 回归到真实 lifecycle 竞争。
+- [ ] 批量分享的 C++ 纯函数矩阵已覆盖 fragment 精确删除、IPv4/端口/协议/认证正负例与冒号/换行拒绝，且只使用假凭据；仍需 GUI 自动化覆盖混合多选的原子失败、剪贴板不变和实际右键菜单触发。
 - [x] 建立首个 Windows-only CI：校验仓库卫生、固定子模块、受控 RouteFluent core 源构建、Go 单测和无侵入 Python 安全契约；不得将其表述为 GUI/TUN/WFP 验收。
 - [ ] 收口干净 Qt/MinGW/C++ 工具链、GUI 自动构建与测试、交付 wrapper 真实 hash/manifest、许可证和 SBOM；libneko 仓内固定已完成。
 - [ ] 先用 OpenWrt复测 patched core协议；再在独立 Windows完成 Mixed、多辅助、Wintun、WFP、IPv4/IPv6/DNS故障注入。
