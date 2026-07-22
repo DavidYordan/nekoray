@@ -57,6 +57,14 @@ function Assert-PathOutsideProtectedProduction {
     if ([string]::IsNullOrWhiteSpace($Path)) {
         throw "$Purpose must not be empty."
     }
+    $rawPathWithoutDrivePrefix = if ($Path -match '^[A-Za-z]:') {
+        $Path.Substring(2)
+    } else {
+        $Path
+    }
+    if ($rawPathWithoutDrivePrefix.Contains(':')) {
+        throw "$Purpose rejects alternate data stream/path namespace syntax: $Path"
+    }
 
     $candidate = [IO.Path]::GetFullPath($Path)
     $candidateRoot = [IO.Path]::GetPathRoot($candidate)
