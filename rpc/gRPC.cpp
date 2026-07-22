@@ -239,7 +239,8 @@ namespace NekoGui_rpc {
         constexpr int CoreTransitionRpcTimeoutMs = 30 * 1000;
         constexpr int CoreReconcileRpcTimeoutMs = 5 * 1000;
         constexpr int CoreHandshakeRpcTimeoutMs = 2 * 1000;
-        constexpr std::uint32_t LifecycleProtocolVersion = 1;
+        constexpr int CoreExitAckRpcTimeoutMs = 5 * 1000;
+        constexpr std::uint32_t LifecycleProtocolVersion = 2;
 
         bool isSha256(const QByteArray& value) {
             if (value.size() != 64) return false;
@@ -268,13 +269,46 @@ namespace NekoGui_rpc {
         return daemon_identity_provider == nullptr ? QString{} : daemon_identity_provider();
     }
 
-    void Client::Exit(const QString& expectedDaemonInstanceId) {
+    DaemonExitAckResult Client::Exit(const QString& expectedDaemonInstanceId) {
+        DaemonExitAckResult result;
+        if (expectedDaemonInstanceId.isEmpty()) {
+            result.detail = QStringLiteral("daemon Exit requires an expected instance identity");
+            return result;
+        }
         libcore::EmptyReq request;
-        libcore::EmptyResp reply;
+        libcore::LifecycleStateResp reply;
         const auto commandSequence =
             lifecycle_command_sequence.fetch_add(1, std::memory_order_relaxed) + 1;
-        default_grpc_channel->Call(
-            "Exit", request, &reply, 500, expectedDaemonInstanceId, commandSequence);
+        result.commandSequence = commandSequence;
+        const auto status = default_grpc_channel->Call(
+            "Exit",
+            request,
+            &reply,
+            CoreExitAckRpcTimeoutMs,
+            expectedDaemonInstanceId,
+            commandSequence);
+        if (status != QNetworkReply::NoError) {
+            result.detail = QStringLiteral("daemon Exit transport error %1").arg(status);
+            return result;
+        }
+        if (QString::fromStdString(reply.daemon_instance_id()) != expectedDaemonInstanceId ||
+            reply.ordering_watermark() != commandSequence ||
+            reply.phase() != libcore::LIFECYCLE_PHASE_EXITING ||
+            reply.has_current() || !reply.current_config_sha256().empty() ||
+            reply.active_start_command_sequence() != 0 ||
+            !reply.has_target_command() ||
+            reply.target_command().sequence() != commandSequence ||
+            reply.target_command().kind() != libcore::LIFECYCLE_COMMAND_EXIT ||
+            reply.target_command().outcome() != libcore::LIFECYCLE_OUTCOME_SUCCEEDED ||
+            !reply.target_command().config_sha256().empty() ||
+            reply.target_command().requested_config_matches()) {
+            result.detail = QStringLiteral(
+                "daemon Exit acknowledgement identity, sequence, phase, or state mismatch");
+            return result;
+        }
+        result.acknowledged = true;
+        result.detail = QStringLiteral("the exact stopped daemon accepted Exit");
+        return result;
     }
 
     bool Client::VerifyDaemon(
@@ -387,16 +421,30 @@ namespace NekoGui_rpc {
             expectedConfigSha256);
     }
 
+    LifecycleReconcileResult Client::ReconcileExit(
+        const QString& expectedDaemonInstanceId,
+        std::uint64_t targetCommandSequence) {
+        return ReconcileLifecycle(
+            expectedDaemonInstanceId,
+            targetCommandSequence,
+            libcore::LIFECYCLE_COMMAND_EXIT,
+            {});
+    }
+
     LifecycleReconcileResult Client::ReconcileLifecycle(
         const QString& expectedDaemonInstanceId,
         std::uint64_t targetCommandSequence,
         libcore::LifecycleCommandKind targetCommandKind,
         const QByteArray& expectedConfigSha256) {
         LifecycleReconcileResult result;
+        const auto targetIsExit =
+            targetCommandKind == libcore::LIFECYCLE_COMMAND_EXIT;
         if (expectedDaemonInstanceId.isEmpty() || targetCommandSequence == 0 ||
             (targetCommandKind != libcore::LIFECYCLE_COMMAND_START &&
-             targetCommandKind != libcore::LIFECYCLE_COMMAND_STOP) ||
-            !isSha256(expectedConfigSha256)) {
+             targetCommandKind != libcore::LIFECYCLE_COMMAND_STOP &&
+             !targetIsExit) ||
+            (targetIsExit ? !expectedConfigSha256.isEmpty()
+                          : !isSha256(expectedConfigSha256))) {
             result.detail = QStringLiteral("invalid lifecycle reconciliation input");
             return result;
         }
@@ -432,12 +480,27 @@ namespace NekoGui_rpc {
         const auto currentHash = QByteArray::fromStdString(reply.current_config_sha256());
         const auto targetHash = QByteArray::fromStdString(target.config_sha256());
         const auto stopped = reply.phase() == libcore::LIFECYCLE_PHASE_STOPPED &&
-                             !reply.has_current() && reply.current_config_sha256().empty();
+                             !reply.has_current() && reply.current_config_sha256().empty() &&
+                             reply.active_start_command_sequence() == 0;
         const auto exactCurrent = reply.phase() == libcore::LIFECYCLE_PHASE_ACTIVE &&
                                   reply.has_current() && isSha256(currentHash) &&
                                   currentHash == expectedConfigSha256;
 
-        if (targetCommandKind == libcore::LIFECYCLE_COMMAND_START) {
+        if (targetIsExit) {
+            // This is the only state in which a lost Exit response may be
+            // treated as a clean rejection. The higher-sequence barrier now
+            // owns the watermark, so a delayed target Exit cannot commit
+            // after this response. An acknowledged, superseded, malformed,
+            // active, blocked, or EXITING result stays indeterminate.
+            if (stopped &&
+                target.outcome() == libcore::LIFECYCLE_OUTCOME_FENCED_NOT_ADMITTED &&
+                targetHash.isEmpty() && !target.requested_config_matches()) {
+                result.disposition = LifecycleReconcileDisposition::Stopped;
+                result.detail = QStringLiteral(
+                    "the Exit command was not admitted and is fenced while the daemon is stopped");
+                return result;
+            }
+        } else if (targetCommandKind == libcore::LIFECYCLE_COMMAND_START) {
             if (target.outcome() == libcore::LIFECYCLE_OUTCOME_SUCCEEDED &&
                 target.requested_config_matches() && targetHash == expectedConfigSha256 &&
                 exactCurrent &&

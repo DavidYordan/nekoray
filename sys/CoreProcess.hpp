@@ -2,6 +2,8 @@
 
 #include <QProcess>
 
+#include <chrono>
+
 #include "main/RuntimeTransition.hpp"
 
 namespace NekoGui_sys {
@@ -29,6 +31,13 @@ namespace NekoGui_sys {
 
         [[nodiscard]] NekoGui_Runtime::DaemonInstanceSnapshot CurrentDaemonInstance() const;
 
+        [[nodiscard]] NekoGui_Runtime::DaemonProcessSnapshot CurrentDaemonProcess() const;
+
+        [[nodiscard]] bool WaitForDaemonFinished(
+            const NekoGui_Runtime::DaemonProcessSnapshot& expected,
+            std::chrono::milliseconds timeout,
+            NekoGui_Runtime::DaemonProcessFinishedResult* result = nullptr) const;
+
         [[nodiscard]] NekoGui_Runtime::DaemonReadyResult ConfirmDaemonReady(
             std::uint64_t expectedGeneration,
             const QString& expectedInstanceId);
@@ -45,6 +54,7 @@ namespace NekoGui_sys {
         bool failed_to_start = false;
         bool restarting = false;
         NekoGui_Runtime::DaemonGenerationState daemonGeneration;
+        NekoGui_Runtime::DaemonProcessExitState daemonProcessExit;
         QByteArray stdoutProbeBuffer;
         QByteArray stderrProbeBuffer;
 

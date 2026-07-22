@@ -85,6 +85,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\verify_mixed_inbound
 
 对真实节点直接运行 `verify_mixed_inbound.ps1` 仍依赖真实 DNS、节点和所选测试 URL，不能完全分离本地 Mixed contract 与远端出站。仓内 `test_mixed_probe.ps1` 与 `test_runtime_connectivity.ps1` 已改用精确 PID 持有的 loopback HTTP 204 origin，避免公共站抖动，并验证 origin 清理；它们仍未覆盖错误认证、主/辅助不同出口、WFP、IPv6 或持续健康，也不能证明进程就是本次 GUI 启动的实例。
 
-2026-07-20 使用本轮 `build-package-windows64/nekobox_core.exe` 的回归中，Mixed fixture 为 7/7，额外 listener、系统代理、禁用日志和 origin 清理均通过；runtime connectivity 的 expected 204 正例中 HTTP/SOCKS5h 均为 204，expected 200 反例按预期报告 2 项 mismatch，系统代理、fixture 端口和 origin 清理均通过。这是 loopback/工具契约证据，不是生产节点或 Windows TUN/WFP 证据。
+2026-07-22 使用本轮 `deployment/windows64/nekobox_core.exe` 的回归中，Mixed fixture 为 7/7，额外 listener、系统代理、禁用日志和 origin 清理均通过；runtime connectivity 的 expected 204 正例中 HTTP/SOCKS5h 均为 204，expected 200 反例按预期报告 2 项 mismatch，系统代理、fixture 端口和 origin 清理均通过。clean GUI build tree 不输出 `nekobox_core.exe`。这是 loopback/工具契约证据，不是生产节点或 Windows TUN/WFP 证据。
 
 所有报告都应脱敏；其中可能包含节点名、服务器地址、路由、进程和本地路径。任何测试结果都不得以关闭或改写生产 Nekoray 为前提。

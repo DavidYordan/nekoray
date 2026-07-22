@@ -24,7 +24,7 @@ Get-NetTCPConnection -State Listen -LocalPort 12080 |
 
 结果必须回查 PID 的 `ExecutablePath`。`2080` 可用只能证明外部生产实例在工作，不能证明本项目成功；`12080` 未监听则先查本项目是否启动、配置 schema、端口占用和 core 日志。
 
-GUI 与 `nekobox_core.exe` 必须来自同一轮构建。每次 core 启动后，日志中的 `grpc server listening` 只会触发控制面探测；只有出现 `Core RPC identity handshake accepted for daemon generation ...` 才表示 GUI 已核对 UUID 和协议版本并允许发送 Start。握手失败会明确记录 bounded retry 后仍 unavailable，旧 core/新 GUI 组合不会兼容回退。即便握手成功，也只表示精确控制 daemon 可用，不表示 profile 已启动、`12080` 已监听或线路/TUN/WFP 健康。
+GUI 与 `nekobox_core.exe` 必须来自同一轮构建。每次 core 启动后，日志中的 `grpc server listening` 只会触发控制面探测；只有出现 `Core RPC identity handshake accepted for daemon generation ...` 才表示 GUI 已核对 UUID 和 lifecycle protocol version 2 并允许发送 Start。握手失败会明确记录 bounded retry 后仍 unavailable，v1/v2 或其它旧 core/新 GUI 组合不会兼容回退。即便握手成功，也只表示精确控制 daemon 可用，不表示 profile 已启动、`12080` 已监听或线路/TUN/WFP 健康。
 
 配置端口位于 `<package-dir>/config/groups/nekobox.json`。UI 显示的 `Mixed: 地址:端口` 只是配置值，不是健康状态。
 
@@ -113,6 +113,7 @@ powershell -NoProfile -ExecutionPolicy Bypass `
 - `resolver_unavailable>0`：检查订阅是否提供有效 `proxy-server-nameserver`、DoH 可达性及可审计 bootstrap；不得通过本机 DNS、direct 或其它线路 fallback 掩盖故障。
 - 只有本机失败、OpenWrt 相同临时配置成功：优先检查 Windows 默认路由、TUN 回环、接口选择和进程生命周期。
 - 本机与 OpenWrt 同一配置均失败：优先检查配置生成、DNS、detour、节点或上游网络。
+- GUI 退出时提示正在等待某个精确 core PID：不要重复关闭、kill 该进程或手工替换 core。结构化 Exit ACK 已提交，或 ACK 丢失后无法证明未接纳时，continuation fence 会持续等待同一 `{generation, UUID, PID}` finished；这不是 Mixed 入口自动检测或线路 fallback。只有退出详情明确说明对账已证明 clean non-admission（协议条件为 `STOPPED/FENCED_NOT_ADMITTED`）时，GUI 才能安全恢复控制。
 
 2026-07-20 的历史 OpenWrt 真实对照中：保持主配置时，Mixed 和目标 outbound 均有事件，但 “AnyTLS `mihomo/1.19.28` + `g-2` detour” 返回 HTTP 502、HTTPS 超时、SOCKS 空响应；移除 detour 后三协议均为 204，独立 Trojan/profile 2 与独立 `g-2` 完整 outbound 也均为 204。该轮旧探针对所有临时变体强制 `auto_detect_interface=true`，只能证明共同接口变体下存在组合差异，不能证明产品导出接口策略；必须按当前默认 preserve 重跑。详细证据和安全基线见 [OpenWrt 已验证基线](../testing/OPENWRT_REMOTE_LAB.md#已验证基线)。这也不证明 Windows 集成已经通过。
 

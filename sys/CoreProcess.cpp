@@ -32,11 +32,34 @@ namespace NekoGui_sys {
             }
         });
         connect(this, &QProcess::started, this, [&]() {
+            const auto instance = daemonGeneration.CurrentInstance();
+            const auto process = NekoGui_Runtime::DaemonProcessSnapshot{
+                instance.generation,
+                instance.instanceId,
+                static_cast<std::int64_t>(processId()),
+            };
+            if (!daemonProcessExit.MarkProcessStarted(process)) {
+                MW_show_log("[Error] " + QObject::tr(
+                    "The core process started without an exclusive generation/UUID/PID finished fence."));
+            }
             // Process creation is not RPC readiness. Proactively begin the
             // authenticated probe so readiness does not depend on a log line
             // arriving in one particular stream or read chunk.
             RequestDaemonHandshake();
         });
+        connect(
+            this,
+            QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+            this,
+            [&](int exitCode, QProcess::ExitStatus exitStatus) {
+                const auto finished = daemonProcessExit.MarkProcessFinished(
+                    exitCode,
+                    exitStatus == QProcess::NormalExit);
+                if (!finished.valid) {
+                    MW_show_log("[Error] " + QObject::tr(
+                        "The core process finished without a generation/UUID/PID launch record."));
+                }
+            });
         connect(this, &QProcess::errorOccurred, this, [&](QProcess::ProcessError error) {
             if (error == QProcess::ProcessError::FailedToStart) {
                 failed_to_start = true;
@@ -114,13 +137,19 @@ namespace NekoGui_sys {
     void CoreProcess::Restart() {
         restarting = true;
         if (state() != QProcess::NotRunning) {
-            QProcess::kill();
-            if (!QProcess::waitForFinished(500)) {
-                MW_show_log("[Error] " + QObject::tr(
-                    "The old core process did not confirm exit; refusing to publish a replacement daemon identity."));
-                restarting = false;
-                return;
-            }
+            // A running daemon may own network resources. Replacement is only
+            // legal after its exact QProcess::finished signal; kill/terminate
+            // is never an implicit restart mechanism.
+            MW_show_log("[Error] " + QObject::tr(
+                "The old core process has not confirmed exit; refusing to kill it or publish a replacement daemon identity."));
+            restarting = false;
+            return;
+        }
+        if (daemonProcessExit.CurrentProcess().valid()) {
+            MW_show_log("[Error] " + QObject::tr(
+                "The old core reached NotRunning without its exact finished signal; refusing to publish a replacement daemon identity."));
+            restarting = false;
+            return;
         }
         started = false;
         Start();
@@ -172,6 +201,17 @@ namespace NekoGui_sys {
 
     NekoGui_Runtime::DaemonInstanceSnapshot CoreProcess::CurrentDaemonInstance() const {
         return daemonGeneration.CurrentInstance();
+    }
+
+    NekoGui_Runtime::DaemonProcessSnapshot CoreProcess::CurrentDaemonProcess() const {
+        return daemonProcessExit.CurrentProcess();
+    }
+
+    bool CoreProcess::WaitForDaemonFinished(
+        const NekoGui_Runtime::DaemonProcessSnapshot& expected,
+        std::chrono::milliseconds timeout,
+        NekoGui_Runtime::DaemonProcessFinishedResult* result) const {
+        return daemonProcessExit.WaitForFinished(expected, timeout, result);
     }
 
     NekoGui_Runtime::DaemonReadyResult CoreProcess::ConfirmDaemonReady(

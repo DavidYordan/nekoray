@@ -57,6 +57,8 @@
 #include <QTcpServer>
 
 namespace {
+    constexpr auto ExitContinuationProperty = "routefluent_exit_continuation_authorized";
+
     bool canListenLocalPort(int port) {
         if (!IsValidPort(port)) return false;
         QTcpServer server;
@@ -909,6 +911,8 @@ void MainWindow::on_menu_exit_triggered() {
     }
 
     if (mu_exit.tryLock()) {
+        setProperty(ExitContinuationProperty, false);
+        setEnabled(false);
         NekoGui::dataStore->prepare_exit = true;
         exit_had_profile_id = NekoGui::dataStore->started_id;
         // Do not clear Windows system proxy as a side effect of restart/exit.
@@ -923,32 +927,44 @@ void MainWindow::on_menu_exit_triggered() {
         neko_stop(false, true, CoreStopReason::AppExit, false, stopSucceeded);
         runOnNewThread([=] {
             sem_stopped.acquire();
-            if (!stopSucceeded->load()) {
+            const auto cancelExit = [=](const QString& warning) {
                 runOnUiThread([=] {
-                    // A failed or indeterminate Stop must never be converted
-                    // into a process kill by continuing the exit sequence.
-                    // Restore only application control state; do not change
-                    // system proxy, Tun, or the observed runtime.
+                    // Restore only application control state. Never change
+                    // system proxy/Tun or kill/replace an uncertain daemon.
                     NekoGui::dataStore->prepare_exit = false;
                     NekoGui::dataStore->save_control_no_save = false;
                     RegisterHotkey(false);
                     mu_exit.unlock();
+                    setEnabled(true);
                     refresh_status();
                     ActivateWindow(this);
-                    MessageBoxWarning(
-                        software_name,
-                        tr("Exit was cancelled because the running core did not confirm Stop. The application and observed network state were kept; resolve the indeterminate state with an explicit permitted Stop before trying again."));
+                    MessageBoxWarning(software_name, warning);
                     runOnUiThread([=] { core_process->EnsureStarted(); }, DS_cores);
                 });
+            };
+            if (!stopSucceeded->load()) {
+                cancelExit(tr("Exit was cancelled because the running core did not confirm Stop. The application and observed network state were kept; resolve the indeterminate state with an explicit permitted Stop before trying again."));
                 return;
             }
-            stop_core_daemon();
+            QString daemonExitDetail;
+            if (!stop_core_daemon(&daemonExitDetail)) {
+                cancelExit(tr("Exit was cancelled after the profile stopped because the empty control daemon did not complete the exact Exit ACK + generation/UUID/PID NormalExit handshake. The GUI was kept open; no process was killed and no system proxy or Tun mode was changed. Detail: %1")
+                               .arg(daemonExitDetail));
+                return;
+            }
             runOnUiThread([=] {
+                setProperty(ExitContinuationProperty, true);
                 on_menu_exit_triggered(); // continue exit progress
             });
         });
         return;
     }
+    // mu_exit is also the fence held by the asynchronous Stop/Exit chain.
+    // Only that chain may authorize the second call that commits GUI exit;
+    // repeated user/tray/close requests must not bypass an in-flight ACK or
+    // exact-process-finished wait.
+    if (!property(ExitContinuationProperty).toBool()) return;
+    setProperty(ExitContinuationProperty, false);
     //
     MF_release_runguard();
     auto buildRestartArguments = [=]() {

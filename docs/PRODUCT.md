@@ -78,7 +78,7 @@ Windows GUI 当前忽略 CRT `SIGTERM`/`SIGINT`，只用于防止控制台信号
 
 ## 7. 运行入口与信任边界
 
-- 普通 GUI 路径由 C++ ConfigBuilder 生成并校验产品配置，再通过仅监听 localhost、使用每个 GUI session 随机令牌的 gRPC 控制 core；每次 core 启动另有 UUID，所有 RPC 先验证精确实例身份，日志后也必须完成 UUID/协议握手才 ready。Start/Stop/Exit 使用单调 command sequence；Start/Stop 响应不确定时可用同一 daemon mutex 内的更高序号屏障对账。UUID/对账只证明进程内记录，不是配置授权、持久 runtime generation 或 Windows OS 状态。
+- 普通 GUI 路径由 C++ ConfigBuilder 生成并校验产品配置，再通过仅监听 localhost、使用每个 GUI session 随机令牌的 gRPC 控制 core；每次 core 启动另有 UUID，所有 RPC 先验证精确实例身份，日志后也必须完成 UUID/协议 v2 握手才 ready。Start/Stop/Exit 使用单调 command sequence；Start/Stop 响应不确定时可用同一 daemon mutex 内的更高序号屏障对账。Exit 只从精确 `STOPPED` 返回结构化 `EXITING` ACK，再 `GracefulStop`；GUI 冻结 generation/UUID/PID 并等待同一 QProcess `NormalExit/0`，不 kill/replacement，ACK 不确定时只有精确 non-admission 对账才恢复。UUID/对账/finished 只证明进程内记录和同一 GUI-owned daemon 的进程结果，不是配置授权、持久 runtime generation 或 Windows OS 状态。
 - `nekobox_core run/check` 是用户显式选择的高级 CLI，供构建、审计和经过收紧的隔离测试使用；它能够直接读取 sing-box 配置，因此不得被描述为普通 GUI 的任意绕过，也不得用于未经审计的配置。
 - 当前 Go core 会执行 sing-box 自身的配置与生命周期处理，但尚未重复执行 C++ 层的 Mixed、TUN、系统代理和 resolver 产品策略。该纵深防御缺口必须在受控 core/Runtime 边界补齐；随机令牌不能替代配置授权。
 

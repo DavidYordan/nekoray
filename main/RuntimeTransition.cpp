@@ -1,6 +1,17 @@
 #include "RuntimeTransition.hpp"
 
 namespace NekoGui_Runtime {
+    namespace {
+        bool sameProcess(
+            const DaemonProcessSnapshot& left,
+            const DaemonProcessSnapshot& right) {
+            return left.valid() && right.valid() &&
+                   left.generation == right.generation &&
+                   left.instanceId == right.instanceId &&
+                   left.processId == right.processId;
+        }
+    }
+
     void TransitionCoordinator::UpdateDepthGateLocked(std::atomic_int* depthGate) const {
         if (depthGate != nullptr) depthGate->store(busy || crashCleanupPending ? 1 : 0);
     }
@@ -176,5 +187,43 @@ namespace NekoGui_Runtime {
     DaemonInstanceSnapshot DaemonGenerationState::CurrentInstance() const {
         std::lock_guard<std::mutex> lock(mutex);
         return {generation, instanceId, ready};
+    }
+
+    bool DaemonProcessExitState::MarkProcessStarted(
+        const DaemonProcessSnapshot& process) {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (!process.valid() || runningProcess.valid()) return false;
+        runningProcess = process;
+        return true;
+    }
+
+    DaemonProcessFinishedResult DaemonProcessExitState::MarkProcessFinished(
+        int exitCode,
+        bool normalExit) {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (!runningProcess.valid()) return {};
+        lastFinished = {runningProcess, exitCode, normalExit, true};
+        runningProcess = {};
+        finishedCondition.notify_all();
+        return lastFinished;
+    }
+
+    DaemonProcessSnapshot DaemonProcessExitState::CurrentProcess() const {
+        std::lock_guard<std::mutex> lock(mutex);
+        return runningProcess;
+    }
+
+    bool DaemonProcessExitState::WaitForFinished(
+        const DaemonProcessSnapshot& expected,
+        std::chrono::milliseconds timeout,
+        DaemonProcessFinishedResult* result) const {
+        if (!expected.valid() || timeout.count() < 0) return false;
+        std::unique_lock<std::mutex> lock(mutex);
+        const auto exactFinished = [&] {
+            return lastFinished.valid && sameProcess(lastFinished.process, expected);
+        };
+        if (!finishedCondition.wait_for(lock, timeout, exactFinished)) return false;
+        if (result != nullptr) *result = lastFinished;
+        return true;
     }
 } // namespace NekoGui_Runtime

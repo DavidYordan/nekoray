@@ -508,7 +508,12 @@ try {
     Assert-RouteFluentManifest $RouteFluentCoreManifest
 
     if (!$SkipGuiBuild) {
-        Write-Step "Configure and build GUI"
+        Write-Step "Reset, configure, and build GUI"
+        # A formal package must not inherit untracked objects, manually built
+        # diagnostics, or a CMake cache from an earlier source/protocol state.
+        # The guarded helper rejects the repository root, production paths,
+        # aliases, and reparse trees before removing this exact build subtree.
+        Remove-SafeDirectory $BuildDirFull $Root
         New-Item -ItemType Directory -Force -Path $BuildDirFull | Out-Null
         $cmakeArgs = @(
             "-S", $Root,
@@ -516,6 +521,7 @@ try {
             "-G", $Generator,
             "-Wno-dev",
             "-DQT_VERSION_MAJOR=6",
+            "-DBUILD_TESTING=ON",
             "-DCMAKE_BUILD_TYPE=Release",
             "-DCMAKE_POLICY_VERSION_MINIMUM=3.5",
             "-DCMAKE_PREFIX_PATH=$QtDir",
@@ -615,6 +621,81 @@ try {
         }
         Require-File (Join-Path $PackageDir "updater.exe") "updater.exe" | Out-Null
         Require-File (Join-Path $PackageDir "nekobox_core.exe") "nekobox_core.exe" | Out-Null
+    }
+
+    if (!$SkipGuiBuild -and !$SkipGoBuild) {
+        Write-Step "Verify authenticated core Exit ACK and exact process finish"
+        Assert-DirectoryTreeHasNoReparsePoints `
+            $BuildDirFull `
+            "core Exit integration build tree"
+        $CoreExitIntegrationTestPath = Assert-PathOutsideProtectedProduction `
+            (Join-Path $BuildDirFull "core_exit_integration_test.exe") `
+            "core Exit integration test executable"
+        $CoreExitIntegrationTest = Require-File `
+            $CoreExitIntegrationTestPath `
+            "core Exit integration test"
+        $RuntimeTransitionTestPath = Assert-PathOutsideProtectedProduction `
+            (Join-Path $BuildDirFull "runtime_transition_test.exe") `
+            "runtime transition test executable"
+        $RuntimeTransitionTest = Require-File `
+            $RuntimeTransitionTestPath `
+            "runtime transition test"
+        $CoreExitIntegrationWorkRoot = Assert-PathOutsideProtectedProduction `
+            (Join-Path $BuildDirFull "core-exit-integration-work") `
+            "core Exit integration work root"
+        if (Test-Path -LiteralPath $CoreExitIntegrationWorkRoot) {
+            Assert-DirectoryTreeHasNoReparsePoints `
+                $CoreExitIntegrationWorkRoot `
+                "core Exit integration work root"
+        } else {
+            New-Item -ItemType Directory -Path $CoreExitIntegrationWorkRoot | Out-Null
+        }
+        Assert-DirectoryTreeHasNoReparsePoints `
+            $PackageDir `
+            "core Exit integration package tree"
+        $CoreExitIntegrationCorePath = Require-File `
+            (Assert-PathOutsideProtectedProduction `
+                (Join-Path $PackageDir "nekobox_core.exe") `
+                "core Exit integration core executable") `
+            "current package core"
+        $CoreExitIntegrationWorkRoot = (Resolve-Path -LiteralPath $CoreExitIntegrationWorkRoot).Path
+        $CoreExitIntegrationCoreSha256 = `
+            (Get-FileHash -LiteralPath $CoreExitIntegrationCorePath -Algorithm SHA256).Hash.ToLowerInvariant()
+        $CoreExitEnvironment = @{
+            "ROUTEFLUENT_CORE_EXIT_TEST_AUTHORIZATION" = "build_windows_package.ps1:v1"
+            "ROUTEFLUENT_CORE_EXIT_TEST_CORE_PATH" = $CoreExitIntegrationCorePath
+            "ROUTEFLUENT_CORE_EXIT_TEST_CORE_SHA256" = $CoreExitIntegrationCoreSha256
+            "ROUTEFLUENT_CORE_EXIT_TEST_WORK_ROOT" = $CoreExitIntegrationWorkRoot
+        }
+        $CoreExitPreviousEnvironment = @{}
+        try {
+            Invoke-Checked `
+                $RuntimeTransitionTest `
+                @() `
+                "runtime transition tracker test before core Exit integration"
+            foreach ($entry in $CoreExitEnvironment.GetEnumerator()) {
+                $CoreExitPreviousEnvironment[$entry.Key] = [Environment]::GetEnvironmentVariable(
+                    $entry.Key,
+                    [EnvironmentVariableTarget]::Process)
+                [Environment]::SetEnvironmentVariable(
+                    $entry.Key,
+                    $entry.Value,
+                    [EnvironmentVariableTarget]::Process)
+            }
+            Invoke-Checked $CoreExitIntegrationTest @(
+                $CoreExitIntegrationCorePath,
+                $CoreExitIntegrationWorkRoot
+            ) "core Exit integration test"
+        } finally {
+            foreach ($entry in $CoreExitPreviousEnvironment.GetEnumerator()) {
+                [Environment]::SetEnvironmentVariable(
+                    $entry.Key,
+                    $entry.Value,
+                    [EnvironmentVariableTarget]::Process)
+            }
+        }
+    } else {
+        Write-Step "Skip core Exit integration test (requires current GUI tests and core)"
     }
     Copy-BuildFile $RouteFluentCoreManifest (Join-Path $PackageDir "routefluent-sing-box-manifest.json") "RouteFluent package manifest"
 
@@ -730,6 +811,24 @@ try {
         "routefluent-dns-invalid-fallback-missing-probes.json"
     )) {
         Invoke-ExpectedFailure $CoreExe @("check", "-c", (Join-Path $RouteFluentTestData $invalidFixture)) "RouteFluent invalid fixture $invalidFixture"
+    }
+
+    if ($SkipGuiBuild -or $SkipGoBuild) {
+        Write-Warning (
+            "SkipGuiBuild/SkipGoBuild are diagnostic-only. " +
+            "The package directory was validated, but no formal archive will be created or overwritten."
+        )
+        if (Test-Path -LiteralPath $ZipPath) {
+            Write-Warning "Existing formal archive was left untouched: $ZipPath"
+        }
+        if ($packageConfigBackupOwned) {
+            Restore-PackageConfig $PackageConfigDir $PackageConfigBackupDir $PackageDir
+            $packageConfigBackupOwned = $false
+            Remove-SafeDirectory $PackageConfigBackupDir $DeployRoot
+        }
+        Write-Step "Diagnostic package directory ready; formal archive skipped"
+        Write-Host "Folder: $PackageDir"
+        return
     }
 
     Write-Step "Create formal zip with nekoray root folder"

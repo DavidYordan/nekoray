@@ -324,6 +324,20 @@ if (BUILD_TESTING)
     add_test(NAME runtime_transition_test COMMAND runtime_transition_test)
     set_tests_properties(runtime_transition_test PROPERTIES TIMEOUT 15)
     if (WIN32)
+        add_executable(core_exit_integration_test
+                test/core_exit_integration_test.cpp
+        )
+        target_link_libraries(core_exit_integration_test PRIVATE
+                Qt${QT_VERSION_MAJOR}::Core
+                Qt${QT_VERSION_MAJOR}::Network
+                myproto
+        )
+        # This executable starts and, on failure, may terminate the exact core
+        # process that it created.  Do not register it with CTest: a CMake
+        # build cannot prove that an ignored deployment core is from the
+        # current source tree.  The complete Windows packaging script invokes
+        # it only after building the package core and supplies an exact
+        # path/hash authorization through the child environment.
         add_custom_command(TARGET config_recovery_test POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 $<TARGET_FILE:Qt${QT_VERSION_MAJOR}::Core>
@@ -333,6 +347,16 @@ if (BUILD_TESTING)
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 $<TARGET_FILE:Qt${QT_VERSION_MAJOR}::Core>
                 $<TARGET_FILE_DIR:runtime_transition_test>
+        )
+        add_custom_command(TARGET core_exit_integration_test POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:Qt${QT_VERSION_MAJOR}::Core>
+                $<TARGET_FILE_DIR:core_exit_integration_test>
+        )
+        add_custom_command(TARGET core_exit_integration_test POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:Qt${QT_VERSION_MAJOR}::Network>
+                $<TARGET_FILE_DIR:core_exit_integration_test>
         )
     endif ()
 endif ()

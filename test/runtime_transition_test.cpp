@@ -4,6 +4,7 @@
 #include <QDebug>
 
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <thread>
 
@@ -262,6 +263,59 @@ int main(int argc, char** argv) {
                      "cancel and consume must serialize with exactly one winner");
         ok &= expect(daemon.MarkProcessStopped() == generation && !daemon.IsReady(generation),
                      "process stop must invalidate readiness for its generation");
+    }
+
+    {
+        using namespace std::chrono_literals;
+        NekoGui_Runtime::DaemonProcessExitState processExit;
+        const NekoGui_Runtime::DaemonProcessSnapshot first{
+            7,
+            "daemon-exit-1",
+            41001,
+        };
+        const NekoGui_Runtime::DaemonProcessSnapshot wrongPid{
+            first.generation,
+            first.instanceId,
+            first.processId + 1,
+        };
+        ok &= expect(processExit.MarkProcessStarted(first),
+                     "a valid daemon process identity must arm the finished fence");
+        ok &= expect(!processExit.MarkProcessStarted(first),
+                     "a second process must not replace a still-running finished fence");
+        ok &= expect(processExit.CurrentProcess().processId == first.processId,
+                     "the armed finished fence must expose the exact PID");
+
+        std::atomic_bool waiterObserved = false;
+        NekoGui_Runtime::DaemonProcessFinishedResult waitedResult;
+        std::thread waiter([&] {
+            waiterObserved = processExit.WaitForFinished(first, 500ms, &waitedResult);
+        });
+        const auto firstFinished = processExit.MarkProcessFinished(0, true);
+        waiter.join();
+        ok &= expect(firstFinished.valid && waiterObserved.load() && waitedResult.valid &&
+                         waitedResult.normalExit && waitedResult.exitCode == 0 &&
+                         waitedResult.process.generation == first.generation &&
+                         waitedResult.process.instanceId == first.instanceId &&
+                         waitedResult.process.processId == first.processId,
+                     "the exact generation/UUID/PID NormalExit must release the waiter");
+        ok &= expect(!processExit.WaitForFinished(wrongPid, 0ms),
+                     "a PID mismatch must not consume another process finished event");
+
+        const NekoGui_Runtime::DaemonProcessSnapshot second{
+            8,
+            "daemon-exit-2",
+            41002,
+        };
+        ok &= expect(processExit.MarkProcessStarted(second),
+                     "a new process may arm only after the prior process finished");
+        const auto secondFinished = processExit.MarkProcessFinished(9, false);
+        NekoGui_Runtime::DaemonProcessFinishedResult finishedBeforeWait;
+        ok &= expect(secondFinished.valid &&
+                         processExit.WaitForFinished(second, 0ms, &finishedBeforeWait) &&
+                         !finishedBeforeWait.normalExit && finishedBeforeWait.exitCode == 9,
+                     "finished-before-wait must remain observable without becoming a clean exit");
+        ok &= expect(!processExit.MarkProcessFinished(0, true).valid,
+                     "a duplicate finished signal must not create another process result");
     }
 
     return ok ? 0 : 1;

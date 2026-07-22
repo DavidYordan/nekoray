@@ -364,6 +364,54 @@ func TestReconcileBarrierFencesDelayedStart(t *testing.T) {
 	}
 }
 
+func TestReconcileBarrierFencesDelayedExit(t *testing.T) {
+	lifecycle := newCoreLifecycle()
+	snapshot, err := lifecycle.reconcile(
+		2,
+		1,
+		coreLifecycleCommandExit,
+		"",
+	)
+	if err != nil {
+		t.Fatalf("reconcile stopped lifecycle: %v", err)
+	}
+	if snapshot.phase != coreLifecycleStopped || snapshot.hasCurrent ||
+		snapshot.orderingWatermark != 2 || snapshot.activeStartCommandSequence != 0 ||
+		snapshot.currentConfigSHA256 != "" ||
+		snapshot.targetCommand.sequence != 1 ||
+		snapshot.targetCommand.kind != coreLifecycleCommandExit ||
+		snapshot.targetCommand.outcome != coreLifecycleOutcomeFencedNotAdmitted ||
+		snapshot.targetCommand.configSHA256 != "" || snapshot.targetConfigMatches {
+		t.Fatalf("unexpected fenced Exit snapshot: %#v", snapshot)
+	}
+
+	// A lost reconciliation response may be retried with another higher
+	// barrier while still naming the original Exit sequence. The proof remains
+	// stable and the newest barrier becomes the ordering watermark.
+	snapshot, err = lifecycle.reconcile(
+		3,
+		1,
+		coreLifecycleCommandExit,
+		"",
+	)
+	if err != nil {
+		t.Fatalf("retry reconcile stopped lifecycle: %v", err)
+	}
+	if snapshot.phase != coreLifecycleStopped || snapshot.hasCurrent ||
+		snapshot.orderingWatermark != 3 ||
+		snapshot.targetCommand.outcome != coreLifecycleOutcomeFencedNotAdmitted {
+		t.Fatalf("unexpected retried Exit fence: %#v", snapshot)
+	}
+
+	if _, err := lifecycle.requestExit(1); !errors.Is(err, errStaleCommandSequence) {
+		t.Fatalf("delayed Exit crossed reconcile barrier: %v", err)
+	}
+	phase, _, hasCurrent := lifecycle.snapshot()
+	if phase != coreLifecycleStopped || hasCurrent {
+		t.Fatalf("delayed Exit changed lifecycle: phase=%v current=%v", phase, hasCurrent)
+	}
+}
+
 func TestReconcileWaitsForStartAndReturnsExactOutcome(t *testing.T) {
 	lifecycle := newCoreLifecycle()
 	const configHash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -555,41 +603,76 @@ func TestDialHoldsLifecycleMutexAgainstStop(t *testing.T) {
 }
 
 func TestExitRequiresPreciselyStoppedLifecycle(t *testing.T) {
-	lifecycle := newCoreLifecycle()
-	exitCalls := 0
-	fakeExit := func(code int) {
-		if code != 0 {
-			t.Fatalf("unexpected exit code %d", code)
+	t.Run("stopped becomes terminal exiting fence", func(t *testing.T) {
+		lifecycle := newCoreLifecycle()
+		snapshot, err := lifecycle.requestExit(1)
+		if err != nil {
+			t.Fatalf("request exit: %v", err)
 		}
-		exitCalls++
-	}
+		if snapshot.phase != coreLifecycleExiting || snapshot.hasCurrent ||
+			snapshot.orderingWatermark != 1 || snapshot.runtimeGeneration != 0 ||
+			snapshot.targetCommand.sequence != 1 ||
+			snapshot.targetCommand.kind != coreLifecycleCommandExit ||
+			snapshot.targetCommand.outcome != coreLifecycleOutcomeSucceeded {
+			t.Fatalf("unexpected Exit snapshot: %#v", snapshot)
+		}
 
-	if err := lifecycle.exitWhenStopped(1, fakeExit); !errors.Is(err, errProcessExitReturned) {
-		t.Fatalf("stopped exit returned %v", err)
-	}
-	if exitCalls != 1 {
-		t.Fatalf("stopped lifecycle invoked exit %d time(s)", exitCalls)
-	}
+		factoryCalled := false
+		if err := lifecycle.start(2, "", func() (*managedCore, error) {
+			factoryCalled = true
+			return (&fakeManagedCore{}).candidate(), nil
+		}); !errors.Is(err, errCoreLifecycleExiting) {
+			t.Fatalf("Start after Exit returned %v", err)
+		}
+		if factoryCalled {
+			t.Fatal("Start factory ran after the Exit fence")
+		}
+		if err := lifecycle.stop(3); !errors.Is(err, errCoreLifecycleExiting) {
+			t.Fatalf("Stop after Exit returned %v", err)
+		}
+		if _, err := lifecycle.reconcile(4, 1, coreLifecycleCommandExit, ""); !errors.Is(err, errCoreLifecycleExiting) {
+			t.Fatalf("Reconcile after Exit returned %v", err)
+		}
+		if _, err := lifecycle.requestExit(5); !errors.Is(err, errCoreLifecycleExiting) {
+			t.Fatalf("second Exit returned %v", err)
+		}
 
-	fake := &fakeManagedCore{}
-	if err := lifecycle.start(2, "", func() (*managedCore, error) { return fake.candidate(), nil }); err != nil {
-		t.Fatalf("start failed: %v", err)
-	}
-	if err := lifecycle.exitWhenStopped(3, fakeExit); !errors.Is(err, errCoreExitRequiresStop) {
-		t.Fatalf("active exit returned %v", err)
-	}
-	if exitCalls != 1 || fake.cancelCount.Load() != 0 || fake.closeCount.Load() != 0 {
-		t.Fatalf("active Exit changed lifecycle: exits=%d cancel=%d close=%d", exitCalls, fake.cancelCount.Load(), fake.closeCount.Load())
-	}
+		lifecycle.mu.Lock()
+		watermark := lifecycle.lastCommandSequence
+		lastCommand := lifecycle.lastLifecycleCommand
+		lifecycle.mu.Unlock()
+		if watermark != 1 || lastCommand.sequence != 1 ||
+			lastCommand.kind != coreLifecycleCommandExit ||
+			lastCommand.outcome != coreLifecycleOutcomeSucceeded {
+			t.Fatalf("post-Exit command changed the terminal record: watermark=%d record=%#v", watermark, lastCommand)
+		}
+	})
 
-	fake.closeErr = errFakeClose
-	if err := lifecycle.stop(4); !errors.Is(err, errCoreLifecycleBlocked) {
-		t.Fatalf("stop did not block: %v", err)
-	}
-	if err := lifecycle.exitWhenStopped(5, fakeExit); !errors.Is(err, errCoreLifecycleBlocked) {
-		t.Fatalf("blocked exit returned %v", err)
-	}
-	if exitCalls != 1 {
-		t.Fatalf("blocked lifecycle invoked exit %d time(s)", exitCalls)
-	}
+	t.Run("active and blocked cores are never stopped implicitly", func(t *testing.T) {
+		activeLifecycle := newCoreLifecycle()
+		active := &fakeManagedCore{}
+		if err := activeLifecycle.start(1, "", func() (*managedCore, error) { return active.candidate(), nil }); err != nil {
+			t.Fatalf("start active lifecycle: %v", err)
+		}
+		if _, err := activeLifecycle.requestExit(2); !errors.Is(err, errCoreExitRequiresStop) {
+			t.Fatalf("active Exit returned %v", err)
+		}
+		phase, _, hasCurrent := activeLifecycle.snapshot()
+		if phase != coreLifecycleActive || !hasCurrent ||
+			active.cancelCount.Load() != 0 || active.closeCount.Load() != 0 {
+			t.Fatalf("active Exit changed lifecycle: phase=%v current=%v cancel=%d close=%d",
+				phase, hasCurrent, active.cancelCount.Load(), active.closeCount.Load())
+		}
+
+		active.closeErr = errFakeClose
+		if err := activeLifecycle.stop(3); !errors.Is(err, errCoreLifecycleBlocked) {
+			t.Fatalf("stop did not block: %v", err)
+		}
+		if _, err := activeLifecycle.requestExit(4); !errors.Is(err, errCoreLifecycleBlocked) {
+			t.Fatalf("blocked Exit returned %v", err)
+		}
+		if active.closeCount.Load() != 1 {
+			t.Fatalf("blocked Exit retried Close %d time(s)", active.closeCount.Load())
+		}
+	})
 }

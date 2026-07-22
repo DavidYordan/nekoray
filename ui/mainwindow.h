@@ -266,7 +266,7 @@ private:
 
     void speedtest_current();
 
-    static void stop_core_daemon();
+    static bool stop_core_daemon(QString* detail = nullptr);
 
     void CheckUpdate();
 

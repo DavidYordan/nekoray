@@ -23,6 +23,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <utility>
 
 // grpc
@@ -621,15 +622,142 @@ void MainWindow::speedtest_current() {
 #endif
 }
 
-void MainWindow::stop_core_daemon() {
+bool MainWindow::stop_core_daemon(QString* detail) {
 #ifndef NKR_NO_GRPC
     const auto window = GetMainWindow();
     if (window == nullptr || window->core_process == nullptr ||
         NekoGui_rpc::defaultClient == nullptr) {
-        return;
+        if (detail != nullptr) {
+            *detail = QStringLiteral("core daemon Exit prerequisites are unavailable");
+        }
+        return false;
     }
     const auto instance = window->core_process->CurrentDaemonInstance();
-    NekoGui_rpc::defaultClient->Exit(QString::fromStdString(instance.instanceId));
+    const auto process = window->core_process->CurrentDaemonProcess();
+    if (!instance.valid() || !instance.ready || !process.valid() ||
+        instance.generation != process.generation ||
+        instance.instanceId != process.instanceId) {
+        if (detail != nullptr) {
+            *detail = QStringLiteral(
+                "core daemon Exit requires one ready generation/UUID/PID identity");
+        }
+        return false;
+    }
+
+    const auto acknowledgement = NekoGui_rpc::defaultClient->Exit(
+        QString::fromStdString(process.instanceId));
+    QString lastReconciliationDetail;
+    const auto exitWasPreciselyFenced = [&]() {
+        const auto reconciliation = NekoGui_rpc::defaultClient->ReconcileExit(
+            QString::fromStdString(process.instanceId),
+            acknowledgement.commandSequence);
+        lastReconciliationDetail = reconciliation.detail;
+        if (reconciliation.disposition !=
+            NekoGui_rpc::LifecycleReconcileDisposition::Stopped) {
+            return false;
+        }
+
+        // Only this exact higher-sequence STOPPED/FENCED_NOT_ADMITTED proof
+        // permits the caller to cancel prepare_exit and restore application
+        // controls. It also prevents the delayed lower-sequence Exit request
+        // from committing after this return.
+        if (detail != nullptr) {
+            *detail = QStringLiteral(
+                          "%1; reconciliation proved a clean non-admission: %2")
+                          .arg(acknowledgement.detail, reconciliation.detail);
+        }
+        return true;
+    };
+    if (!acknowledgement.acknowledged) {
+        if (exitWasPreciselyFenced()) return false;
+
+        // A transport timeout can happen after Go has atomically committed
+        // EXITING and before the ACK reaches this client. Reconciliation may
+        // then fail because GracefulStop is already draining the server. Do
+        // not return to the caller: that path restores controls and calls
+        // EnsureStarted. Keep the prepare-exit fence armed and wait only for
+        // this frozen generation/UUID/PID to emit QProcess::finished.
+        MW_show_log(QObject::tr(
+                        "The core Exit response was not usable and a higher-sequence barrier could not prove non-admission (%1; %2). The application will keep waiting for the same core process without restoring or replacing it.")
+                        .arg(acknowledgement.detail, lastReconciliationDetail));
+    }
+
+    NekoGui_Runtime::DaemonProcessFinishedResult finished;
+    bool waitingNoticeShown = false;
+    while (!window->core_process->WaitForDaemonFinished(
+        process,
+        std::chrono::seconds(10),
+        &finished)) {
+        // An Exit ACK commits the daemon to EXITING; an unusable ACK without
+        // the exact non-admission proof may represent that same committed
+        // state. Keep the GUI's prepare-exit/save/UI fences armed and continue
+        // waiting for this exact QProcess generation/UUID/PID. Restoring
+        // controls or calling EnsureStarted here could expose a draining
+        // daemon as if it were available and could publish no replacement
+        // identity anyway.
+        //
+        // A first reconciliation can also fail transiently before an
+        // unaccepted Exit reaches the daemon. Retry the barrier after every
+        // bounded process wait. Each retry uses a newer sequence while still
+        // naming the original Exit sequence; only the same narrow proof above
+        // can release the fence.
+        if (!acknowledgement.acknowledged && exitWasPreciselyFenced()) {
+            return false;
+        }
+        // The process may have finished while the retry RPC was in flight.
+        // Consume that exact recorded result before publishing a stale
+        // still-waiting warning.
+        if (window->core_process->WaitForDaemonFinished(
+                process,
+                std::chrono::milliseconds::zero(),
+                &finished)) {
+            break;
+        }
+        if (!waitingNoticeShown) {
+            waitingNoticeShown = true;
+            runOnUiThread([process, exitAcknowledged = acknowledgement.acknowledged] {
+                const auto message = exitAcknowledged
+                                         ? QObject::tr(
+                                               "The exact core process (PID %1) accepted Exit but has not finished yet. The application will keep waiting for that same process; it will not kill or replace it, and it will not change system proxy or Tun mode.")
+                                               .arg(process.processId)
+                                         : QObject::tr(
+                                               "Exit admission for the exact core process (PID %1) remains indeterminate. The application will keep waiting for that same process; it will not restore, kill, or replace it, and it will not change system proxy or Tun mode.")
+                                               .arg(process.processId);
+                MW_show_log(message);
+                MessageBoxWarning(software_name, message);
+            });
+        }
+    }
+    if (!finished.valid || !finished.normalExit || finished.exitCode != 0) {
+        if (detail != nullptr) {
+            *detail = acknowledgement.acknowledged
+                          ? QStringLiteral(
+                                "the acknowledged daemon finished abnormally (exit code %1)")
+                                .arg(finished.exitCode)
+                          : QStringLiteral(
+                                "Exit admission remained indeterminate and the exact daemon finished abnormally (exit code %1)")
+                                .arg(finished.exitCode);
+        }
+        return false;
+    }
+    if (detail != nullptr) {
+        *detail = acknowledgement.acknowledged
+                      ? QStringLiteral(
+                            "the exact generation/UUID/PID returned Exit ACK and NormalExit/0")
+                      : QStringLiteral(
+                            "the Exit response remained indeterminate, then the exact generation/UUID/PID returned NormalExit/0");
+    }
+    // The caller has already confirmed an exact profile Stop before entering
+    // this function. If the ACK stayed indeterminate, NormalExit/0 from the
+    // frozen generation/UUID/PID still proves that no daemon remains to drain
+    // or replace. Completing the requested GUI exit now publishes no new
+    // lifecycle identity and does not change system proxy or Tun state.
+    return true;
+#else
+    if (detail != nullptr) {
+        *detail = QStringLiteral("this build has no authenticated core RPC support");
+    }
+    return false;
 #endif
 }
 

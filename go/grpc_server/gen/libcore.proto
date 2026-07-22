@@ -4,7 +4,7 @@ package libcore;
 option go_package = "grpc_server/gen";
 
 service LibcoreService {
-  rpc Exit(EmptyReq) returns (EmptyResp) {}
+  rpc Exit(EmptyReq) returns (LifecycleStateResp) {}
   rpc Update(UpdateReq) returns (UpdateResp) {}
   //
   rpc Start(LoadConfigReq) returns (ErrorResp) {}
@@ -42,6 +42,7 @@ enum LifecyclePhase {
   LIFECYCLE_PHASE_ACTIVE = 3;
   LIFECYCLE_PHASE_STOPPING = 4;
   LIFECYCLE_PHASE_BLOCKED = 5;
+  LIFECYCLE_PHASE_EXITING = 6;
 }
 
 enum LifecycleCommandKind {

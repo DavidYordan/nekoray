@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"os"
 	"strconv"
 	"strings"
 
@@ -48,18 +47,26 @@ func lifecycleCommandSequence(ctx context.Context) (uint64, error) {
 	return sequence, nil
 }
 
-// Exit intentionally overrides the promoted BaseServer implementation. The
-// generic server exits immediately, but this core must never terminate while
-// an active or indeterminately closed generation is still retained.
-func (s *server) Exit(ctx context.Context, in *gen.EmptyReq) (*gen.EmptyResp, error) {
+// Exit intentionally overrides the promoted unimplemented RPC. This core must
+// never terminate while an active or indeterminately closed generation is
+// still retained.
+func (s *server) Exit(ctx context.Context, in *gen.EmptyReq) (*gen.LifecycleStateResp, error) {
 	commandSequence, err := lifecycleCommandSequence(ctx)
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	if err := activeCoreLifecycle.exitWhenStopped(commandSequence, os.Exit); err != nil {
+	if !s.GracefulShutdownConfigured() {
+		return nil, status.Error(codes.FailedPrecondition, "graceful shutdown is not configured")
+	}
+	snapshot, err := activeCoreLifecycle.requestExit(commandSequence)
+	if err != nil {
 		return nil, status.Error(codes.FailedPrecondition, err.Error())
 	}
-	return &gen.EmptyResp{}, nil
+	response := lifecycleSnapshotToProto(ctx, snapshot)
+	if !s.RequestGracefulShutdown() {
+		return nil, status.Error(codes.Internal, "graceful shutdown request was not accepted")
+	}
+	return response, nil
 }
 
 func buildCoreCandidate(in *gen.LoadConfigReq) (*managedCore, error) {
@@ -149,6 +156,8 @@ func lifecyclePhaseToProto(phase coreLifecyclePhase) gen.LifecyclePhase {
 		return gen.LifecyclePhase_LIFECYCLE_PHASE_STOPPING
 	case coreLifecycleBlocked:
 		return gen.LifecyclePhase_LIFECYCLE_PHASE_BLOCKED
+	case coreLifecycleExiting:
+		return gen.LifecyclePhase_LIFECYCLE_PHASE_EXITING
 	default:
 		return gen.LifecyclePhase_LIFECYCLE_PHASE_UNSPECIFIED
 	}
@@ -186,34 +195,10 @@ func lifecycleCommandOutcomeToProto(outcome coreLifecycleCommandOutcome) gen.Lif
 	}
 }
 
-func (s *server) ReconcileLifecycle(
+func lifecycleSnapshotToProto(
 	ctx context.Context,
-	in *gen.LifecycleReconcileReq,
-) (*gen.LifecycleStateResp, error) {
-	if in == nil {
-		return nil, status.Error(codes.InvalidArgument, "lifecycle reconcile request is missing")
-	}
-	if len(in.TargetConfigSha256) != sha256.Size*2 ||
-		in.TargetConfigSha256 != strings.ToLower(in.TargetConfigSha256) {
-		return nil, status.Error(codes.InvalidArgument, "target config SHA-256 must be lowercase hexadecimal")
-	}
-	if _, err := hex.DecodeString(in.TargetConfigSha256); err != nil {
-		return nil, status.Error(codes.InvalidArgument, "target config SHA-256 must be lowercase hexadecimal")
-	}
-	barrierSequence, err := lifecycleCommandSequence(ctx)
-	if err != nil {
-		return nil, status.Error(codes.InvalidArgument, err.Error())
-	}
-	targetKind := lifecycleCommandKindFromProto(in.TargetCommandKind)
-	snapshot, err := activeCoreLifecycle.reconcile(
-		barrierSequence,
-		in.TargetCommandSequence,
-		targetKind,
-		in.TargetConfigSha256,
-	)
-	if err != nil {
-		return nil, status.Error(codes.FailedPrecondition, err.Error())
-	}
+	snapshot coreLifecycleSnapshot,
+) *gen.LifecycleStateResp {
 	return &gen.LifecycleStateResp{
 		DaemonInstanceId:           auth.DaemonInstanceID(ctx),
 		OrderingWatermark:          snapshot.orderingWatermark,
@@ -229,7 +214,49 @@ func (s *server) ReconcileLifecycle(
 			ConfigSha256:           snapshot.targetCommand.configSHA256,
 			RequestedConfigMatches: snapshot.targetConfigMatches,
 		},
-	}, nil
+	}
+}
+
+func (s *server) ReconcileLifecycle(
+	ctx context.Context,
+	in *gen.LifecycleReconcileReq,
+) (*gen.LifecycleStateResp, error) {
+	if in == nil {
+		return nil, status.Error(codes.InvalidArgument, "lifecycle reconcile request is missing")
+	}
+	targetKind := lifecycleCommandKindFromProto(in.TargetCommandKind)
+	switch targetKind {
+	case coreLifecycleCommandExit:
+		// Exit is a daemon-lifecycle command and never names a runtime
+		// configuration. Its empty hash is part of the protocol contract.
+		if in.TargetConfigSha256 != "" {
+			return nil, status.Error(codes.InvalidArgument, "Exit reconciliation must not include a target config SHA-256")
+		}
+	case coreLifecycleCommandStart, coreLifecycleCommandStop:
+		if len(in.TargetConfigSha256) != sha256.Size*2 ||
+			in.TargetConfigSha256 != strings.ToLower(in.TargetConfigSha256) {
+			return nil, status.Error(codes.InvalidArgument, "target config SHA-256 must be lowercase hexadecimal")
+		}
+		if _, err := hex.DecodeString(in.TargetConfigSha256); err != nil {
+			return nil, status.Error(codes.InvalidArgument, "target config SHA-256 must be lowercase hexadecimal")
+		}
+	default:
+		return nil, status.Error(codes.InvalidArgument, "unsupported lifecycle reconciliation target kind")
+	}
+	barrierSequence, err := lifecycleCommandSequence(ctx)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	snapshot, err := activeCoreLifecycle.reconcile(
+		barrierSequence,
+		in.TargetCommandSequence,
+		targetKind,
+		in.TargetConfigSha256,
+	)
+	if err != nil {
+		return nil, status.Error(codes.FailedPrecondition, err.Error())
+	}
+	return lifecycleSnapshotToProto(ctx, snapshot), nil
 }
 
 func (s *server) Stop(ctx context.Context, in *gen.EmptyReq) (out *gen.ErrorResp, _ error) {
@@ -306,7 +333,7 @@ func (s *server) QueryStats(ctx context.Context, in *gen.QueryStatsReq) (out *ge
 	if errors.Is(err, boxapi.ErrNoActiveInstance) {
 		return out, nil
 	}
-	if errors.Is(err, errCoreLifecycleBlocked) {
+	if errors.Is(err, errCoreLifecycleBlocked) || errors.Is(err, errCoreLifecycleExiting) {
 		return nil, status.Error(codes.FailedPrecondition, err.Error())
 	}
 	if err == nil {

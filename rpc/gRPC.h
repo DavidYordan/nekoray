@@ -26,6 +26,12 @@ namespace NekoGui_rpc {
         QString detail;
     };
 
+    struct DaemonExitAckResult {
+        bool acknowledged = false;
+        std::uint64_t commandSequence = 0;
+        QString detail;
+    };
+
     class Client {
     public:
         explicit Client(
@@ -34,7 +40,8 @@ namespace NekoGui_rpc {
             const QString &token,
             std::function<QString()> daemonIdentityProvider);
 
-        void Exit(const QString& expectedDaemonInstanceId);
+        [[nodiscard]] DaemonExitAckResult Exit(
+            const QString& expectedDaemonInstanceId);
 
         bool VerifyDaemon(
             bool* rpcOK,
@@ -65,6 +72,14 @@ namespace NekoGui_rpc {
             const QString& expectedDaemonInstanceId,
             std::uint64_t targetCommandSequence,
             const QByteArray& expectedConfigSha256);
+
+        // Exit carries no configuration hash. A Stopped result is deliberately
+        // narrow: the higher-sequence barrier proved that the target Exit was
+        // never admitted and fenced it while this exact daemon remained
+        // precisely stopped. Every other result is indeterminate to the GUI.
+        LifecycleReconcileResult ReconcileExit(
+            const QString& expectedDaemonInstanceId,
+            std::uint64_t targetCommandSequence);
 
         long long QueryStats(const std::string &tag, const std::string &direct);
 

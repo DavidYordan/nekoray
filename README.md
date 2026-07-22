@@ -43,7 +43,7 @@
 
 打包脚本发现目标部署目录仍有运行实例时会直接失败，不会关闭或强杀 GUI/core。详细依赖和限制见 [Windows 构建](docs/development/BUILD_WINDOWS.md)。
 
-当前版本已完成一次不带 Skip 参数的本地完整打包，`build-package-windows64/`、`deployment/windows64/` 与 zip 中的 GUI/core 来自同一轮构建。deployment/zip 仍是被忽略的本地审计产物，不是 release manifest 或可发布包，也不得据此替换生产安装。
+当前版本已完成一次不带 Skip 参数的本地完整打包：GUI 同轮生成于 `build-package-windows64/` 并复制到 `deployment/windows64/`，core 直接输出到 `deployment/windows64/`，随后二者进入 zip。deployment/zip 仍是被忽略的本地审计产物，不是 release manifest 或可发布包，也不得据此替换生产安装。
 
 ## 文档入口
 

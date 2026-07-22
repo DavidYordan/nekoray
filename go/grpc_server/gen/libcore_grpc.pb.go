@@ -22,7 +22,7 @@ const _ = grpc.SupportPackageIsVersion7
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type LibcoreServiceClient interface {
-	Exit(ctx context.Context, in *EmptyReq, opts ...grpc.CallOption) (*EmptyResp, error)
+	Exit(ctx context.Context, in *EmptyReq, opts ...grpc.CallOption) (*LifecycleStateResp, error)
 	Update(ctx context.Context, in *UpdateReq, opts ...grpc.CallOption) (*UpdateResp, error)
 	Start(ctx context.Context, in *LoadConfigReq, opts ...grpc.CallOption) (*ErrorResp, error)
 	Stop(ctx context.Context, in *EmptyReq, opts ...grpc.CallOption) (*ErrorResp, error)
@@ -41,8 +41,8 @@ func NewLibcoreServiceClient(cc grpc.ClientConnInterface) LibcoreServiceClient {
 	return &libcoreServiceClient{cc}
 }
 
-func (c *libcoreServiceClient) Exit(ctx context.Context, in *EmptyReq, opts ...grpc.CallOption) (*EmptyResp, error) {
-	out := new(EmptyResp)
+func (c *libcoreServiceClient) Exit(ctx context.Context, in *EmptyReq, opts ...grpc.CallOption) (*LifecycleStateResp, error) {
+	out := new(LifecycleStateResp)
 	err := c.cc.Invoke(ctx, "/libcore.LibcoreService/Exit", in, out, opts...)
 	if err != nil {
 		return nil, err
@@ -126,7 +126,7 @@ func (c *libcoreServiceClient) ListConnections(ctx context.Context, in *EmptyReq
 // All implementations must embed UnimplementedLibcoreServiceServer
 // for forward compatibility
 type LibcoreServiceServer interface {
-	Exit(context.Context, *EmptyReq) (*EmptyResp, error)
+	Exit(context.Context, *EmptyReq) (*LifecycleStateResp, error)
 	Update(context.Context, *UpdateReq) (*UpdateResp, error)
 	Start(context.Context, *LoadConfigReq) (*ErrorResp, error)
 	Stop(context.Context, *EmptyReq) (*ErrorResp, error)
@@ -142,7 +142,7 @@ type LibcoreServiceServer interface {
 type UnimplementedLibcoreServiceServer struct {
 }
 
-func (UnimplementedLibcoreServiceServer) Exit(context.Context, *EmptyReq) (*EmptyResp, error) {
+func (UnimplementedLibcoreServiceServer) Exit(context.Context, *EmptyReq) (*LifecycleStateResp, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Exit not implemented")
 }
 func (UnimplementedLibcoreServiceServer) Update(context.Context, *UpdateReq) (*UpdateResp, error) {

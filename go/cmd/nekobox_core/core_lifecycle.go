@@ -14,13 +14,13 @@ var (
 	errCoreAlreadyStarted     = errors.New("core lifecycle already has an active instance")
 	errCoreLifecycleBlocked   = errors.New("core lifecycle is blocked after an indeterminate shutdown")
 	errCoreLifecycleBusy      = errors.New("core lifecycle transition is already in progress")
+	errCoreLifecycleExiting   = errors.New("core lifecycle daemon exit is already committed")
 	errInvalidCoreCandidate   = errors.New("invalid core lifecycle candidate")
 	errStaleCoreGeneration    = errors.New("stale core generation reference")
 	errForeignCoreReference   = errors.New("core generation reference belongs to another lifecycle owner")
 	errCoreExitRequiresStop   = errors.New("core lifecycle must be stopped before daemon exit")
 	errInvalidCommandSequence = errors.New("core lifecycle command sequence must be non-zero")
 	errStaleCommandSequence   = errors.New("stale core lifecycle command sequence")
-	errProcessExitReturned    = errors.New("process exit callback returned unexpectedly")
 )
 
 type coreLifecyclePhase uint8
@@ -31,6 +31,7 @@ const (
 	coreLifecycleActive
 	coreLifecycleStopping
 	coreLifecycleBlocked
+	coreLifecycleExiting
 )
 
 type coreLifecycleCommandKind uint8
@@ -191,6 +192,9 @@ func (l *coreLifecycle) start(
 ) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if l.phase == coreLifecycleExiting {
+		return errCoreLifecycleExiting
+	}
 	if err := l.beginLifecycleCommandLocked(
 		commandSequence,
 		coreLifecycleCommandStart,
@@ -257,6 +261,9 @@ func (l *coreLifecycle) start(
 func (l *coreLifecycle) stop(commandSequence uint64) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if l.phase == coreLifecycleExiting {
+		return errCoreLifecycleExiting
+	}
 	configSHA256 := ""
 	if l.current != nil {
 		configSHA256 = l.current.configSHA256
@@ -322,6 +329,9 @@ func (l *coreLifecycle) validateReferenceLocked(reference *coreInstanceReference
 	if l.phase == coreLifecycleBlocked {
 		return nil, l.blockedErrorLocked()
 	}
+	if l.phase == coreLifecycleExiting {
+		return nil, errCoreLifecycleExiting
+	}
 	if !reference.wasActive {
 		if reference.generation != l.generation || l.phase == coreLifecycleActive {
 			return nil, errStaleCoreGeneration
@@ -364,6 +374,9 @@ func (l *coreLifecycle) queryStats(ctx context.Context, name string, reset bool)
 	if l.phase == coreLifecycleBlocked {
 		return 0, l.blockedErrorLocked()
 	}
+	if l.phase == coreLifecycleExiting {
+		return 0, errCoreLifecycleExiting
+	}
 	if l.phase != coreLifecycleActive || l.current == nil {
 		return 0, boxapi.ErrNoActiveInstance
 	}
@@ -373,34 +386,34 @@ func (l *coreLifecycle) queryStats(ctx context.Context, name string, reset bool)
 	return l.current.queryStats(ctx, name, reset)
 }
 
-// exitWhenStopped keeps the lifecycle mutex until the process terminates. This
-// closes the check/exit race: no Start can publish a generation after Exit has
-// verified the stopped state. Exit never performs an implicit Stop because it
-// cannot know whether doing so would remove TUN or another fail-closed guard.
-func (l *coreLifecycle) exitWhenStopped(
-	commandSequence uint64,
-	exitProcess func(int),
-) error {
+// requestExit atomically changes a precisely stopped lifecycle into a terminal
+// exiting fence. The RPC handler may acknowledge this snapshot before asking
+// the gRPC owner to shut down. No later lifecycle command is admitted, closing
+// the check/exit race without implicitly stopping an active or blocked core.
+func (l *coreLifecycle) requestExit(commandSequence uint64) (coreLifecycleSnapshot, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if l.phase == coreLifecycleExiting {
+		return coreLifecycleSnapshot{}, errCoreLifecycleExiting
+	}
 	if err := l.beginLifecycleCommandLocked(
 		commandSequence,
 		coreLifecycleCommandExit,
 		"",
 	); err != nil {
-		return err
+		return coreLifecycleSnapshot{}, err
 	}
 	if l.phase == coreLifecycleBlocked {
 		l.finishLifecycleCommandLocked(coreLifecycleOutcomeBlocked)
-		return l.blockedErrorLocked()
+		return coreLifecycleSnapshot{}, l.blockedErrorLocked()
 	}
 	if l.phase != coreLifecycleStopped || l.current != nil {
 		l.finishLifecycleCommandLocked(coreLifecycleOutcomeRejectedClean)
-		return errCoreExitRequiresStop
+		return coreLifecycleSnapshot{}, errCoreExitRequiresStop
 	}
+	l.phase = coreLifecycleExiting
 	l.finishLifecycleCommandLocked(coreLifecycleOutcomeSucceeded)
-	exitProcess(0)
-	return errProcessExitReturned
+	return l.snapshotForCommandLocked(l.lastLifecycleCommand, ""), nil
 }
 
 // reconcile is a stateful ordering barrier that returns a runtime snapshot. It
@@ -416,6 +429,9 @@ func (l *coreLifecycle) reconcile(
 ) (coreLifecycleSnapshot, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if l.phase == coreLifecycleExiting {
+		return coreLifecycleSnapshot{}, errCoreLifecycleExiting
+	}
 	if targetSequence == 0 || targetSequence >= barrierSequence ||
 		targetKind == coreLifecycleCommandUnspecified {
 		return coreLifecycleSnapshot{}, errInvalidCommandSequence
@@ -438,6 +454,13 @@ func (l *coreLifecycle) reconcile(
 		target.outcome = coreLifecycleOutcomeSupersededUnknown
 	}
 
+	return l.snapshotForCommandLocked(target, targetConfigSHA256), nil
+}
+
+func (l *coreLifecycle) snapshotForCommandLocked(
+	target coreLifecycleCommandRecord,
+	targetConfigSHA256 string,
+) coreLifecycleSnapshot {
 	snapshot := coreLifecycleSnapshot{
 		phase:             l.phase,
 		runtimeGeneration: l.generation,
@@ -451,7 +474,7 @@ func (l *coreLifecycle) reconcile(
 		snapshot.activeStartCommandSequence = l.current.startCommandSequence
 		snapshot.currentConfigSHA256 = l.current.configSHA256
 	}
-	return snapshot, nil
+	return snapshot
 }
 
 func (l *coreLifecycle) snapshot() (coreLifecyclePhase, uint64, bool) {
