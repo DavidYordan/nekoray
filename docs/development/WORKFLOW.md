@@ -19,7 +19,7 @@
 ## 数据和运行安全
 
 - 真实 `config/`、订阅、core JSON、日志和审计报告不得提交。
-- `D:\Program Files\nekoray`、它的 `2080`、进程、配置、系统代理状态和生产 TUN 是永久 no-touch 资源。任何 agent、脚本、构建和测试都不得停止、写入、接管或为排障绕过它。
+- 本机 Clash TUN 是外部基础网络和永久 no-touch 资源。任何 agent、脚本、构建和测试都不得擅自停止、写入或接管它；临时绕过只允许作用于隔离诊断副本或进程，并必须显式记录。
 - 完整打包若发现精确目标 deployment 中仍有运行进程必须 fail-fast；脚本不得停止或强杀它。只能由用户明确的 GUI/运维操作停止该目标实例后重试，禁止按进程名或端口扩大目标。
 - 本地测试默认不得修改系统代理、TUN、WFP、默认路由或 DNS。Windows 专属故障注入只有在文档列明精确动作、恢复证据并由用户安排维护窗口后才能执行。
 - 诊断进程必须按确切 PID 回收。
@@ -28,10 +28,10 @@
 ## 双环境验证
 
 1. 本地 fixture、配置导出、schema 和纯逻辑测试始终在本地隔离目录执行。
-2. 外部生产 TUN 使真实 outbound 归因不清时，按 [OpenWrt 隔离实验室](../testing/OPENWRT_REMOTE_LAB.md) 使用 `192.168.1.7` 的临时 loopback probe。
+2. Clash TUN 使真实 outbound 归因不清时，先用进程级临时对照；仍不清楚时按 [OpenWrt 隔离实验室](../testing/OPENWRT_REMOTE_LAB.md) 使用 `192.168.1.7` 的临时 loopback probe。
 3. 远端 probe 只允许精确临时目录、固定测试端口和精确 PID；不得修改 RouteFluent 现有 service、配置、nftables、路由或监听。
 4. OpenWrt 只证明 sing-box 配置/协议/outbound，不替代 Windows Wintun、系统代理、WFP、GUI 或重启验收。
-5. 只有 Windows 专属行为确实无法在生产 TUN 保持运行时验证，才向用户提出维护窗口；程序不得自行关闭生产实例。
+5. 只有 Windows 专属行为确实无法在 Clash TUN 保持运行时验证，才向用户提出维护窗口；程序不得自行关闭 Clash TUN。
 
 ## 文档规则
 

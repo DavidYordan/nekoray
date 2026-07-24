@@ -35,7 +35,7 @@ Windows Runtime Service（唯一网络运行时所有者）
   ├─ desired / observed / owner / health / generation journal
   ├─ persistent WFP fail-closed 边界
   ├─ 持久 Wintun/TUN anchor
-  ├─ 稳定 Mixed anchor：主 12080 + 各辅助端口
+  ├─ 稳定 Mixed anchor：主 2080 + 各辅助端口
   ├─ A/B worker generations：代理、AnyTLS、每线 DoH
   └─ user-session system-proxy broker（只接受手动命令）
 ```
@@ -53,7 +53,7 @@ Runtime Service 的职责：
 
 每个 Mixed 端口是固定逻辑线路，不是自动选择器：
 
-- `12080` 只进入主线路。
+- `2080` 只进入主线路。
 - 每个辅助端口只进入其绑定辅助线路。
 - 辅助故障只能使该入口失败；不得转到主线、direct、其它辅助线路或本机 DNS。
 
@@ -66,7 +66,7 @@ Runtime Service 的职责：
 5. 提交前 B 异常时不改变仍在服务的 A；一旦 selector 已提交到 B，后续故障只进入可观察的 `DEGRADED_BLOCKED`。不得为了恢复可用性自动切回 A；只有用户明确选择并重新验证旧 generation 后才能执行回滚。
 6. drain 完成后移除旧 endpoint 例外并结束 A。
 
-第一阶段可接受连接中断：持久 anchor/WFP 保持，切换窗口先阻断线路，再停 A、启动 B；B 失败则继续阻断并报告失败，不自动恢复 A。用户明确选择回滚时，旧 generation 也必须作为候选重新验证并经过同一提交协议。第二阶段再实现 A/B 并存和低中断 selector 切换。两个完整 Box 不能同时直接占用同一 `12080` 和同一 TUN，因此“整 Box 双开后交换端口”不是可行的第一阶段设计。
+第一阶段可接受连接中断：持久 anchor/WFP 保持，切换窗口先阻断线路，再停 A、启动 B；B 失败则继续阻断并报告失败，不自动恢复 A。用户明确选择回滚时，旧 generation 也必须作为候选重新验证并经过同一提交协议。第二阶段再实现 A/B 并存和低中断 selector 切换。两个完整 Box 不能同时直接占用同一 `2080` 和同一 TUN，因此“整 Box 双开后交换端口”不是可行的第一阶段设计。
 
 ## WFP 与权限边界
 
@@ -74,11 +74,11 @@ Runtime Service 的职责：
 - 默认覆盖物理接口 IPv4、IPv6 和 DNS，只放行 loopback、项目 TUN、当前代理/DoH bootstrap 的精确 underlay，以及明确批准的 DHCP/NDP/LAN 例外。
 - 服务异常恢复后保持 `BLOCKED_NEEDS_USER`，不得通过自动停 TUN 或恢复 direct 自愈。
 - 安装/更新服务时一次性提权；GUI 保持普通用户。worker 使用受限 token 与精确 Job Object。
-- 恢复工具只能处理本项目 provider GUID 和资源，不得触碰 `D:\Program Files\nekoray`、`2080` 或其生产 TUN。
+- 恢复工具只能处理本项目 provider GUID 和资源，不得触碰本机 Clash TUN 或其它外部网络软件。
 
 ## 测试边界
 
-OpenWrt 只适合验证显式目标链下的 AnyTLS、DoH 和无协议级 fallback；当前临时 `52080` 探针会重写入口到目标 outbound，不能验证产品 `12080`/辅助端口映射。Wintun、WFP、SCM、Windows DNS/IPv6、GUI/worker/service 崩溃必须在隔离 Windows 10/11 环境验证。
+OpenWrt 只适合验证显式目标链下的 AnyTLS、DoH 和无协议级 fallback；当前临时 `52080` 探针会重写入口到目标 outbound，不能验证产品 `2080`/辅助端口映射。Wintun、WFP、SCM、Windows DNS/IPv6、GUI/worker/service 崩溃必须在隔离 Windows 10/11 环境验证。
 
 最低故障矩阵包括 candidate 无效、端口占用、DoH/AnyTLS 失败、worker kill、GUI exit/crash/restart、service crash、BFE restart、NIC 切换与休眠恢复；必须在物理接口和 Wintun 抓包中同时断言没有未授权 IPv4、IPv6 或 DNS 包。
 

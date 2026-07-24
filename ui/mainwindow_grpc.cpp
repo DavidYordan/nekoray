@@ -44,12 +44,19 @@ namespace {
                NekoGui::dataStore->vpn_internal_tun != GetMainWindow()->isInternalTunActive();
     }
 
-    QString internalTunReloadBlockedMessage() {
-        return QObject::tr("Internal Tun is running. This operation would stop and restart sing-box and may restore direct traffic. Disable Tun explicitly first.");
+    QString internalTunContinuityBlockedMessage() {
+        return QObject::tr(
+            "Operation blocked to prevent direct fallback: the internal Tun is owned by the current sing-box instance, "
+            "and this build has no independent persistent Windows kill switch to protect the stop/start gap. "
+            "Do not disable Tun as a workaround. Use the explicit Tun-off control only when you intentionally authorize "
+            "restoring the default network.");
     }
 
     QString tunModeChangeBlockedMessage() {
-        return QObject::tr("Tun implementation was changed while Tun is running. Disable Tun explicitly before restarting or reloading.");
+        return QObject::tr(
+            "Operation blocked to prevent direct fallback: the requested Tun implementation differs from the active "
+            "worker, and changing it would remove the current Tun before an independent persistent Windows kill switch "
+            "can protect the transition. Do not disable Tun merely to continue this operation.");
     }
 
     QString configRecoveryBlockReason() {
@@ -1006,7 +1013,7 @@ void MainWindow::neko_start(
         reason != CoreStartReason::EnableInternalTun &&
         reason != CoreStartReason::DisableInternalTun &&
         reason != CoreStartReason::CoreCrashRecovery) {
-        MessageBoxWarning(software_name, internalTunReloadBlockedMessage());
+        MessageBoxWarning(software_name, internalTunContinuityBlockedMessage());
         finishTransition();
         return;
     }
@@ -1217,8 +1224,12 @@ void MainWindow::neko_start(
                 },
                 Qt::BlockingQueuedConnection);
             if (indeterminateStateRecorded) {
-                MW_show_log("<<<<<<<< " + tr("Runtime state is indeterminate and remains fail-closed until Tun is explicitly disabled or another permitted Stop succeeds: %1")
-                                                .arg(startRpcResult.indeterminateReason));
+                MW_show_log(
+                    "<<<<<<<< " +
+                    tr("Runtime state is indeterminate. Automatic Tun cleanup and default-network restoration are "
+                       "forbidden; keep the application running until another permitted Stop succeeds. Use the explicit "
+                       "Tun-off control only if you intentionally authorize restoring the default network: %1")
+                        .arg(startRpcResult.indeterminateReason));
             }
             return false;
         }
@@ -1451,7 +1462,7 @@ void MainWindow::neko_stop(bool crash, bool sem, CoreStopReason reason,
         reason != CoreStopReason::DisableInternalTun) {
         finishTransition();
         if (sem) sem_stopped.release();
-        MessageBoxWarning(software_name, internalTunReloadBlockedMessage());
+        MessageBoxWarning(software_name, internalTunContinuityBlockedMessage());
         return;
     }
 

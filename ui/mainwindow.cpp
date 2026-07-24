@@ -510,7 +510,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), ui(new Ui::MainWi
         const auto reloadBlockTip = transitionBlocksReload
                                         ? tr("A core transition is in progress; wait before changing auxiliary ports.")
                                     : tunBlocksReload
-                                        ? tr("Internal Tun is running; disable Tun explicitly before changing auxiliary ports.")
+                                        ? tr("Blocked to prevent direct fallback: persistent Windows Tun transition protection is not implemented.")
                                         : QString{};
         ui->menu_start_auxiliary->setToolTip(reloadBlockTip);
         ui->menu_stop_auxiliary->setEnabled(hasAux && !reloadBlocked);
@@ -905,11 +905,20 @@ void MainWindow::on_menu_exit_triggered() {
         return;
     }
     if (internalTunRunning()) {
-        MessageBoxWarning(software_name, tr("Internal Tun is running. Exiting, restarting, or updating would stop sing-box and may restore direct traffic. Disable Tun explicitly first."));
+        MessageBoxWarning(
+            software_name,
+            tr("Exit/restart blocked to prevent direct fallback: the internal Tun is owned by the current sing-box "
+               "instance, and this build has no independent persistent Windows kill switch that can remain after it "
+               "stops. Do not disable Tun merely to exit. Use the explicit Tun-off control only when you intentionally "
+               "authorize restoring the default network."));
         return;
     }
     if (tunModeChangePendingWhileRunning()) {
-        MessageBoxWarning(software_name, tr("Tun implementation was changed while Tun is running. Disable Tun explicitly before restarting or updating."));
+        MessageBoxWarning(
+            software_name,
+            tr("Exit/restart blocked to prevent direct fallback: the requested Tun implementation differs from the "
+               "active worker, and no independent persistent Windows kill switch protects that transition. Do not "
+               "disable Tun merely to continue."));
         return;
     }
 
@@ -1188,7 +1197,10 @@ void MainWindow::refresh_status(const QString& traffic_update) {
         }
     }
     if (runtime_state_indeterminate) {
-        const auto warning = tr("Runtime state is indeterminate. Direct fallback is not assumed; explicitly disable Tun when applicable, or use another permitted Stop and wait for confirmation before exiting or starting another line.\n%1")
+        const auto warning = tr("Runtime state is indeterminate. Automatic Tun cleanup and default-network restoration "
+                                "are forbidden. Keep the application running and wait for another permitted Stop to "
+                                "confirm completion; use the explicit Tun-off control only if you intentionally authorize "
+                                "restoring the default network.\n%1")
                                  .arg(runtime_state_indeterminate_reason);
         running_tooltip = running_tooltip.isEmpty()
                               ? warning
@@ -1228,7 +1240,10 @@ void MainWindow::refresh_status(const QString& traffic_update) {
     ui->checkBox_VPN->setChecked(tunRequested);
     if (runtime_state_indeterminate && tunWorkerActive) {
         ui->checkBox_VPN->setText(tr("Tun Mode (STATE INDETERMINATE)"));
-        ui->checkBox_VPN->setToolTip(tr("The exact daemon received a Start whose lifecycle outcome or Windows resource state could not be confirmed. Keep the application running and explicitly disable Tun; only a permitted Stop with a stable reconciliation result may clear this state."));
+        ui->checkBox_VPN->setToolTip(
+            tr("The exact daemon received a Start whose lifecycle outcome or Windows resource state could not be "
+               "confirmed. Automatic Tun cleanup is forbidden. Keep the application running until a permitted Stop "
+               "confirms completion; use Tun-off only if you intentionally authorize restoring the default network."));
     } else if (tunWorkerActive && tunRequested) {
         ui->checkBox_VPN->setText(tr("Tun Mode (worker active)"));
         ui->checkBox_VPN->setToolTip(tr("The current worker confirmed that its managed Tun configuration started. OS-level continuity is not yet observable."));
@@ -1567,8 +1582,10 @@ void MainWindow::on_menu_delete_triggered() {
     if (ents.count() == 0) return;
     const auto removesAuxiliary = profilesContainAuxiliaryPort(ents);
     if (removesAuxiliary && internalTunRunning()) {
-        MessageBoxWarning(software_name,
-                          tr("Internal Tun is running. Deleting an auxiliary profile would reload sing-box and may restore direct traffic. Disable Tun explicitly first."));
+        MessageBoxWarning(
+            software_name,
+            tr("Deletion blocked to prevent direct fallback: it would reload the sing-box-owned internal Tun without "
+               "an independent persistent Windows kill switch. Do not disable Tun as a workaround."));
         return;
     }
     if (QMessageBox::question(this, tr("Confirmation"), QString(tr("Remove %1 item(s) ?")).arg(ents.count())) ==
@@ -1616,8 +1633,10 @@ void MainWindow::on_menu_start_auxiliary_triggered() {
         return;
     }
     if (internalTunRunning()) {
-        MessageBoxWarning(software_name,
-                          tr("Internal Tun is running. Auxiliary port changes would reload sing-box and may restore direct traffic. Disable Tun explicitly first."));
+        MessageBoxWarning(
+            software_name,
+            tr("Auxiliary-port change blocked to prevent direct fallback: it would reload the sing-box-owned internal "
+               "Tun without an independent persistent Windows kill switch. Do not disable Tun as a workaround."));
         return;
     }
     if (NekoGui::dataStore->aux_profile_ports.contains(ent->id)) {
@@ -1675,8 +1694,10 @@ void MainWindow::on_menu_stop_auxiliary_triggered() {
     auto ent = ents.first();
     if (!NekoGui::dataStore->aux_profile_ports.contains(ent->id)) return;
     if (internalTunRunning()) {
-        MessageBoxWarning(software_name,
-                          tr("Internal Tun is running. Auxiliary port changes would reload sing-box and may restore direct traffic. Disable Tun explicitly first."));
+        MessageBoxWarning(
+            software_name,
+            tr("Auxiliary-port change blocked to prevent direct fallback: it would reload the sing-box-owned internal "
+               "Tun without an independent persistent Windows kill switch. Do not disable Tun as a workaround."));
         return;
     }
     const auto oldAuxPorts = NekoGui::dataStore->aux_profile_ports;
@@ -2043,8 +2064,10 @@ void MainWindow::on_menu_delete_repeat_triggered() {
 
     const auto removesAuxiliary = profilesContainAuxiliaryPort(out_del);
     if (removesAuxiliary && internalTunRunning()) {
-        MessageBoxWarning(software_name,
-                          tr("Internal Tun is running. Deleting an auxiliary profile would reload sing-box and may restore direct traffic. Disable Tun explicitly first."));
+        MessageBoxWarning(
+            software_name,
+            tr("Deletion blocked to prevent direct fallback: it would reload the sing-box-owned internal Tun without "
+               "an independent persistent Windows kill switch. Do not disable Tun as a workaround."));
         return;
     }
     if (out_del.length() > 0 &&
@@ -2100,8 +2123,10 @@ void MainWindow::on_menu_remove_unavailable_triggered() {
 
     const auto removesAuxiliary = profilesContainAuxiliaryPort(out_del);
     if (removesAuxiliary && internalTunRunning()) {
-        MessageBoxWarning(software_name,
-                          tr("Internal Tun is running. Deleting an auxiliary profile would reload sing-box and may restore direct traffic. Disable Tun explicitly first."));
+        MessageBoxWarning(
+            software_name,
+            tr("Deletion blocked to prevent direct fallback: it would reload the sing-box-owned internal Tun without "
+               "an independent persistent Windows kill switch. Do not disable Tun as a workaround."));
         return;
     }
     if (out_del.length() > 0 &&

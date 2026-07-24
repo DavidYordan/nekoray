@@ -1,6 +1,6 @@
 # ADR 0006：Mixed 默认端口与生产实例隔离
 
-状态：Accepted
+状态：Superseded by [ADR 0012](0012-restore-native-mixed-port.md)
 日期：2026-07-20
 
 ## 背景

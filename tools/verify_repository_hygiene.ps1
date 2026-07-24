@@ -91,6 +91,30 @@ foreach ($file in $powershellFiles) {
     }
 }
 
+$productSourceFiles = @(
+    $tracked |
+        Where-Object {
+            $path = $_ -replace "\\", "/"
+            $path -match '^(db|fmt|main|sub|ui)/' -and
+            [IO.Path]::GetExtension($path) -in @(".cpp", ".hpp", ".h", ".ui")
+        } |
+        ForEach-Object { Get-Item -LiteralPath (Join-Path $repoRoot $_) }
+)
+$forbiddenTunGuidance = @(
+    'Disable Tun explicitly',
+    'Disable Internal Tun',
+    'Turn off Tun',
+    'Turn off Internal Tun'
+)
+foreach ($file in $productSourceFiles) {
+    $content = [IO.File]::ReadAllText($file.FullName)
+    foreach ($phrase in $forbiddenTunGuidance) {
+        if ($content.IndexOf($phrase, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+            Add-Failure "product UI/source instructs users to disable Tun: $($file.FullName) ($phrase)"
+        }
+    }
+}
+
 $pathSafetyScript = Join-Path $repoRoot "tools\path_safety.ps1"
 . $pathSafetyScript
 try {
@@ -196,6 +220,7 @@ $result = [ordered]@{
     passed = $failures.Count -eq 0
     tracked_files = $tracked.Count
     powershell_files = $powershellFiles.Count
+    product_source_files = $productSourceFiles.Count
     production_path_guards = 1 + $forbiddenProductionPaths.Count
     json_fixtures = $jsonFixtures.Count
     markdown_files = $markdownFiles.Count

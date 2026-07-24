@@ -2,13 +2,23 @@
 
 状态：Alpha / 不可发布
 基线：NekoRay 4.0.1 `adef6cd` → `96f1166`，现行接管分支 `agent/takeover-remediation`
-最后更新：2026-07-22
+最后更新：2026-07-24
 
 ## 结论先行
 
 上一阶段已经明显偏离需求：它不仅增加 AnyTLS、并发线路和 Clash server-domain DoH，还删除了多项 NekoRay 能力、加入 MultiMapper 与复杂 resolver 工具，并用“禁止 TUN 下重载”代替无泄漏切换。因此当前分支不能按既有方向继续堆功能，必须先恢复最小分支边界。
 
-“Mixed 无法连接”包含两个不同问题，不能再混为一谈。隔离 core 测试证明 Mixed listener 本身能接收 HTTP、CONNECT、SOCKS5h 并进入指定 outbound；但旧 GUI 只在 stdout 查找 ready 文本，而 Go `log.Printf` 实际写 stderr，因此控制面确实可能永远不发送 Start、`12080` 根本不监听。本批已改成 stdout/stderr 仅触发 UUID/协议 v3 握手，精确握手后才 ready；完整 package 的 raw QProcess/Qt HTTP/2 gate验证 core 协议，但不调用 GUI Client/ready 状态机，所以仍缺真实 GUI→Client 握手测试。profile 真正启动后的既有主配置故障则仍集中在 **AnyTLS(Mihomo client) 经 Trojan detour** 的组合链。
+“Mixed 无法连接”包含入口、出站和本机底层网络三个层次，不能再混为一谈。隔离 core 测试证明 Mixed listener 能接收 HTTP、CONNECT、SOCKS5h 并进入指定 outbound；旧 GUI ready 检测缺陷也已修复。本轮在 Clash TUN global/Fake-IP 环境中，WD 与 NEX 的真实请求均已命中 `proxy` 后才分别在 Trojan TLS/AnyTLS session 层失败；进程级物理接口+真实 IP 的一次性 TLS 对照成功。当前本机不通的首要原因是 Clash 接管后形成的代理套代理/双 TUN 解析路径，而 NEX 另有既存的 **AnyTLS(Mihomo client) 经 Trojan detour** 组合缺陷。
+
+## 2026-07-24 当前整改与诊断
+
+- 主 Mixed 默认和当前私人配置均已恢复为 `127.0.0.1:2080`；辅助端口池及现有绑定未改。
+- 最终 Windows 包已完整重建。CTest 4/4、最终配置 guard 15/15、Mixed fixture 7/7、runtime connectivity 正反例、仓库卫生与 112 个本地文档链接全部通过。
+- WD profile 0 当前导出为原生 NekoRay DNS 路径，无 provider resolver group，并通过 `nekobox_core check`；没有再次出现“无 DoH 订阅被强制要求显式 bootstrap”的错误。
+- 本机真实链路失败发生在请求进入目标 outbound 之后，不是 `2080` 未监听或 HTTP inbound 不支持。详细证据与安全绕过边界见 [Clash TUN 共存与本机诊断](operations/CLASH_TUN_COEXISTENCE.md)。
+- `192.168.1.7` 本轮无 ARP 且 SSH 未取得 banner，OpenWrt 对照未能执行，不能把超时当成线路证据。
+- 已删除所有“先手动关闭 TUN 再继续”的产品提示。当前仍阻断会卸载内部 TUN 的重启/退出操作，并明确说明缺少独立 persistent Windows kill-switch；直接删除阻断会产生已知直连窗口，不能冒充完成需求。真正完成仍需 Runtime Service、stable anchor 与 persistent WFP。
+- 本轮没有停止或改写 Clash TUN，没有启停系统代理或项目 TUN，也没有把物理接口、Fake-IP、LAN DNS 或 `auto_detect_interface` 诊断值固化进产品。
 
 ## 审计结果
 
@@ -39,14 +49,14 @@ OpenWrt `192.168.1.7` 使用同版本 `sing-box 1.13.12-routefluent-anytls-clien
 | 移除 detour并改 native | 失败 | 失败 | 失败 | 服务端 internal error |
 | 独立 Trojan profile 2（与 `g-2` 对象相同） | 204 | 204 | 204 | Trojan 单跳可用 |
 
-因此临时 loopback Mixed、目标 outbound 的 Mihomo AnyTLS 单跳和 Trojan 单跳分别可达；组合 detour 尚未闭环。探针固定改写为临时 `52080` 并显式指向目标 outbound，不能证明产品 `12080` 主端口映射。旧探针还会在临时 OpenWrt 副本强制 `auto_detect_interface=true`，所以这些结果只能用于协议组合归因，不能证明导出配置的接口策略；工具现已改为默认 preserve，后续需按新默认重跑。
+因此临时 loopback Mixed、目标 outbound 的 Mihomo AnyTLS 单跳和 Trojan 单跳分别可达；组合 detour 尚未闭环。探针固定改写为临时 `52080` 并显式指向目标 outbound，不能证明产品 `2080` 主端口映射。旧探针还会在临时 OpenWrt 副本强制 `auto_detect_interface=true`，所以这些结果只能用于协议组合归因，不能证明导出配置的接口策略；工具现已改为默认 preserve，后续需按新默认重跑。
 
 ## 已完成的接管止损
 
 - 明确产品边界：保留 NekoRay，只有 Xray 明确删除；新增仅三项。
-- 产品生成器已精确恢复上游 `auto_detect_interface=dataStore->spmode_vpn`：live 与 test 都只随产品 TUN 意图变化，文件 export 随后删除该字段；没有生产 NekoRay、物理网卡或本机双 TUN 特例。三份 loopback 诊断 fixture 也已移除无必要的 `true`。尚缺 live/test 的 TUN on/off 四象限与 export 删除边界的 C++ golden，不能把源码审计写成自动验证完成。
+- 产品生成器已精确恢复上游 `auto_detect_interface=dataStore->spmode_vpn`：live 与 test 都只随产品 TUN 意图变化，文件 export 随后删除该字段；没有 Clash、物理网卡、Fake-IP 或本机双 TUN 特例。三份 loopback 诊断 fixture 也已移除无必要的 `true`。尚缺 live/test 的 TUN on/off 四象限与 export 删除边界的 C++ golden，不能把源码审计写成自动验证完成。
 - OpenWrt 探针默认保留该字段，仅显式诊断参数可强制；收紧器会拒绝系统 NTP 写入/非空 endpoint，并把 outbound 缩到目标线路的精确 detour 闭包；当前 Python 工具单测 19/19 通过。
-- 主 Mixed 默认 `12080`；Clash API 默认保持关闭（配置值 `-9090`，启用时端口 `9090`）；`2080` 与生产安装完全隔离。
+- 主 Mixed 默认已于 2026-07-24 恢复为 `2080`；辅助端口池保持 `12100..12299`；Clash API 默认保持关闭（配置值 `-9090`，启用时端口 `9090`）。
 - 主/辅助 Mixed 标准路径显式绑定各自 chain；辅助 chain 失败、profile失效、端口重复现在整体构建失败，不再留下孤儿入口。
 - 主/辅助 Mixed 都不再在精确线路绑定前借全局/默认 DNS 执行 `resolve`；使用 provider server-domain DoH 的 outbound 会绑定精确 strict resolver。无 provider DoH 的普通节点仍走 NekoRay/sing-box 原有解析路径。
 - 没有 provider DoH 的普通节点不再强制使用自定义 `local_only` resolver group。
@@ -81,13 +91,13 @@ OpenWrt `192.168.1.7` 使用同版本 `sing-box 1.13.12-routefluent-anytls-clien
 - 当前忽略目录中的 group 1（WD）已清除旧误判 DoH，记录来源 `proxy-server-nameserver`；group 2（NEX）保留三条 DoH，记录来源 `nameserver`；两组均写入 resolver policy version 1。迁移前原件保存在 `deployment/windows64/config/recovery/manual-dns-policy-migration-20260722/`，不提交 Git。
 - 迁移前 group 1/2 备份 SHA-256 分别为 `8D9C9148B8E75B641A73CAE860980F15DA39979E2453DF994C09DCA1AB7F8B6A`、`06194E2EB534176961711DA32B45B24FC209233CD769573B733EB301B388187A`。恢复旧备份后，旧策略非空 resolver 会被新构建器拒绝，必须成功刷新订阅后再运行，不能静默复活错误来源。
 - 受控导出验证：WD profile 0 生成 0 个 provider DoH/resolver group；NEX profile 89（含其 WD front proxy）只生成 1 个 strict group、3 个 NEX provider DoH，三条 endpoint 均经 `dns-local` bootstrap，无强制 strategy、无 fallback 字段；两份配置均通过当前 `nekobox_core.exe check`。
-- 此迁移和导出没有启动、停止或改写 `D:\Program Files\nekoray`。复核时生产 core PID `11772` 仍持有 `2080`。
+- 历史 2026-07-22 迁移和导出没有启动、停止或改写当时的 `D:\Program Files\nekoray`；当时 core PID `11772` 持有 `2080`。该环境事实已由 ADR 0012 取代。
 
 ## 2026-07-22 无侵入回归快照
 
 - 当前源码的 Windows 全量 C++/package 本地重编译成功。Go core 已通过普通测试、`go test -count=20 ./...`、`go vet ./...` 与 `go test -race ./...`；`grpc_server` 已通过普通测试、vet 与 race。它们证明本轮源码和进程内并发断言，不是父进程/Windows TUN/WFP 生命周期验收。
 - 本轮本地审计快照：`nekobox.exe` SHA-256 `3E918885EBB20D0A00FF04FD43E16841E5C0453CCD324C6F5EDE2BB3C3EBB43D`；`nekobox_core.exe` SHA-256 `F545DC44627B83DAF49786F3403ED9E464783D71E6917CE06FDFFC0E147D09E5`；zip SHA-256 `86F3CD775DFF03B13FF6A66DC225FFA1BDDA0B919D504542384C0D743CFBC306`；package RouteFluent manifest SHA-256 `28100CC9F77DE340A3B76A873E476B8EA9D4ECB115B1BA347FFF57345184760A`。当前版本完整 Windows 打包脚本已无 Skip 参数实跑成功：先受保护地清空并重建 GUI build tree，tracker、分享格式、resolver policy 与 raw real-core Exit gate 均 PASS，`deployment/windows64/` 与 zip 已在本地刷新；215 个 package 配置文件恢复完成，两个 preserve 目录和手工诊断产物均无残留。deployment/zip 仍是忽略的本地验收产物，不是 release manifest，也不改变 Alpha/不可发布判断。
-- 完整打包/Exit gate 前后的只读生产快照一致：生产 GUI PID `12608`、core PID `11772`，`2080` 仍由 PID `11772` 持有，常见 WinINet 五键不变。脚本未控制这些进程；该快照不证明生产 TUN、路由、DNS 或 WFP 状态。
+- 历史 2026-07-22 完整打包/Exit gate 前后的只读快照一致：当时 GUI PID `12608`、core PID `11772`，`2080` 由 PID `11772` 持有，常见 WinINet 五键不变。它仅保留为旧环境审计证据，不再定义当前端口或 Clash TUN 状态。
 - `test_final_config_guards.ps1` 15/15（新增原生域名路径、有效/过期订阅组元数据、域名 DoH bootstrap、非法 DoH 与 bootstrap custom 篡改），`test_config_preservation.ps1` 10/10，OpenWrt helper Python 单测 19/19。
 - 仓库卫生会解析所有已跟踪 PowerShell，并自测生产路径 exact/subtree/short-name/UNC/device/ADS/SUBST/reparse 等拒绝分支；本轮另以生产 GUI/core 路径参数验证两个测试入口均在启动前失败。这些用例不覆盖 hardlink/final-file identity，不得将其解读为完整的物理文件别名验收。
 - 本地 Mixed fixture 7/7；额外 listener、系统代理、禁用日志和 loopback origin 清理均保持预期。
@@ -109,4 +119,4 @@ OpenWrt `192.168.1.7` 使用同版本 `sing-box 1.13.12-routefluent-anytls-clien
 
 另有一项不冒充当前 P0 发布主阻断的 P2 债务：`TrafficData::last_update` 的未初始化读取已修复，但 counter/rate 仍由 worker 写、UI/JsonStore 无统一同步读取；需后续采用不可变遥测快照或明确锁/原子设计。
 
-本分支不得部署到 `D:\Program Files\nekoray`。后续顺序见 [推进路线](ROADMAP.md)。
+当前审计部署位于 `deployment/windows64`；它不是正式 release。后续顺序见 [推进路线](ROADMAP.md)。

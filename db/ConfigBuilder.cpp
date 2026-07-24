@@ -915,7 +915,7 @@ namespace NekoGui {
             if (!forTest && !forExport && dataStore->spmode_vpn) {
                 result->error = QStringLiteral(
                     "internal-full profiles cannot run under the product Tun switch because their OS-network state is not managed or observable. "
-                    "Disable Tun explicitly or use a standard profile.");
+                    "Use a standard profile; do not disable Tun as a workaround because that would authorize default-network restoration.");
             }
             if (!forTest && !forExport && !dataStore->aux_profile_ports.isEmpty()) {
                 result->error = QStringLiteral(

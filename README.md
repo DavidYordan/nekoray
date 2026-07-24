@@ -1,6 +1,6 @@
 # NekoRay Windows 私人分支
 
-这是基于 NekoRay 4.0.1 的 Windows 私人二次开发项目。目前处于接管整改期，**不可发布，也不能替换本机生产 NekoRay**。
+这是基于 NekoRay 4.0.1 的 Windows 私人二次开发项目。目前处于接管整改期，**不可发布**；`deployment/windows64` 仅是本机审计部署。
 
 ## 产品边界
 
@@ -17,16 +17,16 @@
 ## 冻结约束
 
 - 仅支持 Windows，项目纯私人使用。
-- 默认主 Mixed 端口为 `12080`。
-- `D:\Program Files\nekoray`、端口 `2080` 和它的生产 TUN 属于另一实例，永远不得由本项目停止、修改或接管。
+- 默认主 Mixed 端口恢复为 NekoRay 原生值 `2080`；辅助端口池仍为 `12100..12299`。
+- 本机基础网络现为 Clash TUN。它是外部底层网络，不属于本项目，也不得被测试擅自停止或改写；共存诊断见 [Clash TUN 共存](docs/operations/CLASH_TUN_COEXISTENCE.md)。
 - `auto_detect_interface` 只承担 NekoRay 原有的产品 TUN 防环路语义，不负责按 Mixed 端口选线路。测试环境绕行只能存在于显式、临时的测试副本中。
 - 只有用户的精准手动操作可以启停系统代理或 TUN。退出、重启、切线和配置重载不得改变这些 OS 模式。
 - 线路失败必须失败关闭，尤其辅助线路不得回落到主线路、`direct`、本机 DNS 或其它可用线路。
 
 ## 当前判断
 
-- 标准生成配置中的 `12080 -> 主线路` 和 `辅助端口 -> 对应辅助线路` 已成立；空链会拒绝构建。顶层 `custom_config` 合并前会快照每个受管 Mixed 的完整 listener 和从该入口可达的全部 outbound 对象，合并后要求对象逐项一致并保留精确、无条件的入口绑定；这不是对任意自定义路由/DNS 的全局安全证明。完整负向回归与运行时事务切换仍是阻断项。
-- 2026-07-20 的历史隔离探针表明临时 Mixed 能处理 HTTP、CONNECT 和 SOCKS5h；在该次 `52080 -> 指定 outbound` 实验中，AnyTLS(Mihomo client) 与 Trojan 单独可用、组合 detour 失败。旧探针对临时副本强制了 `auto_detect_interface=true`，因此这只是组合归因，不能证明产品 `12080`/辅助端口映射或当前导出策略；仍须按 preserve 默认值重跑并做 Windows 集成验收。
+- 标准生成配置中的 `2080 -> 主线路` 和 `辅助端口 -> 对应辅助线路` 已成立；空链会拒绝构建。顶层 `custom_config` 合并前会快照每个受管 Mixed 的完整 listener 和从该入口可达的全部 outbound 对象，合并后要求对象逐项一致并保留精确、无条件的入口绑定；这不是对任意自定义路由/DNS 的全局安全证明。完整负向回归与运行时事务切换仍是阻断项。
+- 2026-07-20 的历史隔离探针表明临时 Mixed 能处理 HTTP、CONNECT 和 SOCKS5h；在该次 `52080 -> 指定 outbound` 实验中，AnyTLS(Mihomo client) 与 Trojan 单独可用、组合 detour 失败。旧探针对临时副本强制了 `auto_detect_interface=true`，因此这只是组合归因，不能证明产品 `2080`/辅助端口映射或当前导出策略；仍须按 preserve 默认值重跑并做 Windows 集成验收。
 - 上一阶段误删了 external-core、Naive、部分分享链接/插件兼容、GeoSite 自动完成和 URL Test 等 NekoRay 能力；URL Test 已按有界测试配置恢复，其余仍须选择性恢复。
 - 接管工作树已把单文件保存改为带 durable before/after intent 的原子替换，停止删除未知 profile，并生成可验证 backup/quarantine；订阅刷新改为解析、暂存和校验成功后再提交，部分跨文件创建/删除/移动也已接入事务。剩余保存路径、非空 group、图形恢复和完整模型级事务仍未完成。
 - 越界的复杂批量 resolver/change-IP 平台已移除；旧 **Resolve domain** 因使用 Windows 系统 DNS 并永久改写节点域名而暂时禁用，避免破坏 provider DoH。
@@ -45,7 +45,7 @@
 
 打包脚本发现目标部署目录仍有运行实例时会直接失败，不会关闭或强杀 GUI/core。详细依赖和限制见 [Windows 构建](docs/development/BUILD_WINDOWS.md)。
 
-当前版本已完成一次不带 Skip 参数的本地完整打包：GUI 同轮生成于 `build-package-windows64/` 并复制到 `deployment/windows64/`，core 直接输出到 `deployment/windows64/`，随后二者进入 zip。deployment/zip 仍是被忽略的本地审计产物，不是 release manifest 或可发布包，也不得据此替换生产安装。
+当前版本已完成一次不带 Skip 参数的本地完整打包：GUI 同轮生成于 `build-package-windows64/` 并复制到 `deployment/windows64/`，core 直接输出到 `deployment/windows64/`，随后二者进入 zip。deployment/zip 仍是被忽略的本地审计产物，不是 release manifest 或可发布包。
 
 ## 文档入口
 

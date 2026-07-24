@@ -1,14 +1,14 @@
 # 推进路线
 
 状态：现行
-最后更新：2026-07-22
+最后更新：2026-07-24
 
 原则：先止损和恢复 NekoRay，再收敛三项核心扩展，最后解决 Windows fail-closed 运行时。除 2026-07-22 已明确追加的批量分享格式外，不新增其它未经需求授权的产品功能。
 
 ## 阶段 0：冻结边界与保护环境
 
-- [x] 冻结 Windows-only、私人项目、主端口 `12080`。
-- [x] 将 `D:\Program Files\nekoray`、`2080` 与生产 TUN 标记为永久 no-touch。
+- [x] 冻结 Windows-only、私人项目；主端口于 2026-07-24 按 [ADR 0012](architecture/decisions/0012-restore-native-mixed-port.md) 恢复为 `2080`。
+- [x] 将本机 Clash TUN 标记为外部底层网络：测试保持其运行，不把其接口/Fake-IP 特例写入产品默认。
 - [x] 冻结“仅手动启停系统代理/TUN、端口精确映射、绝不 fallback直连”。
 - [x] 保留上游 `auto_detect_interface=dataStore->spmode_vpn`，未为本机双 TUN 强制开启；OpenWrt helper 单测覆盖默认 preserve，真实 L2 preserve 重跑与 C++ live/test/export golden 仍在后续阶段。持久 runtime 后改由真实 TUN owner/underlay 拓扑决定。
 - [x] 打包脚本移除生产安装默认依赖，运行实例存在时 fail-fast。
@@ -82,6 +82,7 @@
 9. [x] UI 区分 TUN requested 与 worker-observed 状态；core 崩溃只重启空控制 core，不自动恢复 profile/TUN。该止损不等于持久 OS 状态或 kill-switch。
 10. [x] 建立进程内 lifecycle executor/generation 与 daemon identity 基础：GUI 以单一 transition ticket 串行 Start/Stop/CrashCleanup；每次 QProcess 启动生成 UUID，所有 RPC 在 handler 前验证该身份，日志只触发 UUID/协议 v3 握手，旧进程未确认退出时不发布 replacement identity。Start/Stop/Exit 使用单调 command sequence；更高序号的对账与 lifecycle 命令共用 context-aware single-owner executor，并返回目标 command outcome、config hash 和稳定 phase。等待准入的命令可由服务端 deadline 取消；Start candidate 以原子 cancellation-vs-publication 边界决定清理或提交。Go core 使旧/blocked generation fail closed。超时对账成功时只接受精确 active/stopped 结论，再次超时或不一致仍保留 indeterminate。Exit 子项已闭合到进程边界：只在精确 `STOPPED` 返回结构化 `EXITING` ACK，随后 `GracefulStop`；GUI 冻结 generation/UUID/PID 并等待同一 QProcess `NormalExit/0`，不 kill/replacement，ACK 不确定时只有精确 non-admission 对账才恢复控制。详见 ADR 0010/0011。
 11. [ ] 在受控 core/Runtime 入口重复关键产品策略校验，并建立可恢复的持久 OS 事实对账。daemon UUID、协议 v3 握手、服务端 deadline、process-local `ReconcileLifecycle`、Start 取消/发布仲裁和 Exit ACK/finished 子项已完成；完整无 Skip package 也会运行 tracker、分享格式、resolver policy 纯测试与安全 raw QProcess/Qt HTTP/2 core gate。但该 raw harness 不调用产品 Client/MainWindow，配置无 listener/TUN，只快照常见 WinINet 五键。已准入 Stop/Close 仍不可中断，对账再次超时仍是 unknown，`GracefulStop` 也可能等待在途 handler；还缺 GUI→Client、crash→commit、真实 timeout/ACK 丢失、父进程死亡和 Windows 路由/DNS/TUN/WFP 资源集成测试。token/UUID/进程内 generation 均不替代持久 runtime transaction、service、stable anchor 或 WFP，因此本项保持未关闭。
+12. [x] 删除“先手动关闭 TUN 再继续”的错误 UI 引导。当前仍会阻断会卸载 sing-box-owned TUN 的操作，并明确说明独立 persistent WFP 尚未实现；这只是避免已知直连窗口的止损，不满足“开 TUN 可切线/退出”的完成门。
 
 完成门：GUI退出/重启、worker crash、候选启动失败和切线都不改变系统代理/TUN模式，也没有物理直连；失败可以全阻断。
 
@@ -96,7 +97,7 @@
 - [x] 建立首个 Windows-only CI：校验仓库卫生、固定子模块、受控 RouteFluent core 源构建、Go 单测和无侵入 Python 安全契约；不得将其表述为 GUI/TUN/WFP 验收。
 - [ ] 收口干净 Qt/MinGW/C++ 工具链、GUI 自动构建与测试、交付 wrapper 真实 hash/manifest、许可证和 SBOM；libneko 仓内固定已完成。
 - [ ] 先用 OpenWrt复测 patched core协议；再在独立 Windows完成 Mixed、多辅助、Wintun、WFP、IPv4/IPv6/DNS故障注入。
-- [ ] 只有确实依赖本机生产环境且独立测试无效时，提交维护窗口方案给用户；agent不自行停止生产 NekoRay。
+- [ ] 只有确实依赖本机 Windows/Clash TUN 环境且独立测试无效时，提交维护窗口方案给用户；agent不自行停止 Clash TUN。
 
 ## 阶段 5：私人预览版
 

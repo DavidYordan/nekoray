@@ -59,7 +59,7 @@ function Read-JsonFile([string] $Path) {
 function Read-ProjectConfig([string] $Dir) {
     $configPath = Join-Path $Dir "config\groups\nekobox.json"
     $raw = Read-JsonFile $configPath
-    $inboundPort = [int](Get-PropertyValue $raw "inbound_socks_port" 12080)
+    $inboundPort = [int](Get-PropertyValue $raw "inbound_socks_port" 2080)
     $inboundAddress = [string](Get-PropertyValue $raw "inbound_address" "127.0.0.1")
     $clashApi = [int](Get-PropertyValue $raw "core_box_clash_api" -9090)
     $configuredTestUrl = [string](Get-PropertyValue $raw "test_url" "http://cp.cloudflare.com/")

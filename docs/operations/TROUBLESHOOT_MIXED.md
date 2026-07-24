@@ -1,15 +1,15 @@
 # Mixed 入口排障
 
 状态：现行
-最后更新：2026-07-22
+最后更新：2026-07-24
 
 Mixed 同时接受 HTTP proxy 和 SOCKS5。排障必须区分“监听/入口协议”“逻辑线路映射”“DNS”“远端 outbound”和“底层接口”五层。
 
-## 0. 先保护生产环境
+## 0. 先保护底层网络
 
-`D:\Program Files\nekoray`、它监听的 `2080` 和它维护的生产 TUN 与本项目无关，必须保持运行。禁止停止、重启、改写、接管或用宽泛进程清理命令命中它们。本项目默认 Mixed 端口是 `12080`。
+本项目默认 Mixed 端口是 `2080`。本机 Clash TUN 是外部底层网络，必须保持运行；禁止为了排障擅自停止、重启或改写它，也不得把 Clash 的接口/Fake-IP 特例硬编码进产品配置。详见 [Clash TUN 共存](CLASH_TUN_COEXISTENCE.md)。
 
-如果生产 TUN 使本机出站归因不清，转到 [OpenWrt 远程实验室](../testing/OPENWRT_REMOTE_LAB.md)。不要为了完成排障自动关闭生产 TUN。
+如果 Clash TUN 使本机出站归因不清，优先使用进程级临时对照、独立 Windows 环境或 [OpenWrt 远程实验室](../testing/OPENWRT_REMOTE_LAB.md)。不要为了完成排障自动关闭 Clash TUN。
 
 ## 1. 确认进程与监听者
 
@@ -18,42 +18,42 @@ Get-CimInstance Win32_Process |
   Where-Object { $_.Name -in @('nekobox.exe','nekoray.exe','nekobox_core.exe') } |
   Select-Object ProcessId, Name, ExecutablePath, CommandLine
 
-Get-NetTCPConnection -State Listen -LocalPort 12080 |
+Get-NetTCPConnection -State Listen -LocalPort 2080 |
   Select-Object LocalAddress, LocalPort, OwningProcess
 ```
 
-结果必须回查 PID 的 `ExecutablePath`。`2080` 可用只能证明外部生产实例在工作，不能证明本项目成功；`12080` 未监听则先查本项目是否启动、配置 schema、端口占用和 core 日志。
+结果必须回查 PID 的 `ExecutablePath`。`2080` 未监听则先查本项目是否启动、配置 schema、端口占用和 core 日志；`2080` 可连但 PID/路径不属于当前 package，也不能作为本项目成功证据。
 
-GUI 与 `nekobox_core.exe` 必须来自同一轮构建。每次 core 启动后，日志中的 `grpc server listening` 只会触发控制面探测；只有出现 `Core RPC identity handshake accepted for daemon generation ...` 才表示 GUI 已核对 UUID 和 lifecycle protocol version 3 并允许发送 Start。握手失败会明确记录 bounded retry 后仍 unavailable，v1/v2 或其它旧 core 与 v3 GUI/core 组合不会兼容回退。即便握手成功，也只表示精确控制 daemon 可用，不表示 profile 已启动、`12080` 已监听或线路/TUN/WFP 健康。
+GUI 与 `nekobox_core.exe` 必须来自同一轮构建。每次 core 启动后，日志中的 `grpc server listening` 只会触发控制面探测；只有出现 `Core RPC identity handshake accepted for daemon generation ...` 才表示 GUI 已核对 UUID 和 lifecycle protocol version 3 并允许发送 Start。握手失败会明确记录 bounded retry 后仍 unavailable，v1/v2 或其它旧 core 与 v3 GUI/core 组合不会兼容回退。即便握手成功，也只表示精确控制 daemon 可用，不表示 profile 已启动、`2080` 已监听或线路/TUN/WFP 健康。
 
 配置端口位于 `<package-dir>/config/groups/nekobox.json`。UI 显示的 `Mixed: 地址:端口` 只是配置值，不是健康状态。
 
 ## 2. 核对端口到逻辑线路
 
-- 主 Mixed `12080` 应进入当前主 profile 构建出的 `proxy` 链。
+- 主 Mixed `2080` 应进入当前主 profile 构建出的 `proxy` 链。
 - 每个辅助 Mixed 端口应进入与该端口绑定的辅助 profile 链。
 - 当前生成器在顶层 `custom_config` 合并前捕获完整受管 Mixed listener 和沿 detour 可达的每个 outbound 对象；合并后要求对象逐项一致、tag/port 唯一，并拒绝精确 terminal binding 前的改投/提前 resolve、direct/block/selector/urltest 目标及缺失/循环 detour。profile 级 custom outbound 可在捕获前修改普通字段，但不能新增/改变 detour。若仍观察到改道，应保留最终配置和构建错误作为回归缺陷；该 validator 也不能被外推为所有自定义路由/DNS 已经安全。
 - `route.auto_detect_interface` 只决定 outbound 套接字使用哪个底层 OS 接口，不负责按端口选择主/辅助线路。
 
-因此，“12080 命中哪个 outbound”和“该 outbound 最后选择哪个网卡”必须分别取证。
+因此，“2080 命中哪个 outbound”和“该 outbound 最后选择哪个网卡”必须分别取证。
 
 ## 3. 分别测试入口协议
 
 ```powershell
-curl.exe --proxy http://127.0.0.1:12080 `
+curl.exe --proxy http://127.0.0.1:2080 `
   --max-time 15 -o NUL -w "%{http_code}`n" `
   http://cp.cloudflare.com/
 
-curl.exe --proxy http://127.0.0.1:12080 `
+curl.exe --proxy http://127.0.0.1:2080 `
   --max-time 15 -o NUL -w "%{http_code}`n" `
   https://cp.cloudflare.com/
 
-curl.exe --proxy socks5h://127.0.0.1:12080 `
+curl.exe --proxy socks5h://127.0.0.1:2080 `
   --max-time 15 -o NUL -w "%{http_code}`n" `
   http://cp.cloudflare.com/
 ```
 
-使用入口认证时必须提供账号密码，但不得把凭据写入共享日志或进程命令行。本机成功只说明整条请求完成；生产 TUN 存在时，不能单凭该结果证明底层物理接口。
+使用入口认证时必须提供账号密码，但不得把凭据写入共享日志或进程命令行。本机成功只说明整条请求完成；Clash TUN 存在时，不能单凭该结果证明底层物理接口或排除代理套代理。
 
 ## 4. 用导出配置做本地隔离
 
@@ -78,7 +78,7 @@ powershell -NoProfile -ExecutionPolicy Bypass `
 这个护栏不通过最终文件句柄验证 final-file identity，所以不能识别所有已存在 hardlink。不要把另一路径下的同文件当作隔离副本；对可执行文件、输入配置和临时根仍需核对实际来源。
 
 ```powershell
-# 底层接口对照；不是逻辑线路自动选择，也不保证绕过生产 TUN
+# 底层接口对照；不是逻辑线路自动选择，也不保证完整绕过 Clash Fake-IP
 ... -ForceAutoDetectInterface
 
 # 排除 group front proxy
@@ -90,7 +90,7 @@ powershell -NoProfile -ExecutionPolicy Bypass `
 ... -AnyTLSUtlsOverride chrome
 ```
 
-如果本机生产 TUN 使底层出站无法归因，用同一个导出配置执行 L2 对照；先 dry-run，不得跳过：
+如果本机 Clash TUN 使底层出站无法归因，用同一个导出配置执行 L2 对照；先 dry-run，不得跳过：
 
 ```powershell
 & 'D:\complex\RouteFluent\.venv\Scripts\python.exe' `
@@ -122,7 +122,7 @@ powershell -NoProfile -ExecutionPolicy Bypass `
 
 ## 6. 何时需要 Windows 维护窗口
 
-OpenWrt 能验证 schema、Mixed、Trojan/AnyTLS、DNS 和 detour，不能验证 Wintun、系统代理、WFP、GUI 退出/重启或线路热重启。先在独立 Windows 测试环境验证这些行为；只有 Windows 专有问题无法在独立环境复现，且生产 TUN 的独占接口或路由使本机证据无效时，才请求用户安排维护窗口。agent 和测试工具不得自行停止生产 Nekoray。
+OpenWrt 能验证 schema、Mixed、Trojan/AnyTLS、DNS 和 detour，不能验证 Wintun、系统代理、WFP、GUI 退出/重启或线路热重启。先在独立 Windows 测试环境验证这些行为；只有 Windows 专有问题无法在独立环境复现，且 Clash TUN 的接口或路由使本机证据无效时，才请求用户安排维护窗口。agent 和测试工具不得自行停止 Clash TUN。
 
 ## 7. 无私人节点的工具回归
 

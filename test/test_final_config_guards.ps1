@@ -79,6 +79,7 @@ function Add-Case(
     [string]$ServerAddress = "192.0.2.1",
     [string]$ResolverDoh = "",
     [int]$ExpectedProviderDohCount = -1,
+    [int]$ExpectedPrimaryMixedPort = -1,
     [switch]$AssertNativeBootstrap,
     [switch]$UseSubscriptionGroupResolver,
     [int]$GroupResolverPolicyVersion = 1,
@@ -179,6 +180,14 @@ function Add-Case(
                 }
             }
         }
+        if ($ExpectedPrimaryMixedPort -ge 0 -and $run.output_created) {
+            $output = [IO.File]::ReadAllText((Join-Path $lab "export.json")) | ConvertFrom-Json
+            $primaryMixed = @($output.inbounds | Where-Object { $_.tag -eq "mixed-in" })
+            if ($primaryMixed.Count -ne 1 -or
+                [int]$primaryMixed[0].listen_port -ne $ExpectedPrimaryMixedPort) {
+                $outputAssertionPassed = $false
+            }
+        }
         $passed = if ($ShouldSucceed) {
             $run.exit_code -eq 0 -and $run.output_created -and $outputAssertionPassed
         } else {
@@ -236,7 +245,7 @@ Add-Case `
     -ShouldSucceed $false `
     -ExpectedError "Managed Mixed inbound 'mixed-in' changed after custom_config merge" `
     -FixtureType "socks" `
-    -CustomConfig '{"inbounds":[{"tag":"mixed-in","type":"mixed","listen":"127.0.0.1","listen_port":12080,"detour":"direct"}]}'
+    -CustomConfig '{"inbounds":[{"tag":"mixed-in","type":"mixed","listen":"127.0.0.1","listen_port":2080,"detour":"direct"}]}'
 
 Add-Case `
     -Name "reject_profile_level_outbound_detour_export" `
@@ -260,6 +269,7 @@ Add-Case `
     -ShouldSucceed $true `
     -FixtureType "socks" `
     -ServerAddress "native-node.example" `
+    -ExpectedPrimaryMixedPort 2080 `
     -ExpectedProviderDohCount 0
 
 Add-Case `

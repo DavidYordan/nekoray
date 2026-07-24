@@ -1,11 +1,11 @@
 # OpenWrt 远程实验室
 
 状态：现行测试手册
-最后更新：2026-07-22
+最后更新：2026-07-24
 
 ## 用途
 
-本机 `D:\Program Files\nekoray` 的生产 TUN 必须保持工作，它可能使本项目的真实出站归因不清。此时可在 `192.168.1.7` 运行一个完全隔离的临时 sing-box 探针，判断问题属于配置/节点链路，还是 Windows 路由与生命周期。
+本机 Clash TUN 必须保持工作，它可能使本项目的真实出站归因不清。此时可在 `192.168.1.7` 运行一个完全隔离的临时 sing-box 探针，判断问题属于配置/节点链路，还是 Windows 路由与生命周期。
 
 测试机运行 OpenWrt 23.05.6，现有 RouteFluent core 与本项目本地 core 均为 `1.13.12-routefluent-anytls-client.7`。因此它适合验证相同 schema 和出站实现；OpenWrt 不是产品目标，成功结果不能替代 Windows 验收。
 
@@ -13,8 +13,8 @@
 
 ### 本机
 
-- 不停止、不重启、不改写 `D:\Program Files\nekoray`。
-- 不占用、不探测为本项目成果的 `2080`；本项目默认端口是 `12080`。
+- 不停止、不重启、不改写本机 Clash TUN。
+- 不占用本机产品端口；远程探针始终使用自己的固定 `52080`，本项目默认端口是 `2080`。
 - 不修改生产系统代理、TUN、路由或 DNS。不能安全归因时直接使用远程实验室。
 
 ### OpenWrt
@@ -107,7 +107,7 @@ AnyTLS 对照每次单独运行，不能把多个变量合并成一个结论：
 | 移除 detour，并改用原生 AnyTLS client | 整轮失败 | 服务端返回 internal error | 不能把“移除 client 标记”作为修复 |
 | 独立 profile 2 Trojan（完整对象与 `g-2` 相同） | HTTP/CONNECT/SOCKS5h 均为 204 | 三种入口协议均命中目标 outbound | detour 对象本身可用 |
 
-这组对照只排除了“相同 core 的 loopback Mixed listener 根本不能连接”、AnyTLS mihomo client 单独不可用、以及 `g-2` Trojan 对象单独不可用。它不覆盖 Windows GUI→core ready/Start 控制链；旧 GUI 的 stdout-only ready 缺陷可独立造成产品 `12080` 从未启动。对已经发送 Start 的配置，现有证据把故障收敛到 “AnyTLS mihomo client 经 `g-2` detour” 这一组合或其生成/运行语义；它尚不能单独证明具体是哪一层实现缺陷。
+这组对照只排除了“相同 core 的 loopback Mixed listener 根本不能连接”、AnyTLS mihomo client 单独不可用、以及 `g-2` Trojan 对象单独不可用。它不覆盖 Windows GUI→core ready/Start 控制链；旧 GUI 的 stdout-only ready 缺陷可独立造成产品主 Mixed 从未启动。对已经发送 Start 的配置，现有证据把故障收敛到 “AnyTLS mihomo client 经 `g-2` detour” 这一组合或其生成/运行语义；它尚不能单独证明具体是哪一层实现缺陷。
 
 ## 结果解释
 
@@ -119,6 +119,6 @@ AnyTLS 对照每次单独运行，不能把多个变量合并成一个结论：
 
 ## 何时停止并申请维护窗口
 
-OpenWrt 无法回答 Windows Wintun、系统代理、WFP、GUI 退出/重启和线路重启问题。应先使用独立 Windows 测试环境；只有问题必须依赖本机 Windows 的真实接口/驱动，且生产 TUN 的独占资源或默认路由使测试无法成立时，才停止继续推断并请用户安排维护窗口。
+OpenWrt 无法回答 Windows Wintun、系统代理、WFP、GUI 退出/重启和线路重启问题。应先使用独立 Windows 测试环境；只有问题必须依赖本机 Windows 的真实接口/驱动，且 Clash TUN 的接口或默认路由使测试无法成立时，才停止继续推断并请用户安排维护窗口。
 
 维护窗口申请必须列出：要验证的 Windows 专有断言、为何 OpenWrt/独立 Windows 不足、需要暂停生产网络的最短阶段、无直连泄漏的保护措施、精确恢复与复核步骤。任何 agent 或自动化都不得自行开启该窗口。

@@ -10,7 +10,7 @@
 Qt Widgets UI
   -> DataStore / ProfileManager
   -> ConfigBuilder
-       -> 主 Mixed 12080 -> 主 chain
+       -> 主 Mixed 2080 -> 主 chain
        -> 辅助 Mixed port -> 对应辅助 chain
        -> Clash 三态 resolver source -> strict server-domain resolver
           -> provider DoH endpoint -> native dns-local bootstrap
@@ -75,7 +75,7 @@ Windows Runtime Service（稳定所有者）
 - Runtime Service/状态机串行化运行变更并持有精确进程句柄、路径、创建时间、generation和配置hash。
 - Windows OS是系统代理、接口、路由和WFP状态的事实源。
 - ProfileManager mutation与订阅提交必须串行；文件保存必须原子。ConfigBuilder 的统计 tag/profile id 与 VLESS flow 已不再回写 live model，group speedtest 也改用 UI immutable job/fingerprint CAS，但完整 `BuildModelSnapshot` 仍未完成。`TrafficData::last_update` 已初始化为 `0`；共享 counter/rate 的 worker 写入与 UI/JsonStore 读取仍需独立遥测快照或同步协议，generation-local `TrafficBinding` 不等于统计线程安全。
-- 外部生产 `D:\Program Files\nekoray` 永远不属于本状态机。
+- 本机 Clash TUN 是外部底层网络，永远不属于本状态机。
 
 ## 主要目录
 

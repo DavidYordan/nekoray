@@ -5,7 +5,7 @@
 
 ## 决策
 
-- 默认主入口 `mixed-in:12080` 绑定当前主 profile完整 outbound chain。
+- 默认主入口 `mixed-in:2080` 绑定当前主 profile完整 outbound chain。
 - 每个 `aux-mixed-<profile-id>` 绑定同一 profile的辅助 chain。
 - 端口是逻辑线路选择器；`route.auto_detect_interface` 只处理底层接口/产品TUN防环路，不参与主/辅助选择。
 - 绑定线路失败时该入口失败；禁止改投 `direct`、`bypass`、主线、另一辅助线、selector/urltest或其它可用性fallback。
@@ -27,7 +27,7 @@
 
 ## 物理接口
 
-Mixed-only跟随Windows路由，包括本机必须保留的外部生产TUN。本项目产品TUN模式继续使用NekoRay原有 `auto_detect_interface=dataStore->spmode_vpn` 防环路。任何双NekoRay测试特例只能在显式临时副本中出现。
+Mixed-only跟随Windows路由，包括本机必须保留的 Clash TUN。本项目产品TUN模式继续使用NekoRay原有 `auto_detect_interface=dataStore->spmode_vpn` 防环路。任何 Clash/Fake-IP/双TUN测试特例只能在显式临时副本中出现。
 
 ## 验收
 

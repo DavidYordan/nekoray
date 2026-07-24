@@ -63,7 +63,7 @@ Windows 产品必须包含 GUI/core 的 token + daemon UUID 协议；`NKR_NO_GRP
 
 `check -c` 只证明 schema 和 pre-start 校验通过，不证明 Mixed 监听、DNS、TLS、AnyTLS 会话或真实连通。
 
-Exit integration executable 不属于通用 core CLI，也不注册到 CTest；它只接受完整 package 脚本提供的路径/hash/work-root 授权。harness 使用无 listener、无 TUN 配置验证协议 v3 握手/deadline/ACK 与同一 QProcess `NormalExit/0`，不经过产品 Client/MainWindow，也不证明生产 TUN、路由、DNS、WFP 或系统代理所有权。
+Exit integration executable 不属于通用 core CLI，也不注册到 CTest；它只接受完整 package 脚本提供的路径/hash/work-root 授权。harness 使用无 listener、无 TUN 配置验证协议 v3 握手/deadline/ACK 与同一 QProcess `NormalExit/0`，不经过产品 Client/MainWindow，也不证明 Clash TUN、路由、DNS、WFP 或系统代理所有权。
 
 截至 2026-07-22，当前源码已完成一次不带 Skip 参数、先 clean reset GUI build tree 的本地完整打包，tracker/share/resolver policy/raw Exit gate 均通过；core 只输出到 `deployment/windows64/nekobox_core.exe`，SHA-256 为 `F545DC44627B83DAF49786F3403ED9E464783D71E6917CE06FDFFC0E147D09E5`。`build-package-windows64/nekobox_core.exe` 不存在，也不作为 provenance 输入。package RouteFluent manifest SHA-256 为 `28100CC9F77DE340A3B76A873E476B8EA9D4ECB115B1BA347FFF57345184760A`。该 deployment 仍是被忽略的本地审计产物，不是 release manifest 或 Windows 集成验收；clean reset 也不等于独立 clean-room 工具链。`run/check` 会直接读取 sing-box 配置，安全边界见 [CLI 文档](../reference/CLI.md#core-高级-cli)。
 
