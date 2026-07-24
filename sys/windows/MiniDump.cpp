@@ -12,7 +12,7 @@
 #include <QDateTime>
 #include <QMessageBox>
 
-typedef BOOL(WINAPI *MINIDUMPWRITEDUMP)(
+typedef BOOL(WINAPI* MINIDUMPWRITEDUMP)(
     HANDLE hProcess,
     DWORD dwPid,
     HANDLE hFile,
@@ -21,9 +21,7 @@ typedef BOOL(WINAPI *MINIDUMPWRITEDUMP)(
     CONST PMINIDUMP_USER_STREAM_INFORMATION UserStreamParam,
     CONST PMINIDUMP_CALLBACK_INFORMATION CallbackParam);
 
-LONG __stdcall CreateCrashHandler(EXCEPTION_POINTERS *pException) {
-    QDir::setCurrent(QApplication::applicationDirPath());
-
+LONG __stdcall CreateCrashHandler(EXCEPTION_POINTERS* pException) {
     HMODULE DllHandle = NULL;
     DllHandle = LoadLibrary(_T("DBGHELP.DLL"));
 
@@ -34,8 +32,9 @@ LONG __stdcall CreateCrashHandler(EXCEPTION_POINTERS *pException) {
             QDateTime CurDTime = QDateTime::currentDateTime();
             QString current_date = CurDTime.toString("yyyy_MM_dd_hh_mm_ss");
             // dmp文件的命名
-            QString dumpText = "Dump_" + current_date + ".dmp";
-            EXCEPTION_RECORD *record = pException->ExceptionRecord;
+            QString dumpText = QDir(QApplication::applicationDirPath())
+                                   .absoluteFilePath("Dump_" + current_date + ".dmp");
+            EXCEPTION_RECORD* record = pException->ExceptionRecord;
             QString errCode(QString::number(record->ExceptionCode, 16));
             QString errAddr(QString::number((uintptr_t) record->ExceptionAddress, 16));
             QString errFlag(QString::number(record->ExceptionFlags, 16));

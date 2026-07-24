@@ -8,6 +8,22 @@
         <translation>基本设置</translation>
     </message>
     <message>
+        <source>Invalid port</source>
+        <translation>端口无效</translation>
+    </message>
+    <message>
+        <source>Mixed listen port must be between 1 and 65535.</source>
+        <translation>Mixed 监听端口必须在 1 到 65535 之间。</translation>
+    </message>
+    <message>
+        <source>Invalid port range</source>
+        <translation>端口范围无效</translation>
+    </message>
+    <message>
+        <source>Auxiliary port range must be between 1 and 65535, and the start must not exceed the end.</source>
+        <translation>辅助端口范围必须在 1 到 65535 之间，且起始端口不能大于结束端口。</translation>
+    </message>
+    <message>
         <source>Enable</source>
         <translation>启用</translation>
     </message>
@@ -575,6 +591,42 @@
         <translation>删除路由: %1</translation>
     </message>
     <message>
+        <source>Routing deletion failed</source>
+        <translation>删除路由失败</translation>
+    </message>
+    <message>
+        <source>The active routing profile was preserved. Load and confirm another profile before deleting this one.</source>
+        <translation>活动路由配置已保留。请先加载并确认另一个路由配置，再删除此配置。</translation>
+    </message>
+    <message>
+        <source>The routing profile was preserved because its source could not be loaded safely.</source>
+        <translation>无法安全加载源文件，路由配置已保留。</translation>
+    </message>
+    <message>
+        <source>The routing profile was preserved. %1</source>
+        <translation>路由配置已保留。%1</translation>
+    </message>
+    <message>
+        <source>Invalid routing profile name</source>
+        <translation>路由配置名称无效</translation>
+    </message>
+    <message>
+        <source>Use a Windows file name without path separators or reserved device names.</source>
+        <translation>请使用不含路径分隔符或保留设备名的 Windows 文件名。</translation>
+    </message>
+    <message>
+        <source>Routing save failed</source>
+        <translation>保存路由失败</translation>
+    </message>
+    <message>
+        <source>The existing routing profile was preserved because it could not be loaded safely.</source>
+        <translation>无法安全加载现有路由配置，原件已保留。</translation>
+    </message>
+    <message>
+        <source>The routing profile could not be saved; existing data was preserved.</source>
+        <translation>无法保存路由配置，现有数据已保留。</translation>
+    </message>
+    <message>
         <source>Mange route set</source>
         <translation>管理路由规则</translation>
     </message>
@@ -958,6 +1010,14 @@ This needs to be run NekoBox with administrator privileges.</source>
         <translation>删除 %1 ?</translation>
     </message>
     <message>
+        <source>Group deletion failed</source>
+        <translation>删除分组失败</translation>
+    </message>
+    <message>
+        <source>The group was preserved. %1</source>
+        <translation>分组已保留。%1</translation>
+    </message>
+    <message>
         <source>Archive</source>
         <translation>归档</translation>
     </message>
@@ -1015,6 +1075,32 @@ This needs to be run NekoBox with administrator privileges.</source>
 </context>
 <context>
     <name>MainWindow</name>
+    <message>
+        <source>Copy links of selected (without remarks)</source>
+        <translation>批量复制选中线路的分享链接（不含备注）</translation>
+    </message>
+    <message>
+        <source>Copy selected as ip:port:user:pass</source>
+        <translation>复制选中线路为 ip:port:user:pass</translation>
+    </message>
+    <message>
+        <source>Copy failed</source>
+        <translation>复制失败</translation>
+    </message>
+    <message>
+        <source>Nothing was copied because these profiles cannot use the selected format:
+%1</source>
+        <translation>未复制任何内容，因为以下线路无法使用所选格式：
+%1</translation>
+    </message>
+    <message>
+        <source>One or more profiles could not be moved; their original group data was preserved.</source>
+        <translation>一个或多个配置无法移动，原分组数据已保留。</translation>
+    </message>
+    <message>
+        <source>One or more profiles could not be deleted; their data was preserved.</source>
+        <translation>一个或多个配置无法删除，其数据已保留。</translation>
+    </message>
     <message>
         <source>Program</source>
         <translation>程序</translation>
@@ -1346,6 +1432,14 @@ End: %2</source>
         <translation>未启动</translation>
     </message>
     <message>
+        <source>Group front proxy active: %1</source>
+        <translation>分组前置代理已启用：%1</translation>
+    </message>
+    <message>
+        <source>Online update is disabled in this private build.</source>
+        <translation>此私人版本已禁用在线更新。</translation>
+    </message>
+    <message>
         <source>Current server is incompatible with Tun. Please stop the server first, enable Tun Mode, and then restart.</source>
         <translation>当前服务器与 Tun 不兼容。请先停止服务器，打开 Tun 模式后再启动。</translation>
     </message>
@@ -1465,6 +1559,14 @@ Split by line.</source>
 <context>
     <name>QObject</name>
     <message>
+        <source>Subscription rollback was incomplete; preserved files remain loaded for manual review.</source>
+        <translation>订阅回滚未能完整完成；已保留的文件仍保持加载状态，请手动检查。</translation>
+    </message>
+    <message>
+        <source>%1 old profile(s) could not be deleted and were preserved for manual review.</source>
+        <translation>有 %1 个旧配置无法删除，现已保留以供手动检查。</translation>
+    </message>
+    <message>
         <source>As link</source>
         <translation>作为链接</translation>
     </message>
@@ -1547,6 +1649,10 @@ Release note:
         <translation>正在请求订阅: %1</translation>
     </message>
     <message>
+        <source>Subscription refresh is temporarily disabled because a failed or empty response can delete existing profiles.</source>
+        <translation>订阅刷新已临时禁用，因为失败或空响应可能删除现有配置。</translation>
+    </message>
+    <message>
         <source>Requesting subscription %1 error: %2</source>
         <translation>请求订阅 %1 错误: %2</translation>
     </message>
@@ -1589,6 +1695,20 @@ Release note:
     <message>
         <source>Default</source>
         <translation>默认</translation>
+    </message>
+    <message>
+        <source>Configuration recovery required</source>
+        <translation>配置需要恢复处理</translation>
+    </message>
+    <message>
+        <source>%1 configuration issue(s) were detected. Original files were not modified. Verified snapshots and audit metadata were written under:
+%2
+
+No automatic repair was attempted.</source>
+        <translation>检测到 %1 个配置问题。原始文件未被修改；已验证的快照和审计元数据保存在：
+%2
+
+程序没有执行任何自动修复。</translation>
     </message>
     <message>
         <source>The last speed test did not exit completely, please wait. If it persists, please restart the program.</source>

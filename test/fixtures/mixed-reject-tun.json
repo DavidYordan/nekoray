@@ -1,0 +1,23 @@
+{
+  "inbounds": [
+    {
+      "type": "mixed",
+      "tag": "mixed-in",
+      "listen": "127.0.0.1",
+      "listen_port": 18086
+    },
+    {
+      "type": "tun",
+      "tag": "must-not-start"
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "direct",
+      "tag": "proxy"
+    }
+  ],
+  "route": {
+    "final": "proxy"
+  }
+}

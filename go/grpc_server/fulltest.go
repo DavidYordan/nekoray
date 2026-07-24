@@ -8,7 +8,6 @@ import (
 	"io"
 	"log"
 	"math"
-	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -25,15 +24,34 @@ const (
 func getBetweenStr(str, start, end string) string {
 	n := strings.Index(str, start)
 	if n == -1 {
-		n = 0
+		return ""
 	}
-	str = string([]byte(str)[n:])
+	str = str[n+len(start):]
 	m := strings.Index(str, end)
 	if m == -1 {
-		m = len(str)
+		return str
 	}
-	str = string([]byte(str)[:m])
-	return str[len(start):]
+	return str[:m]
+}
+
+func measureDownload(ctx context.Context, httpClient *http.Client, url string) string {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "Error"
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil || resp == nil || resp.Body == nil {
+		return "Error"
+	}
+	defer resp.Body.Close()
+
+	timeStart := time.Now()
+	n, copyErr := io.Copy(io.Discard, resp.Body)
+	if copyErr != nil {
+		return "Error"
+	}
+	duration := math.Max(time.Since(timeStart).Seconds(), 0.000001)
+	return fmt.Sprintf("%.2fMiB/s", (float64(n)/duration)/MiB)
 }
 
 func DoFullTest(ctx context.Context, in *gen.TestReq, instance interface{}) (out *gen.TestResp, _ error) {
@@ -55,8 +73,8 @@ func DoFullTest(ctx context.Context, in *gen.TestReq, instance interface{}) (out
 	// UDP Latency
 	var udpLatency string
 	if in.FullUdpLatency {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
-		result := make(chan string)
+		ctx, cancel := context.WithTimeout(ctx, time.Second*3)
+		result := make(chan string, 1)
 
 		go func() {
 			var startTime = time.Now()
@@ -77,7 +95,6 @@ func DoFullTest(ctx context.Context, in *gen.TestReq, instance interface{}) (out
 				log.Println("UDP Latency test error:", err)
 				result <- "Error"
 			}
-			close(result)
 		}()
 
 		select {
@@ -92,24 +109,31 @@ func DoFullTest(ctx context.Context, in *gen.TestReq, instance interface{}) (out
 	// 入口 IP
 	var in_ip string
 	if in.FullInOut {
-		_in_ip, err := net.ResolveIPAddr("ip", in.InAddress)
-		if err == nil {
-			in_ip = _in_ip.String()
-		} else {
-			in_ip = err.Error()
-		}
+		// Resolving the profile server through net.ResolveIPAddr uses the
+		// machine's system DNS and does not traverse the tested outbound.
+		// Keep the routed egress-IP check below, but never perform this direct
+		// ingress lookup in the product test path.
+		in_ip = "Disabled (system DNS prohibited)"
 	}
 
 	// 出口 IP
 	var out_ip string
 	if in.FullInOut {
-		resp, err := httpClient.Get("https://www.cloudflare.com/cdn-cgi/trace")
-		if err == nil {
-			b, _ := io.ReadAll(resp.Body)
-			out_ip = getBetweenStr(string(b), "ip=", "\n")
-			resp.Body.Close()
-		} else {
+		req, requestErr := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.cloudflare.com/cdn-cgi/trace", nil)
+		if requestErr != nil {
 			out_ip = "Error"
+		} else {
+			resp, err := httpClient.Do(req)
+			if err == nil && resp != nil && resp.Body != nil {
+				b, readErr := io.ReadAll(io.LimitReader(resp.Body, 64*KiB))
+				_ = resp.Body.Close()
+				out_ip = getBetweenStr(string(b), "ip=", "\n")
+				if readErr != nil || out_ip == "" {
+					out_ip = "Error"
+				}
+			} else {
+				out_ip = "Error"
+			}
 		}
 	}
 
@@ -120,28 +144,11 @@ func DoFullTest(ctx context.Context, in *gen.TestReq, instance interface{}) (out
 			in.FullSpeedTimeout = 30
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second*time.Duration(in.FullSpeedTimeout))
-		result := make(chan string)
-		var bodyClose io.Closer
+		ctx, cancel := context.WithTimeout(ctx, time.Second*time.Duration(in.FullSpeedTimeout))
+		result := make(chan string, 1)
 
 		go func() {
-			req, _ := http.NewRequestWithContext(ctx, "GET", in.FullSpeedUrl, nil)
-			resp, err := httpClient.Do(req)
-			if err == nil && resp != nil && resp.Body != nil {
-				bodyClose = resp.Body
-				defer resp.Body.Close()
-
-				timeStart := time.Now()
-				n, _ := io.Copy(io.Discard, resp.Body)
-				timeEnd := time.Now()
-
-				duration := math.Max(timeEnd.Sub(timeStart).Seconds(), 0.000001)
-				resultSpeed := (float64(n) / duration) / MiB
-				result <- fmt.Sprintf("%.2fMiB/s", resultSpeed)
-			} else {
-				result <- "Error"
-			}
-			close(result)
+			result <- measureDownload(ctx, httpClient, in.FullSpeedUrl)
 		}()
 
 		select {
@@ -152,9 +159,6 @@ func DoFullTest(ctx context.Context, in *gen.TestReq, instance interface{}) (out
 		}
 
 		cancel()
-		if bodyClose != nil {
-			bodyClose.Close()
-		}
 	}
 
 	fr := make([]string, 0)

@@ -1,7 +1,11 @@
 #include "NekoGui.hpp"
+#include "ConfigRecovery.hpp"
+#include "ConfigMutation.hpp"
+#include "ConfigTransaction.hpp"
 #include "fmt/Preset.hpp"
 
 #include <QFile>
+#include <QSaveFile>
 #include <QDir>
 #include <QApplication>
 #include <QFileInfo>
@@ -24,18 +28,18 @@
 namespace NekoGui_ConfigItem {
 
     // 添加关联
-    void JsonStore::_add(configItem *item) {
+    void JsonStore::_add(configItem* item) {
         _map.insert(item->name, std::shared_ptr<configItem>(item));
     }
 
-    QString JsonStore::_name(void *p) {
-        for (const auto &_item: _map) {
+    QString JsonStore::_name(void* p) {
+        for (const auto& _item: _map) {
             if (_item->ptr == p) return _item->name;
         }
         return {};
     }
 
-    std::shared_ptr<configItem> JsonStore::_get(const QString &name) {
+    std::shared_ptr<configItem> JsonStore::_get(const QString& name) {
         // 直接 [] 会设置一个 nullptr ，所以先判断是否存在
         if (_map.contains(name)) {
             return _map[name];
@@ -43,22 +47,22 @@ namespace NekoGui_ConfigItem {
         return nullptr;
     }
 
-    void JsonStore::_setValue(const QString &name, void *p) {
+    void JsonStore::_setValue(const QString& name, void* p) {
         auto item = _get(name);
         if (item == nullptr) return;
 
         switch (item->type) {
             case itemType::string:
-                *(QString *) item->ptr = *(QString *) p;
+                *(QString*) item->ptr = *(QString*) p;
                 break;
             case itemType::boolean:
-                *(bool *) item->ptr = *(bool *) p;
+                *(bool*) item->ptr = *(bool*) p;
                 break;
             case itemType::integer:
-                *(int *) item->ptr = *(int *) p;
+                *(int*) item->ptr = *(int*) p;
                 break;
             case itemType::integer64:
-                *(long long *) item->ptr = *(long long *) p;
+                *(long long*) item->ptr = *(long long*) p;
                 break;
             // others...
             case stringList:
@@ -68,36 +72,36 @@ namespace NekoGui_ConfigItem {
         }
     }
 
-    QJsonObject JsonStore::ToJson(const QStringList &without) {
+    QJsonObject JsonStore::ToJson(const QStringList& without) {
         QJsonObject object;
-        for (const auto &_item: _map) {
+        for (const auto& _item: _map) {
             auto item = _item.get();
             if (without.contains(item->name)) continue;
             switch (item->type) {
                 case itemType::string:
                     // Allow Empty
-                    if (!((QString *) item->ptr)->isEmpty()) {
-                        object.insert(item->name, *(QString *) item->ptr);
+                    if (!((QString*) item->ptr)->isEmpty()) {
+                        object.insert(item->name, *(QString*) item->ptr);
                     }
                     break;
                 case itemType::integer:
-                    object.insert(item->name, *(int *) item->ptr);
+                    object.insert(item->name, *(int*) item->ptr);
                     break;
                 case itemType::integer64:
-                    object.insert(item->name, *(long long *) item->ptr);
+                    object.insert(item->name, *(long long*) item->ptr);
                     break;
                 case itemType::boolean:
-                    object.insert(item->name, *(bool *) item->ptr);
+                    object.insert(item->name, *(bool*) item->ptr);
                     break;
                 case itemType::stringList:
-                    object.insert(item->name, QList2QJsonArray<QString>(*(QList<QString> *) item->ptr));
+                    object.insert(item->name, QList2QJsonArray<QString>(*(QList<QString>*) item->ptr));
                     break;
                 case itemType::integerList:
-                    object.insert(item->name, QList2QJsonArray<int>(*(QList<int> *) item->ptr));
+                    object.insert(item->name, QList2QJsonArray<int>(*(QList<int>*) item->ptr));
                     break;
                 case itemType::jsonStore:
                     // _add 时应关联对应 JsonStore 的指针
-                    object.insert(item->name, ((JsonStore *) item->ptr)->ToJson());
+                    object.insert(item->name, ((JsonStore*) item->ptr)->ToJson());
                     break;
             }
         }
@@ -111,7 +115,7 @@ namespace NekoGui_ConfigItem {
     }
 
     void JsonStore::FromJson(QJsonObject object) {
-        for (const auto &key: object.keys()) {
+        for (const auto& key: object.keys()) {
             if (_map.count(key) == 0) {
                 continue;
             }
@@ -128,43 +132,43 @@ namespace NekoGui_ConfigItem {
                     if (value.type() != QJsonValue::String) {
                         continue;
                     }
-                    *(QString *) item->ptr = value.toString();
+                    *(QString*) item->ptr = value.toString();
                     break;
                 case itemType::integer:
                     if (value.type() != QJsonValue::Double) {
                         continue;
                     }
-                    *(int *) item->ptr = value.toInt();
+                    *(int*) item->ptr = value.toInt();
                     break;
                 case itemType::integer64:
                     if (value.type() != QJsonValue::Double) {
                         continue;
                     }
-                    *(long long *) item->ptr = value.toDouble();
+                    *(long long*) item->ptr = value.toDouble();
                     break;
                 case itemType::boolean:
                     if (value.type() != QJsonValue::Bool) {
                         continue;
                     }
-                    *(bool *) item->ptr = value.toBool();
+                    *(bool*) item->ptr = value.toBool();
                     break;
                 case itemType::stringList:
                     if (value.type() != QJsonValue::Array) {
                         continue;
                     }
-                    *(QList<QString> *) item->ptr = QJsonArray2QListString(value.toArray());
+                    *(QList<QString>*) item->ptr = QJsonArray2QListString(value.toArray());
                     break;
                 case itemType::integerList:
                     if (value.type() != QJsonValue::Array) {
                         continue;
                     }
-                    *(QList<int> *) item->ptr = QJsonArray2QListInt(value.toArray());
+                    *(QList<int>*) item->ptr = QJsonArray2QListInt(value.toArray());
                     break;
                 case itemType::jsonStore:
                     if (value.type() != QJsonValue::Object) {
                         continue;
                     }
-                    ((JsonStore *) item->ptr)->FromJson(value.toObject());
+                    ((JsonStore*) item->ptr)->FromJson(value.toObject());
                     break;
             }
         }
@@ -172,49 +176,230 @@ namespace NekoGui_ConfigItem {
         if (callback_after_load != nullptr) callback_after_load();
     }
 
-    void JsonStore::FromJsonBytes(const QByteArray &data) {
+    bool JsonStore::FromJsonBytes(const QByteArray& data) {
+        last_load_error.clear();
         QJsonParseError error{};
         auto document = QJsonDocument::fromJson(data, &error);
 
-        if (error.error != error.NoError) {
-            qDebug() << "QJsonParseError" << error.errorString();
-            return;
+        if (error.error != QJsonParseError::NoError || !document.isObject()) {
+            last_load_error = error.error != QJsonParseError::NoError
+                                  ? error.errorString()
+                                  : QStringLiteral("The JSON root must be an object.");
+            qWarning() << "Invalid JSON object:" << last_load_error;
+            return false;
         }
 
-        FromJson(document.object());
+        const auto object = document.object();
+        if (callback_validate_load != nullptr) {
+            last_load_error = callback_validate_load(object);
+            if (!last_load_error.isEmpty()) {
+                qWarning() << "Config validation failed before load:" << last_load_error;
+                return false;
+            }
+        }
+
+        FromJson(object);
+        return true;
     }
 
     bool JsonStore::Save() {
-        if (callback_before_save != nullptr) callback_before_save();
+        NekoGui_ConfigMutation::Guard mutationGuard(true);
+        if (!mutationGuard.acquired()) {
+            qCritical() << "Cannot acquire the configuration model lock:" << fn;
+            return false;
+        }
+        last_save_succeeded = false;
+        last_save_indeterminate = false;
         if (save_control_no_save) return false;
+        const auto transactionBlock = NekoGui_ConfigTransaction::RuntimeMutationBlockReason();
+        if (!transactionBlock.isEmpty()) {
+            qCritical() << "Refusing config save while transaction recovery is required:" << fn << transactionBlock;
+            return false;
+        }
+        if (callback_before_save != nullptr) {
+            const auto validationError = callback_before_save();
+            if (!validationError.isEmpty()) {
+                qCritical() << "Refusing to save invalid config:" << fn << validationError;
+                return false;
+            }
+        }
+        if (load_failed_existing) {
+            qCritical() << "Refusing to overwrite an existing config that failed to load:" << fn;
+            return false;
+        }
 
         auto save_content = ToJsonBytes();
-        auto changed = last_save_content != save_content;
+        NekoGui_ConfigTransaction::DiskLockGuard diskLock;
+        if (!diskLock.acquired()) {
+            qCritical() << "Refusing config save while the configuration disk lock is busy:"
+                        << fn << diskLock.error();
+            return false;
+        }
+        const auto transactionIssues = NekoGui_ConfigTransaction::BlockingTransactionIssues();
+        if (!transactionIssues.isEmpty()) {
+            qCritical() << "Refusing config save while a configuration transaction requires recovery:"
+                        << fn << transactionIssues;
+            return false;
+        }
+
+        if (QFileInfo::exists(fn) != last_save_existed) {
+            qCritical() << "Refusing config save after external file existence changed:" << fn;
+            return false;
+        }
+        const auto preparation = NekoGui_ConfigRecovery::PrepareOverwrite(
+            fn, last_save_content, save_content);
+        if (preparation.decision == NekoGui_ConfigRecovery::OverwriteDecision::Refused) {
+            qCritical() << preparation.error;
+            return false;
+        }
+        if (preparation.decision == NekoGui_ConfigRecovery::OverwriteDecision::Unchanged) {
+            last_save_succeeded = true;
+            return false;
+        }
+        if (!preparation.backupPath.isEmpty()) {
+            qInfo() << "Verified pre-overwrite config backup:" << preparation.backupPath;
+        }
+
+        const NekoGui_ConfigTransaction::FileMutation mutationIntent{
+            fn,
+            {last_save_existed, last_save_content},
+            {true, save_content},
+        };
+        const auto intent = NekoGui_ConfigTransaction::PrepareMutationIntent(
+            QStringLiteral("Atomic single-file save for %1.").arg(fn),
+            mutationIntent);
+        if (!intent.succeeded) {
+            qCritical() << "Cannot publish the atomic-save intent:" << fn << intent.error;
+            return false;
+        }
+        auto completeAtBefore = [&](const QString& detail) {
+            const auto completion = NekoGui_ConfigTransaction::CompleteMutationIntent(
+                intent.transactionId,
+                NekoGui_ConfigTransaction::MutationIntentDisposition::VerifiedBefore,
+                detail);
+            if (!completion.resolved) {
+                last_save_indeterminate = true;
+                qCritical() << "Atomic-save intent could not be safely aborted:"
+                            << fn << completion.error;
+            } else if (!completion.error.isEmpty()) {
+                qWarning() << "Atomic-save intent retirement warning:" << completion.error;
+            }
+        };
+
+        QSaveFile file(fn);
+        file.setDirectWriteFallback(false);
+        if (!file.open(QIODevice::WriteOnly)) {
+            qWarning() << "Cannot open config for atomic save:" << fn << file.errorString();
+            completeAtBefore(QStringLiteral("Atomic target was not opened."));
+            return false;
+        }
+        if (file.write(save_content) != save_content.size()) {
+            qWarning() << "Cannot write complete config:" << fn << file.errorString();
+            file.cancelWriting();
+            completeAtBefore(QStringLiteral("Atomic temporary-file write failed before commit."));
+            return false;
+        }
+        if (last_save_existed) {
+            QString verificationError;
+            if (!NekoGui_ConfigRecovery::CurrentContentMatches(
+                    fn, last_save_content, &verificationError)) {
+                qCritical() << "Config changed while its replacement was being prepared:"
+                            << verificationError;
+                file.cancelWriting();
+                completeAtBefore(verificationError);
+                return false;
+            }
+        } else if (QFileInfo::exists(fn)) {
+            qCritical() << "Refusing to overwrite a config created while this save was being prepared:"
+                        << fn;
+            file.cancelWriting();
+            completeAtBefore(QStringLiteral("A new target appeared before atomic commit."));
+            return false;
+        }
+        if (!file.commit()) {
+            qWarning() << "Cannot commit config atomically:" << fn << file.errorString();
+            completeAtBefore(QStringLiteral("QSaveFile commit reported failure."));
+            return false;
+        }
+        QString verificationError;
+        if (!NekoGui_ConfigRecovery::CurrentContentMatches(
+                fn, save_content, &verificationError)) {
+            const auto completion = NekoGui_ConfigTransaction::CompleteMutationIntent(
+                intent.transactionId,
+                NekoGui_ConfigTransaction::MutationIntentDisposition::Indeterminate,
+                verificationError);
+            // QSaveFile::commit() already reported success. Keep the intended
+            // in-memory state and refuse dependent rollback. The intent was
+            // already durable before commit, so restart also remains blocked.
+            last_save_content = save_content;
+            last_save_existed = true;
+            last_save_indeterminate = true;
+            qCritical() << "Committed config verification became indeterminate:"
+                        << verificationError << completion.error;
+            return false;
+        }
+        const auto completion = NekoGui_ConfigTransaction::CompleteMutationIntent(
+            intent.transactionId,
+            NekoGui_ConfigTransaction::MutationIntentDisposition::VerifiedAfter,
+            QStringLiteral("Atomic target content was verified after commit."));
+        if (!completion.resolved) {
+            last_save_content = save_content;
+            last_save_existed = true;
+            last_save_indeterminate = true;
+            qCritical() << "Atomic target was written, but its durable intent could not be completed:"
+                        << completion.error;
+            return false;
+        }
+        if (!completion.error.isEmpty()) {
+            qWarning() << "Atomic-save intent retirement warning:" << completion.error;
+        }
+
         last_save_content = save_content;
+        last_save_existed = true;
+        last_save_succeeded = true;
 
-        QFile file;
-        file.setFileName(fn);
-        file.open(QIODevice::ReadWrite | QIODevice::Truncate);
-        file.write(save_content);
-        file.close();
-
-        return changed;
+        return true;
     }
 
     bool JsonStore::Load() {
         QFile file;
         file.setFileName(fn);
+        last_save_succeeded = false;
+        last_save_indeterminate = false;
+        last_save_existed = file.exists();
+        last_save_content.clear();
 
         if (!file.exists() && !load_control_must) {
+            load_failed_existing = false;
+            last_save_existed = false;
+            last_save_content.clear();
             return false;
         }
 
         bool ok = file.open(QIODevice::ReadOnly);
         if (!ok) {
+            load_failed_existing = file.exists();
+            last_save_existed = file.exists();
             MessageBoxWarning("error", "can not open config " + fn + "\n" + file.errorString());
         } else {
-            last_save_content = file.readAll();
-            FromJsonBytes(last_save_content);
+            const auto load_content = file.readAll();
+            if (!FromJsonBytes(load_content)) {
+                qWarning() << "Cannot load invalid config; original file is preserved:" << fn;
+                const auto quarantine = NekoGui_ConfigRecovery::RecordQuarantine(fn, load_content, last_load_error);
+                if (!quarantine.succeeded) {
+                    qCritical() << "Could not create a verified quarantine snapshot:"
+                                << fn << quarantine.error;
+                } else {
+                    qWarning() << "Verified quarantine snapshot:" << quarantine.snapshotPath;
+                }
+                load_failed_existing = true;
+                last_save_existed = true;
+                ok = false;
+            } else {
+                load_failed_existing = false;
+                last_save_existed = true;
+                last_save_content = load_content;
+            }
         }
 
         file.close();
@@ -225,12 +410,12 @@ namespace NekoGui_ConfigItem {
 
 namespace NekoGui {
 
-    DataStore *dataStore = new DataStore();
+    DataStore* dataStore = new DataStore();
 
     // datastore
 
     DataStore::DataStore() : JsonStore() {
-        _add(new configItem("inbound_auth", dynamic_cast<JsonStore *>(inbound_auth), itemType::jsonStore));
+        _add(new configItem("inbound_auth", dynamic_cast<JsonStore*>(inbound_auth), itemType::jsonStore));
 
         _add(new configItem("user_agent2", &user_agent, itemType::string));
         _add(new configItem("test_url", &test_latency_url, itemType::string));
@@ -288,8 +473,16 @@ namespace NekoGui {
         _add(new configItem("core_box_clash_api_secret", &core_box_clash_api_secret, itemType::string));
         _add(new configItem("core_box_underlying_dns", &core_box_underlying_dns, itemType::string));
         _add(new configItem("vpn_internal_tun", &vpn_internal_tun, itemType::boolean));
+        callback_validate_load = [this](const QJsonObject& object) {
+            const auto routingValue = object.value(QStringLiteral("active_routing"));
+            if (!routingValue.isUndefined() &&
+                (!routingValue.isString() || !Routing::IsSafeName(routingValue.toString()))) {
+                return QStringLiteral("active_routing must be a safe Windows file name without a path.");
+            }
+            return ValidateAuxiliaryProfilePortEntries(object);
+        };
         callback_after_load = [this] { LoadAuxiliaryProfilePorts(); };
-        callback_before_save = [this] { StoreAuxiliaryProfilePorts(); };
+        callback_before_save = [this] { return StoreAuxiliaryProfilePorts(); };
     }
 
     void DataStore::NormalizeAuxiliaryPortSettings() {
@@ -301,29 +494,100 @@ namespace NekoGui {
     void DataStore::LoadAuxiliaryProfilePorts() {
         NormalizeAuxiliaryPortSettings();
         aux_profile_ports.clear();
+        aux_profile_ports_load_error.clear();
         QSet<int> seenPorts;
-        for (const auto &entry: aux_profile_port_entries) {
+        QSet<int> seenProfileIds;
+        int invalidEntries = 0;
+        for (const auto& entry: aux_profile_port_entries) {
             const auto parts = entry.split(":");
-            if (parts.size() != 2) continue;
+            if (parts.size() != 2) {
+                invalidEntries++;
+                continue;
+            }
             bool idOk = false;
             bool portOk = false;
             const auto profileId = parts.at(0).trimmed().toInt(&idOk);
             const auto port = parts.at(1).trimmed().toInt(&portOk);
-            if (!idOk || !portOk || profileId < 0 || !IsValidPort(port) || seenPorts.contains(port)) continue;
+            if (!idOk || !portOk || profileId < 0 || !IsValidPort(port) ||
+                seenPorts.contains(port) || seenProfileIds.contains(profileId)) {
+                invalidEntries++;
+                continue;
+            }
             aux_profile_ports.insert(profileId, port);
             seenPorts.insert(port);
+            seenProfileIds.insert(profileId);
+        }
+        if (invalidEntries > 0) {
+            aux_profile_ports_load_error = QStringLiteral(
+                                               "Auxiliary Mixed mappings contain %1 malformed or duplicate persisted entr%2. "
+                                               "The config is blocked from runtime use and saving; repair it explicitly.")
+                                               .arg(invalidEntries)
+                                               .arg(invalidEntries == 1 ? "y" : "ies");
         }
     }
 
-    void DataStore::StoreAuxiliaryProfilePorts() {
+    QString DataStore::ValidateAuxiliaryProfilePortEntries(const QJsonObject& object) const {
+        const auto value = object.value(QStringLiteral("aux_profile_ports"));
+        if (value.isUndefined()) return {};
+        if (!value.isArray()) {
+            return QStringLiteral("aux_profile_ports must be an array of 'profile-id:port' strings.");
+        }
+
+        QSet<int> seenPorts;
+        QSet<int> seenProfileIds;
+        const auto entries = value.toArray();
+        for (int index = 0; index < entries.size(); ++index) {
+            const auto item = entries.at(index);
+            if (!item.isString()) {
+                return QStringLiteral("aux_profile_ports entry %1 must be a string.").arg(index);
+            }
+
+            const auto parts = item.toString().split(":");
+            bool idOk = false;
+            bool portOk = false;
+            const auto profileId = parts.size() == 2 ? parts.at(0).trimmed().toInt(&idOk) : -1;
+            const auto port = parts.size() == 2 ? parts.at(1).trimmed().toInt(&portOk) : -1;
+            if (parts.size() != 2 || !idOk || !portOk || profileId < 0 || !IsValidPort(port)) {
+                return QStringLiteral("aux_profile_ports entry %1 is not a valid 'profile-id:port' mapping.").arg(index);
+            }
+            if (seenProfileIds.contains(profileId)) {
+                return QStringLiteral("aux_profile_ports contains duplicate profile id %1.").arg(profileId);
+            }
+            if (seenPorts.contains(port)) {
+                return QStringLiteral("aux_profile_ports contains duplicate port %1.").arg(port);
+            }
+            seenProfileIds.insert(profileId);
+            seenPorts.insert(port);
+        }
+        return {};
+    }
+
+    QString DataStore::StoreAuxiliaryProfilePorts() {
         NormalizeAuxiliaryPortSettings();
-        aux_profile_port_entries.clear();
+        if (!Routing::IsSafeName(active_routing)) {
+            return QStringLiteral("active_routing must be a safe Windows file name without a path.");
+        }
+        if (!aux_profile_ports_load_error.isEmpty()) return aux_profile_ports_load_error;
+
+        QStringList serializedEntries;
         QSet<int> seenPorts;
         for (auto it = aux_profile_ports.constBegin(); it != aux_profile_ports.constEnd(); ++it) {
-            if (it.key() < 0 || !IsValidPort(it.value()) || seenPorts.contains(it.value())) continue;
-            aux_profile_port_entries << QStringLiteral("%1:%2").arg(it.key()).arg(it.value());
+            if (it.key() < 0) {
+                return QStringLiteral("Auxiliary Mixed mapping contains an invalid profile id: %1.").arg(it.key());
+            }
+            if (!IsValidPort(it.value())) {
+                return QStringLiteral("Auxiliary Mixed mapping for profile %1 contains an invalid port: %2.")
+                    .arg(it.key())
+                    .arg(it.value());
+            }
+            if (seenPorts.contains(it.value())) {
+                return QStringLiteral("Auxiliary Mixed mappings contain duplicate port %1.").arg(it.value());
+            }
+            serializedEntries << QStringLiteral("%1:%2").arg(it.key()).arg(it.value());
             seenPorts.insert(it.value());
         }
+        aux_profile_port_entries = serializedEntries;
+        return {};
     }
 
     void DataStore::UpdateStartedId(int id) {
@@ -403,19 +667,85 @@ namespace NekoGui {
 
     QStringList Routing::List() {
         QDir dr(ROUTES_PREFIX);
-        return dr.entryList(QDir::Files);
+        QStringList safeEntries;
+        for (const auto& name: dr.entryList(QDir::Files)) {
+            if (IsSafeName(name)) safeEntries.append(name);
+        }
+        return safeEntries;
     }
 
-    bool Routing::SetToActive(const QString &name) {
-        NekoGui::dataStore->routing = std::make_unique<Routing>();
-        NekoGui::dataStore->routing->load_control_must = true;
-        NekoGui::dataStore->routing->fn = ROUTES_PREFIX + name;
-        auto ok = NekoGui::dataStore->routing->Load();
-        if (ok) {
-            NekoGui::dataStore->active_routing = name;
-            NekoGui::dataStore->Save();
+    bool Routing::IsSafeName(const QString& name) {
+        if (name.isEmpty() || name.size() > 128 || name.trimmed() != name ||
+            name == "." || name == ".." || name.startsWith('.') || name.endsWith('.')) {
+            return false;
         }
-        return ok;
+        // Tilde is rejected deliberately on Windows because an 8.3 alias can
+        // otherwise identify a different on-disk route than the UI name.
+        static const QString forbidden = QStringLiteral("<>:\"/\\|?*~");
+        for (const auto character: name) {
+            if (character.unicode() < 0x20 || forbidden.contains(character)) return false;
+        }
+
+        const auto stem = name.section('.', 0, 0).toUpper();
+        static const QSet<QString> reserved{
+            QStringLiteral("CON"),
+            QStringLiteral("PRN"),
+            QStringLiteral("AUX"),
+            QStringLiteral("NUL"),
+            QStringLiteral("CONIN$"),
+            QStringLiteral("CONOUT$"),
+            QStringLiteral("COM1"),
+            QStringLiteral("COM2"),
+            QStringLiteral("COM3"),
+            QStringLiteral("COM4"),
+            QStringLiteral("COM5"),
+            QStringLiteral("COM6"),
+            QStringLiteral("COM7"),
+            QStringLiteral("COM8"),
+            QStringLiteral("COM9"),
+            QStringLiteral("LPT1"),
+            QStringLiteral("LPT2"),
+            QStringLiteral("LPT3"),
+            QStringLiteral("LPT4"),
+            QStringLiteral("LPT5"),
+            QStringLiteral("LPT6"),
+            QStringLiteral("LPT7"),
+            QStringLiteral("LPT8"),
+            QStringLiteral("LPT9"),
+        };
+        return !reserved.contains(stem);
+    }
+
+    bool Routing::SetToActive(const QString& name) {
+        if (!IsSafeName(name)) return false;
+        NekoGui_ConfigMutation::Guard mutationGuard(true);
+        if (!mutationGuard.acquired() || NekoGui::dataStore->core_transition_depth.load() > 0) {
+            qWarning() << "Routing activation was refused during a core/config transition:" << name;
+            return false;
+        }
+
+        auto candidate = std::make_unique<Routing>();
+        candidate->load_control_must = true;
+        candidate->fn = ROUTES_PREFIX + name;
+        if (!candidate->Load()) return false;
+
+        const auto previousName = NekoGui::dataStore->active_routing;
+        auto previousRouting = std::move(NekoGui::dataStore->routing);
+        NekoGui::dataStore->routing = std::move(candidate);
+        NekoGui::dataStore->active_routing = name;
+        NekoGui::dataStore->Save();
+        if (NekoGui::dataStore->last_save_succeeded) return true;
+
+        if (NekoGui::dataStore->last_save_indeterminate) {
+            qCritical() << "Routing activation is indeterminate and requires explicit recovery:"
+                        << name;
+            return false;
+        }
+        NekoGui::dataStore->active_routing = previousName;
+        NekoGui::dataStore->routing = std::move(previousRouting);
+        qCritical() << "Routing activation was rolled back because the main config was not saved:"
+                    << name;
+        return false;
     }
 
     InboundAuthorization::InboundAuthorization() : JsonStore() {
@@ -429,7 +759,7 @@ namespace NekoGui {
 
     // System Utils
 
-    QString FindCoreAsset(const QString &name) {
+    QString FindCoreAsset(const QString& name) {
         QStringList search{};
         search << QApplication::applicationDirPath();
         search << "/usr/share/sing-geoip";
@@ -437,7 +767,7 @@ namespace NekoGui {
         search << "/usr/share/sing-box";
         search << "/usr/lib/nekobox";
         search << "/usr/share/nekobox";
-        for (const auto &dir: search) {
+        for (const auto& dir: search) {
             if (dir.isEmpty()) continue;
             QFileInfo asset(dir + "/" + name);
             if (asset.exists()) {

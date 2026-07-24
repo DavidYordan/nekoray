@@ -2,6 +2,7 @@ package boxapi
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"sync"
@@ -16,6 +17,8 @@ import (
 	"github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
 )
+
+var ErrNoActiveInstance = errors.New("no active sing-box instance; direct network fallback is disabled")
 
 type SbStatsService struct {
 	createdAt time.Time
@@ -61,6 +64,9 @@ func NewSbStatsService(options StatsServiceOptions) *SbStatsService {
 }
 
 func DialContext(ctx context.Context, instance *box.Box, tracker adapter.ConnectionTracker, network, addr string) (net.Conn, error) {
+	if instance == nil {
+		return nil, ErrNoActiveInstance
+	}
 	defOutboundTag := instance.Outbound().Default().Tag()
 	conn, err := dialer.NewDetour(instance.Outbound(), defOutboundTag, true).DialContext(ctx, network, metadata.ParseSocksaddr(addr))
 	if err != nil {
@@ -72,21 +78,34 @@ func DialContext(ctx context.Context, instance *box.Box, tracker adapter.Connect
 	return conn, nil
 }
 
-func CreateProxyHttpClient(instance *box.Box, tracker adapter.ConnectionTracker) *http.Client {
+type DialContextFunc func(context.Context, string, string) (net.Conn, error)
+
+func createProxyHTTPClient(dialContext DialContextFunc, disableKeepAlives bool) *http.Client {
 	transport := &http.Transport{
 		TLSHandshakeTimeout:   time.Second * 3,
 		ResponseHeaderTimeout: time.Second * 3,
+		DisableKeepAlives:     disableKeepAlives,
 	}
 
-	if instance != nil {
-		transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-			return DialContext(ctx, instance, tracker, network, addr)
-		}
-	}
+	transport.DialContext = dialContext
 
 	return &http.Client{
 		Transport: transport,
 	}
+}
+
+func CreateProxyHttpClient(instance *box.Box, tracker adapter.ConnectionTracker) *http.Client {
+	return createProxyHTTPClient(func(ctx context.Context, network, addr string) (net.Conn, error) {
+		return DialContext(ctx, instance, tracker, network, addr)
+	}, false)
+}
+
+// CreateGenerationBoundHTTPClient disables connection reuse so every request
+// must pass through a generation-validating dial callback. Without this, an
+// old http.Transport could silently reuse an idle connection after the owner
+// has stopped that generation and published another one.
+func CreateGenerationBoundHTTPClient(dialContext DialContextFunc) *http.Client {
+	return createProxyHTTPClient(dialContext, true)
 }
 
 func (s *SbStatsService) RoutedConnection(ctx context.Context, conn net.Conn, metadata adapter.InboundContext, matchedRule adapter.Rule, matchOutbound adapter.Outbound) net.Conn {

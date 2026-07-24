@@ -4,6 +4,8 @@
 #include "db/Database.hpp"
 #include "db/ConfigBuilder.hpp"
 #include "db/traffic/TrafficLooper.hpp"
+#include "main/ConfigMutation.hpp"
+#include "main/ConfigTransaction.hpp"
 #include "rpc/gRPC.h"
 #include "sys/CoreProcess.hpp"
 #include "ui/widget/MessageBoxTimer.h"
@@ -16,9 +18,13 @@
 #include <QMessageBox>
 #include <QDialogButtonBox>
 #include <QSet>
+#include <QCryptographicHash>
+#include <QJsonDocument>
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <utility>
 
 // grpc
 
@@ -38,23 +44,47 @@ namespace {
                NekoGui::dataStore->vpn_internal_tun != GetMainWindow()->isInternalTunActive();
     }
 
-    QString internalTunReloadBlockedMessage() {
-        return QObject::tr("Internal Tun is running. This operation would stop and restart sing-box and may restore direct traffic. Disable Tun explicitly first.");
+    QString internalTunContinuityBlockedMessage() {
+        return QObject::tr(
+            "Operation blocked to prevent direct fallback: the internal Tun is owned by the current sing-box instance, "
+            "and this build has no independent persistent Windows kill switch to protect the stop/start gap. "
+            "Do not disable Tun as a workaround. Use the explicit Tun-off control only when you intentionally authorize "
+            "restoring the default network.");
     }
 
     QString tunModeChangeBlockedMessage() {
-        return QObject::tr("Tun implementation was changed while Tun is running. Disable Tun explicitly before restarting or reloading.");
+        return QObject::tr(
+            "Operation blocked to prevent direct fallback: the requested Tun implementation differs from the active "
+            "worker, and changing it would remove the current Tun before an independent persistent Windows kill switch "
+            "can protect the transition. Do not disable Tun merely to continue this operation.");
     }
-}
+
+    QString configRecoveryBlockReason() {
+        const auto runtimeReason = NekoGui_ConfigTransaction::RuntimeMutationBlockReason();
+        if (!runtimeReason.isEmpty()) return runtimeReason;
+        const auto issues = NekoGui_ConfigTransaction::BlockingTransactionIssues();
+        return issues.isEmpty()
+                   ? QString{}
+                   : QStringLiteral("Configuration recovery is required: %1")
+                         .arg(issues.join(QStringLiteral(" | ")));
+    }
+} // namespace
 
 void MainWindow::setup_grpc() {
 #ifndef NKR_NO_GRPC
     // Setup Connection
+    const auto process = GetMainWindow() == nullptr ? nullptr : GetMainWindow()->core_process;
     defaultClient = new Client(
-        [=](const QString &errStr) {
+        [=](const QString& errStr) {
             MW_show_log("[Error] gRPC: " + errStr);
         },
-        "127.0.0.1:" + Int2String(NekoGui::dataStore->core_port), NekoGui::dataStore->core_token);
+        "127.0.0.1:" + Int2String(NekoGui::dataStore->core_port),
+        NekoGui::dataStore->core_token,
+        [process] {
+            if (process == nullptr) return QString{};
+            const auto instance = process->CurrentDaemonInstance();
+            return QString::fromStdString(instance.instanceId);
+        });
 
     // Looper
     runOnNewThread([=] { NekoGui_traffic::trafficLooper->Loop(); });
@@ -66,14 +96,14 @@ void MainWindow::setup_grpc() {
 namespace {
     QMutex speedtestingMutex;
     bool speedtesting = false;
-    QList<QThread *> speedtestingThreads;
+    QList<QThread*> speedtestingThreads;
     std::shared_ptr<std::atomic_bool> speedtestingCancelToken;
 
     QMutex runningLabelUrlTestMutex;
     bool runningLabelUrlTesting = false;
     quint64 runningLabelUrlTestGeneration = 0;
 
-    bool beginSpeedtesting(std::shared_ptr<std::atomic_bool> *token) {
+    bool beginSpeedtesting(std::shared_ptr<std::atomic_bool>* token) {
         QMutexLocker locker(&speedtestingMutex);
         if (speedtesting) return false;
         speedtesting = true;
@@ -83,19 +113,20 @@ namespace {
         return true;
     }
 
-    bool cancelSpeedtesting(const std::shared_ptr<std::atomic_bool> &expectedToken = {}) {
-        QList<QThread *> threadsToStop;
+    bool cancelSpeedtesting(const std::shared_ptr<std::atomic_bool>& expectedToken = {}) {
+        QList<QThread*> threadsToStop;
         {
             QMutexLocker locker(&speedtestingMutex);
             if (!speedtesting && speedtestingCancelToken == nullptr) return false;
             if (expectedToken != nullptr && speedtestingCancelToken != expectedToken) return false;
             if (speedtestingCancelToken != nullptr) speedtestingCancelToken->store(true);
             threadsToStop = speedtestingThreads;
-            speedtesting = false;
-            speedtestingThreads.clear();
-            speedtestingCancelToken.reset();
+            // Cancellation is only a request. A worker can still be blocked in
+            // gRPC/core teardown, so keep the test marked active until every
+            // worker reaches finishSpeedtesting(). Otherwise TUN could be
+            // enabled while a temporary Box still owns live sockets.
         }
-        for (auto *thread: threadsToStop) {
+        for (auto* thread: threadsToStop) {
             if (thread == nullptr) continue;
             thread->requestInterruption();
             thread->quit();
@@ -104,7 +135,7 @@ namespace {
         return true;
     }
 
-    bool finishSpeedtesting(const std::shared_ptr<std::atomic_bool> &token) {
+    bool finishSpeedtesting(const std::shared_ptr<std::atomic_bool>& token) {
         QMutexLocker locker(&speedtestingMutex);
         if (speedtestingCancelToken != token) return false;
         speedtesting = false;
@@ -113,12 +144,12 @@ namespace {
         return true;
     }
 
-    void registerSpeedtestingThread(QThread *thread) {
+    void registerSpeedtestingThread(QThread* thread) {
         QMutexLocker locker(&speedtestingMutex);
         if (thread != nullptr && !speedtestingThreads.contains(thread)) speedtestingThreads << thread;
     }
 
-    void unregisterSpeedtestingThread(QThread *thread) {
+    void unregisterSpeedtestingThread(QThread* thread) {
         QMutexLocker locker(&speedtestingMutex);
         speedtestingThreads.removeAll(thread);
     }
@@ -136,7 +167,168 @@ namespace {
         runningLabelUrlTesting = false;
         return true;
     }
+
+    bool isRunningLabelUrlTest(quint64 generation) {
+        QMutexLocker locker(&runningLabelUrlTestMutex);
+        return runningLabelUrlTesting && runningLabelUrlTestGeneration == generation;
+    }
+
+#ifndef NKR_NO_GRPC
+    QByteArray speedtestJsonFingerprint(const QJsonObject& object) {
+        return QCryptographicHash::hash(
+            QJsonDocument(object).toJson(QJsonDocument::Compact),
+            QCryptographicHash::Sha256);
+    }
+
+    QByteArray speedtestProfileFingerprint(
+        const std::shared_ptr<NekoGui::ProxyEntity>& profile,
+        const QJsonObject& beanSnapshot) {
+        if (profile == nullptr) return {};
+        return speedtestJsonFingerprint({
+            {QStringLiteral("id"), profile->id},
+            {QStringLiteral("gid"), profile->gid},
+            {QStringLiteral("type"), profile->type},
+            {QStringLiteral("bean"), beanSnapshot},
+        });
+    }
+
+    struct ImmutableSpeedtestJob final {
+        ImmutableSpeedtestJob(
+            int profileId_,
+            std::shared_ptr<NekoGui::ProxyEntity> profileIdentity_,
+            QByteArray profileFingerprint_,
+            QByteArray beanFingerprint_,
+            QByteArray generatedConfigFingerprint_,
+            libcore::TestReq request_)
+            : profileId(profileId_),
+              profileIdentity(std::move(profileIdentity_)),
+              profileFingerprint(std::move(profileFingerprint_)),
+              beanFingerprint(std::move(beanFingerprint_)),
+              generatedConfigFingerprint(std::move(generatedConfigFingerprint_)),
+              request(std::move(request_)) {}
+
+        const int profileId;
+        const std::shared_ptr<NekoGui::ProxyEntity> profileIdentity;
+        const QByteArray profileFingerprint;
+        const QByteArray beanFingerprint;
+        const QByteArray generatedConfigFingerprint;
+        const libcore::TestReq request;
+    };
+
+    void persistSpeedtestResult(
+        MainWindow* window,
+        const std::shared_ptr<NekoGui::ProxyEntity>& profile,
+        bool updateLatency,
+        int latency,
+        const QString& report) {
+        if (window == nullptr || profile == nullptr) return;
+
+        const auto previousLatency = profile->latency;
+        const auto previousReport = profile->full_test_report;
+        if (updateLatency) profile->latency = latency;
+        profile->full_test_report = report;
+        profile->Save();
+
+        if (!profile->last_save_succeeded) {
+            if (!profile->last_save_indeterminate) {
+                profile->latency = previousLatency;
+                profile->full_test_report = previousReport;
+                MW_show_log(QObject::tr(
+                                "Speedtest result for profile %1 was not saved; the in-memory result was rolled back.")
+                                .arg(profile->id));
+            } else {
+                MW_show_log(QObject::tr(
+                                "Speedtest result save for profile %1 is indeterminate; recovery is required and the intended in-memory result was retained.")
+                                .arg(profile->id));
+            }
+        }
+        window->refresh_proxy_list(profile->id);
+    }
+
+    std::shared_ptr<NekoGui::ProxyEntity> currentProfileForSpeedtestJob(
+        const std::shared_ptr<const ImmutableSpeedtestJob>& job,
+        QString* mismatchReason) {
+        if (mismatchReason != nullptr) mismatchReason->clear();
+        const auto mismatch = [&](const QString& reason) {
+            if (mismatchReason != nullptr) *mismatchReason = reason;
+            return std::shared_ptr<NekoGui::ProxyEntity>{};
+        };
+
+        if (job == nullptr) return mismatch(QStringLiteral("missing job"));
+        const auto current = NekoGui::profileManager->GetProfile(job->profileId);
+        if (current == nullptr || current != job->profileIdentity || current->save_control_no_save) {
+            return mismatch(QStringLiteral("profile was removed or replaced"));
+        }
+        if (current->bean == nullptr) return mismatch(QStringLiteral("profile bean is unavailable"));
+
+        const auto beanSnapshot = current->bean->ToJson();
+        if (speedtestJsonFingerprint(beanSnapshot) != job->beanFingerprint) {
+            return mismatch(QStringLiteral("profile bean changed"));
+        }
+        if (speedtestProfileFingerprint(current, beanSnapshot) != job->profileFingerprint) {
+            return mismatch(QStringLiteral("profile configuration changed"));
+        }
+
+        const auto currentConfig = NekoGui::BuildConfig(current, true, false);
+        if (currentConfig == nullptr || !currentConfig->error.isEmpty()) {
+            return mismatch(QStringLiteral("effective test configuration is no longer valid"));
+        }
+        if (speedtestJsonFingerprint(currentConfig->coreConfig) != job->generatedConfigFingerprint) {
+            return mismatch(QStringLiteral("effective test configuration changed"));
+        }
+        return current;
+    }
+
+    void applySpeedtestResponse(
+        MainWindow* window,
+        const std::shared_ptr<const ImmutableSpeedtestJob>& job,
+        bool rpcOK,
+        const libcore::TestResp& response) {
+        QString mismatchReason;
+        const auto profile = currentProfileForSpeedtestJob(job, &mismatchReason);
+        if (profile == nullptr) {
+            MW_show_log(QObject::tr("Discarded stale speedtest result for profile %1: %2.")
+                            .arg(job == nullptr ? -1 : job->profileId)
+                            .arg(mismatchReason));
+            return;
+        }
+
+        if (!rpcOK) {
+            persistSpeedtestResult(
+                window,
+                profile,
+                true,
+                -1,
+                QObject::tr("gRPC test failed."));
+            return;
+        }
+
+        const auto responseError = QString::fromStdString(response.error());
+        auto latency = responseError.isEmpty() ? response.ms() : -1;
+        if (latency == 0) latency = 1; // nekoray uses zero to represent "not tested"
+        persistSpeedtestResult(
+            window,
+            profile,
+            true,
+            latency,
+            QString::fromStdString(response.full_report()));
+
+        if (!responseError.isEmpty()) {
+            MW_show_log(QObject::tr("[%1] test error: %2")
+                            .arg(profile->bean->DisplayTypeAndName(), responseError));
+        }
+    }
+#endif
 } // namespace
+
+bool MainWindow::hasActiveIsolatedTest() {
+    {
+        QMutexLocker locker(&speedtestingMutex);
+        if (speedtesting) return true;
+    }
+    QMutexLocker locker(&runningLabelUrlTestMutex);
+    return runningLabelUrlTesting;
+}
 
 void MainWindow::speedtest_current_group(int mode, bool test_group) {
     // menu_stop_testing
@@ -147,11 +339,31 @@ void MainWindow::speedtest_current_group(int mode, bool test_group) {
         return;
     }
 
+    if (NekoGui::dataStore->core_transition_depth.load() > 0) {
+        MessageBoxWarning(software_name, tr("Wait for the current core transition to finish before starting an isolated test."));
+        return;
+    }
+
     auto profiles = get_selected_or_group();
     if (test_group) profiles = NekoGui::profileManager->CurrentGroup()->ProfilesWithOrder();
     if (profiles.isEmpty()) return;
     auto group = NekoGui::profileManager->CurrentGroup();
     if (group->archive) return;
+    if (NekoGui::dataStore->spmode_vpn || isInternalTunActive()) {
+        MessageBoxWarning(
+            software_name,
+            tr("Isolated profile tests are disabled while this project's Tun is requested or its worker is active because the temporary test socket could be captured and measured through the wrong line."));
+        return;
+    }
+
+#ifndef NKR_NO_GRPC
+    if (mode == libcore::TcpPing) {
+        MessageBoxWarning(
+            software_name,
+            tr("TCP Ping is disabled because it uses a direct system socket and does not test the selected proxy line. Use URL Test instead."));
+        return;
+    }
+#endif
 
 #ifndef NKR_NO_GRPC
     QStringList full_test_flags;
@@ -190,113 +402,141 @@ void MainWindow::speedtest_current_group(int mode, bool test_group) {
         if (full_test_flags.isEmpty()) return;
     }
     std::shared_ptr<std::atomic_bool> cancelToken;
+    // Full Test options run a nested dialog. Re-check after it closes so a
+    // core/TUN transition cannot slip between the first guard and test creation.
+    if (NekoGui::dataStore->core_transition_depth.load() > 0) {
+        MessageBoxWarning(software_name, tr("Wait for the current core transition to finish before starting an isolated test."));
+        return;
+    }
+    if (NekoGui::dataStore->spmode_vpn || isInternalTunActive()) {
+        MessageBoxWarning(
+            software_name,
+            tr("Isolated profile tests are disabled while this project's Tun is requested or its worker is active."));
+        return;
+    }
     if (!beginSpeedtesting(&cancelToken)) {
         MessageBoxWarning(software_name, QObject::tr("The last speed test did not exit completely, please wait. If it persists, use Stop Testing."));
         return;
     }
 
-    const int profileCount = static_cast<int>(profiles.size());
     const int configuredConcurrency = std::max(1, NekoGui::dataStore->test_concurrent);
+    const auto latencyUrl = NekoGui::dataStore->test_latency_url.toStdString();
+    const auto downloadUrl = NekoGui::dataStore->test_download_url.toStdString();
+    const int downloadTimeout = NekoGui::dataStore->test_download_timeout;
+    const bool fullLatency = full_test_flags.contains(QStringLiteral("1"));
+    const bool fullUdpLatency = full_test_flags.contains(QStringLiteral("2"));
+    const bool fullSpeed = full_test_flags.contains(QStringLiteral("3"));
+    const bool fullInOut = full_test_flags.contains(QStringLiteral("4"));
+
+    QList<std::shared_ptr<const ImmutableSpeedtestJob>> jobs;
+    QSet<int> queuedProfileIds;
+    for (const auto& profile: profiles) {
+        if (profile == nullptr || profile->id < 0 || queuedProfileIds.contains(profile->id)) continue;
+
+        const auto current = NekoGui::profileManager->GetProfile(profile->id);
+        if (current == nullptr || current != profile || current->save_control_no_save) {
+            MW_show_log(tr("Skipped stale speedtest selection for profile %1.").arg(profile->id));
+            continue;
+        }
+        queuedProfileIds.insert(profile->id);
+        if (current->bean == nullptr) {
+            MW_show_log(tr("Skipped speedtest for profile %1 because its bean is unavailable.").arg(current->id));
+            continue;
+        }
+
+        const auto testConfig = BuildConfig(current, true, false);
+        if (testConfig == nullptr || !testConfig->error.isEmpty()) {
+            persistSpeedtestResult(
+                this,
+                current,
+                false,
+                0,
+                testConfig == nullptr ? tr("Unknown test config error.") : testConfig->error);
+            continue;
+        }
+
+        libcore::TestReq request;
+        request.set_mode(static_cast<libcore::TestMode>(mode));
+        request.set_timeout(10 * 1000);
+        request.set_url(latencyUrl);
+        auto requestConfig = new libcore::LoadConfigReq;
+        requestConfig->set_core_config(QJsonObject2QString(testConfig->coreConfig, false).toStdString());
+        request.set_allocated_config(requestConfig);
+        request.set_in_address(current->bean->serverAddress.toStdString());
+        request.set_full_latency(fullLatency);
+        request.set_full_udp_latency(fullUdpLatency);
+        request.set_full_speed(fullSpeed);
+        request.set_full_in_out(fullInOut);
+        request.set_full_speed_url(downloadUrl);
+        request.set_full_speed_timeout(downloadTimeout);
+
+        const auto beanSnapshot = current->bean->ToJson();
+        jobs.append(std::make_shared<const ImmutableSpeedtestJob>(
+            current->id,
+            current,
+            speedtestProfileFingerprint(current, beanSnapshot),
+            speedtestJsonFingerprint(beanSnapshot),
+            speedtestJsonFingerprint(testConfig->coreConfig),
+            std::move(request)));
+    }
+
+    if (jobs.isEmpty()) {
+        if (finishSpeedtesting(cancelToken)) {
+            MW_show_log(tr("Speedtest finished with no runnable profiles."));
+        }
+        return;
+    }
+
+    const int profileCount = static_cast<int>(jobs.size());
     const int batches = std::max(1, (profileCount + configuredConcurrency - 1) / configuredConcurrency);
     const int perBatchTimeoutSeconds = mode == libcore::FullTest
-                                           ? std::max(20, NekoGui::dataStore->test_download_timeout + 15)
+                                           ? std::max(20, downloadTimeout + 15)
                                            : 20;
     const int watchdogMs = std::clamp(batches * perBatchTimeoutSeconds * 1000, 30000, 10 * 60 * 1000);
+    const int threadN = std::min(configuredConcurrency, profileCount);
     setTimeout([cancelToken] {
         if (cancelSpeedtesting(cancelToken)) {
-            MW_show_log(QObject::tr("Speedtest timed out and its busy state was reset."));
+            MW_show_log(QObject::tr("Speedtest timed out; cancellation was requested. Tun remains blocked until every test worker exits."));
         }
-    }, this, watchdogMs);
+    },
+               this, watchdogMs);
 
-    runOnNewThread([this, profiles, mode, full_test_flags, cancelToken]() {
-        QMutex lock_write;
+    runOnNewThread([this, jobs, threadN, cancelToken]() {
+        QMutex queueMutex;
         QSemaphore doneSem;
-        auto profiles_test = profiles; // copy
-        const int workerProfileCount = static_cast<int>(profiles_test.size());
-        int threadN = std::min(std::max(1, NekoGui::dataStore->test_concurrent), std::max(1, workerProfileCount));
+        auto pendingJobs = jobs;
 
         // Threads
         for (int i = 0; i < threadN; i++) {
             runOnNewThread([&, cancelToken] {
-                auto *thread = QObject::thread();
+                auto* thread = QThread::currentThread();
                 registerSpeedtestingThread(thread);
 
                 forever {
                     if (cancelToken->load()) break;
-                    //
-                    std::shared_ptr<NekoGui::ProxyEntity> profile;
-                    lock_write.lock();
-                    if (!profiles_test.isEmpty() && !cancelToken->load()) {
-                        profile = profiles_test.takeFirst();
-                    }
-                    lock_write.unlock();
-                    if (profile == nullptr) break;
 
-                    //
-                    libcore::TestReq req;
-                    req.set_mode((libcore::TestMode) mode);
-                    req.set_timeout(10 * 1000);
-                    req.set_url(NekoGui::dataStore->test_latency_url.toStdString());
-
-                    if (mode == libcore::TestMode::UrlTest || mode == libcore::FullTest) {
-                        auto c = BuildConfig(profile, true, false);
-                        if (!c->error.isEmpty()) {
-                            profile->full_test_report = c->error;
-                            profile->Save();
-                            auto profileId = profile->id;
-                            runOnUiThread([this, profileId] {
-                                refresh_proxy_list(profileId);
-                            });
-                            continue;
+                    std::shared_ptr<const ImmutableSpeedtestJob> job;
+                    {
+                        QMutexLocker locker(&queueMutex);
+                        if (!pendingJobs.isEmpty() && !cancelToken->load()) {
+                            job = pendingJobs.takeFirst();
                         }
-                        //
-                        auto config = new libcore::LoadConfigReq;
-                        config->set_core_config(QJsonObject2QString(c->coreConfig, false).toStdString());
-                        req.set_allocated_config(config);
-                        req.set_in_address(profile->bean->serverAddress.toStdString());
-
-                        req.set_full_latency(full_test_flags.contains("1"));
-                        req.set_full_udp_latency(full_test_flags.contains("2"));
-                        req.set_full_speed(full_test_flags.contains("3"));
-                        req.set_full_in_out(full_test_flags.contains("4"));
-
-                        req.set_full_speed_url(NekoGui::dataStore->test_download_url.toStdString());
-                        req.set_full_speed_timeout(NekoGui::dataStore->test_download_timeout);
-                    } else if (mode == libcore::TcpPing) {
-                        req.set_address(profile->bean->DisplayAddress().toStdString());
                     }
+                    if (job == nullptr) break;
 
-                    bool rpcOK;
-                    auto result = defaultClient->Test(&rpcOK, req);
-                    //
-                    if (!rpcOK) {
-                        profile->latency = -1;
-                        profile->full_test_report = QObject::tr("gRPC test failed.");
-                        profile->Save();
-                        auto profileId = profile->id;
-                        runOnUiThread([this, profileId] {
-                            refresh_proxy_list(profileId);
-                        });
-                        continue;
-                    }
+                    bool rpcOK = false;
+                    auto response = defaultClient->Test(&rpcOK, job->request);
+                    if (cancelToken->load()) continue;
 
-                    if (result.error().empty()) {
-                        profile->latency = result.ms();
-                        if (profile->latency == 0) profile->latency = 1; // nekoray use 0 to represents not tested
-                    } else {
-                        profile->latency = -1;
-                    }
-                    profile->full_test_report = result.full_report().c_str(); // higher priority
-                    profile->Save();
-
-                    if (!result.error().empty()) {
-                        MW_show_log(tr("[%1] test error: %2").arg(profile->bean->DisplayTypeAndName(), result.error().c_str()));
-                    }
-
-                    auto profileId = profile->id;
-                    runOnUiThread([this, profileId] {
-                        refresh_proxy_list(profileId);
-                    });
+                    std::shared_ptr<const libcore::TestResp> responseSnapshot =
+                        std::make_shared<libcore::TestResp>(std::move(response));
+                    QMetaObject::invokeMethod(
+                        this,
+                        [this, job, rpcOK, responseSnapshot, cancelToken] {
+                            if (cancelToken->load()) return;
+                            applySpeedtestResponse(this, job, rpcOK, *responseSnapshot);
+                        },
+                        Qt::BlockingQueuedConnection);
                 }
                 unregisterSpeedtestingThread(thread);
                 doneSem.release();
@@ -317,6 +557,28 @@ void MainWindow::speedtest_current_group(int mode, bool test_group) {
 
 void MainWindow::speedtest_current() {
 #ifndef NKR_NO_GRPC
+    if (NekoGui::dataStore->core_transition_depth.load() > 0) {
+        MessageBoxWarning(software_name, tr("Wait for the current core transition to finish before starting an isolated test."));
+        return;
+    }
+    if (NekoGui::dataStore->spmode_vpn || isInternalTunActive()) {
+        MessageBoxWarning(
+            software_name,
+            tr("URL Test is disabled while this project's Tun is requested or its worker is active because an isolated test could be captured and measured through the wrong line."));
+        return;
+    }
+    if (running == nullptr) {
+        MessageBoxWarning(software_name, tr("No running profile to test."));
+        return;
+    }
+    const auto testConfig = BuildConfig(running, true, false);
+    if (testConfig == nullptr || !testConfig->error.isEmpty()) {
+        MessageBoxWarning(
+            "BuildConfig return error",
+            testConfig == nullptr ? tr("Unknown test config error.") : testConfig->error);
+        return;
+    }
+    const auto testUrl = NekoGui::dataStore->test_latency_url.toStdString();
     const auto generation = beginRunningLabelUrlTest();
     if (generation == 0) {
         MW_show_log(tr("UrlTest is already running."));
@@ -325,17 +587,21 @@ void MainWindow::speedtest_current() {
     last_test_time = QTime::currentTime();
     ui->label_running->setText(tr("Testing"));
     setTimeout([this, generation] {
-        if (!finishRunningLabelUrlTest(generation)) return;
+        if (!isRunningLabelUrlTest(generation)) return;
         last_test_time = QTime::currentTime();
         ui->label_running->setText(tr("Test Result") + ": " + tr("Unavailable"));
-        MW_show_log(tr("UrlTest timed out."));
-    }, this, 15000);
+        MW_show_log(tr("UrlTest timed out; Tun remains blocked until the test RPC exits."));
+    },
+               this, 15000);
 
     runOnNewThread([=] {
         libcore::TestReq req;
         req.set_mode(libcore::UrlTest);
         req.set_timeout(10 * 1000);
-        req.set_url(NekoGui::dataStore->test_latency_url.toStdString());
+        req.set_url(testUrl);
+        auto config = new libcore::LoadConfigReq;
+        config->set_core_config(QJsonObject2QString(testConfig->coreConfig, false).toStdString());
+        req.set_allocated_config(config);
 
         bool rpcOK;
         auto result = defaultClient->Test(&rpcOK, req);
@@ -363,34 +629,392 @@ void MainWindow::speedtest_current() {
 #endif
 }
 
-void MainWindow::stop_core_daemon() {
+bool MainWindow::stop_core_daemon(QString* detail) {
 #ifndef NKR_NO_GRPC
-    NekoGui_rpc::defaultClient->Exit();
+    const auto window = GetMainWindow();
+    if (window == nullptr || window->core_process == nullptr ||
+        NekoGui_rpc::defaultClient == nullptr) {
+        if (detail != nullptr) {
+            *detail = QStringLiteral("core daemon Exit prerequisites are unavailable");
+        }
+        return false;
+    }
+    const auto instance = window->core_process->CurrentDaemonInstance();
+    const auto process = window->core_process->CurrentDaemonProcess();
+    if (!instance.valid() || !instance.ready || !process.valid() ||
+        instance.generation != process.generation ||
+        instance.instanceId != process.instanceId) {
+        if (detail != nullptr) {
+            *detail = QStringLiteral(
+                "core daemon Exit requires one ready generation/UUID/PID identity");
+        }
+        return false;
+    }
+
+    const auto acknowledgement = NekoGui_rpc::defaultClient->Exit(
+        QString::fromStdString(process.instanceId));
+    QString lastReconciliationDetail;
+    const auto exitWasPreciselyFenced = [&]() {
+        const auto reconciliation = NekoGui_rpc::defaultClient->ReconcileExit(
+            QString::fromStdString(process.instanceId),
+            acknowledgement.commandSequence);
+        lastReconciliationDetail = reconciliation.detail;
+        if (reconciliation.disposition !=
+            NekoGui_rpc::LifecycleReconcileDisposition::Stopped) {
+            return false;
+        }
+
+        // Only this exact higher-sequence STOPPED/FENCED_NOT_ADMITTED proof
+        // permits the caller to cancel prepare_exit and restore application
+        // controls. It also prevents the delayed lower-sequence Exit request
+        // from committing after this return.
+        if (detail != nullptr) {
+            *detail = QStringLiteral(
+                          "%1; reconciliation proved a clean non-admission: %2")
+                          .arg(acknowledgement.detail, reconciliation.detail);
+        }
+        return true;
+    };
+    if (!acknowledgement.acknowledged) {
+        if (exitWasPreciselyFenced()) return false;
+
+        // A transport timeout can happen after Go has atomically committed
+        // EXITING and before the ACK reaches this client. Reconciliation may
+        // then fail because GracefulStop is already draining the server. Do
+        // not return to the caller: that path restores controls and calls
+        // EnsureStarted. Keep the prepare-exit fence armed and wait only for
+        // this frozen generation/UUID/PID to emit QProcess::finished.
+        MW_show_log(QObject::tr(
+                        "The core Exit response was not usable and a higher-sequence barrier could not prove non-admission (%1; %2). The application will keep waiting for the same core process without restoring or replacing it.")
+                        .arg(acknowledgement.detail, lastReconciliationDetail));
+    }
+
+    NekoGui_Runtime::DaemonProcessFinishedResult finished;
+    bool waitingNoticeShown = false;
+    while (!window->core_process->WaitForDaemonFinished(
+        process,
+        std::chrono::seconds(10),
+        &finished)) {
+        // An Exit ACK commits the daemon to EXITING; an unusable ACK without
+        // the exact non-admission proof may represent that same committed
+        // state. Keep the GUI's prepare-exit/save/UI fences armed and continue
+        // waiting for this exact QProcess generation/UUID/PID. Restoring
+        // controls or calling EnsureStarted here could expose a draining
+        // daemon as if it were available and could publish no replacement
+        // identity anyway.
+        //
+        // A first reconciliation can also fail transiently before an
+        // unaccepted Exit reaches the daemon. Retry the barrier after every
+        // bounded process wait. Each retry uses a newer sequence while still
+        // naming the original Exit sequence; only the same narrow proof above
+        // can release the fence.
+        if (!acknowledgement.acknowledged && exitWasPreciselyFenced()) {
+            return false;
+        }
+        // The process may have finished while the retry RPC was in flight.
+        // Consume that exact recorded result before publishing a stale
+        // still-waiting warning.
+        if (window->core_process->WaitForDaemonFinished(
+                process,
+                std::chrono::milliseconds::zero(),
+                &finished)) {
+            break;
+        }
+        if (!waitingNoticeShown) {
+            waitingNoticeShown = true;
+            runOnUiThread([process, exitAcknowledged = acknowledgement.acknowledged] {
+                const auto message = exitAcknowledged
+                                         ? QObject::tr(
+                                               "The exact core process (PID %1) accepted Exit but has not finished yet. The application will keep waiting for that same process; it will not kill or replace it, and it will not change system proxy or Tun mode.")
+                                               .arg(process.processId)
+                                         : QObject::tr(
+                                               "Exit admission for the exact core process (PID %1) remains indeterminate. The application will keep waiting for that same process; it will not restore, kill, or replace it, and it will not change system proxy or Tun mode.")
+                                               .arg(process.processId);
+                MW_show_log(message);
+                MessageBoxWarning(software_name, message);
+            });
+        }
+    }
+    if (!finished.valid || !finished.normalExit || finished.exitCode != 0) {
+        if (detail != nullptr) {
+            *detail = acknowledgement.acknowledged
+                          ? QStringLiteral(
+                                "the acknowledged daemon finished abnormally (exit code %1)")
+                                .arg(finished.exitCode)
+                          : QStringLiteral(
+                                "Exit admission remained indeterminate and the exact daemon finished abnormally (exit code %1)")
+                                .arg(finished.exitCode);
+        }
+        return false;
+    }
+    if (detail != nullptr) {
+        *detail = acknowledgement.acknowledged
+                      ? QStringLiteral(
+                            "the exact generation/UUID/PID returned Exit ACK and NormalExit/0")
+                      : QStringLiteral(
+                            "the Exit response remained indeterminate, then the exact generation/UUID/PID returned NormalExit/0");
+    }
+    // The caller has already confirmed an exact profile Stop before entering
+    // this function. If the ACK stayed indeterminate, NormalExit/0 from the
+    // frozen generation/UUID/PID still proves that no daemon remains to drain
+    // or replace. Completing the requested GUI exit now publishes no new
+    // lifecycle identity and does not change system proxy or Tun state.
+    return true;
+#else
+    if (detail != nullptr) {
+        *detail = QStringLiteral("this build has no authenticated core RPC support");
+    }
+    return false;
 #endif
 }
 
-void MainWindow::neko_start(int _id, CoreStartReason reason) {
+void MainWindow::finish_runtime_transition(const NekoGui_Runtime::TransitionTicket& transition) {
+    NekoGui_Runtime::TransitionCompletion completion;
+    std::set<std::uint64_t> crashGenerations;
+    {
+        // Keep the pending-generation set and the coordinator's pending bit in
+        // one lock order. This closes the old Complete -> queued callback gap.
+        std::lock_guard<std::mutex> pendingLock(pending_core_crash_mutex);
+        completion = runtime_transition.CompleteOrHandoff(
+            transition,
+            &NekoGui::dataStore->core_transition_depth);
+        if (!completion.completed) return;
+        if (completion.handoff.valid) {
+            crashGenerations.swap(pending_core_crash_generations);
+        }
+    }
+
+    if (completion.handoff.valid) {
+        dispatch_core_crash_cleanup(completion.handoff, std::move(crashGenerations));
+    } else {
+        dispatch_pending_daemon_profile_start();
+    }
+}
+
+void MainWindow::queue_core_crash_cleanup(std::uint64_t daemonGeneration) {
+    if (daemonGeneration == 0) return;
+
+    NekoGui_Runtime::TransitionTicket transition;
+    std::set<std::uint64_t> crashGenerations;
+    {
+        std::lock_guard<std::mutex> pendingLock(pending_core_crash_mutex);
+        pending_core_crash_generations.insert(daemonGeneration);
+        runtime_transition.RequestCrashCleanup(&NekoGui::dataStore->core_transition_depth);
+        transition = runtime_transition.TryBegin(
+            NekoGui_Runtime::TransitionKind::CrashCleanup,
+            &NekoGui::dataStore->core_transition_depth);
+        if (transition.valid) crashGenerations.swap(pending_core_crash_generations);
+    }
+
+    if (!transition.valid) {
+        show_log_impl(tr("Core crash cleanup is queued until the current transition drains."));
+        return;
+    }
+    dispatch_core_crash_cleanup(transition, std::move(crashGenerations));
+}
+
+void MainWindow::dispatch_core_crash_cleanup(
+    const NekoGui_Runtime::TransitionTicket& transition,
+    std::set<std::uint64_t> daemonGenerations) {
+    QMetaObject::invokeMethod(
+        this,
+        [this, transition, daemonGenerations = std::move(daemonGenerations)] {
+            if (!runtime_transition.IsCurrent(transition)) return;
+            const auto crashedRuntimeGeneration = running_daemon_generation;
+            if (crashedRuntimeGeneration == 0 ||
+                daemonGenerations.find(crashedRuntimeGeneration) == daemonGenerations.end()) {
+                MW_show_log(tr("Ignored stale core-crash cleanup because it does not own the observed runtime generation."));
+                finish_runtime_transition(transition);
+                return;
+            }
+            neko_stop(
+                true,
+                false,
+                CoreStopReason::CoreCrashCleanup,
+                false,
+                {},
+                transition,
+                crashedRuntimeGeneration);
+        },
+        Qt::QueuedConnection);
+}
+
+void MainWindow::queue_daemon_profile_start(
+    const NekoGui_Runtime::DaemonProfileStartRequest& request) {
+    if (!request.valid) return;
+    {
+        std::lock_guard<std::mutex> pendingLock(pending_profile_start_mutex);
+        pending_profile_start = request;
+    }
+    dispatch_pending_daemon_profile_start();
+}
+
+void MainWindow::dispatch_pending_daemon_profile_start() {
+    NekoGui_Runtime::DaemonProfileStartRequest request;
+    {
+        std::lock_guard<std::mutex> pendingLock(pending_profile_start_mutex);
+        if (!pending_profile_start.has_value() || pending_profile_start_dispatch_queued) return;
+        request = *pending_profile_start;
+        pending_profile_start_dispatch_queued = true;
+    }
+
+    QMetaObject::invokeMethod(
+        this,
+        [this, request] {
+            bool requestStillCurrent = false;
+            {
+                std::lock_guard<std::mutex> pendingLock(pending_profile_start_mutex);
+                pending_profile_start_dispatch_queued = false;
+                requestStillCurrent = pending_profile_start.has_value() &&
+                                      pending_profile_start->daemonGeneration == request.daemonGeneration &&
+                                      pending_profile_start->requestGeneration == request.requestGeneration &&
+                                      pending_profile_start->profileId == request.profileId;
+            }
+            if (!requestStillCurrent) {
+                // A newer event may have replaced this one while its callback
+                // was queued. Ensure the replacement receives its own turn.
+                dispatch_pending_daemon_profile_start();
+                return;
+            }
+            neko_start(
+                request.profileId,
+                CoreStartReason::CoreCrashRecovery,
+                request.daemonGeneration,
+                request.requestGeneration);
+        },
+        Qt::QueuedConnection);
+}
+
+void MainWindow::clear_pending_daemon_profile_start(
+    const NekoGui_Runtime::DaemonProfileStartRequest& request) {
+    std::lock_guard<std::mutex> pendingLock(pending_profile_start_mutex);
+    if (!pending_profile_start.has_value() ||
+        pending_profile_start->daemonGeneration != request.daemonGeneration ||
+        pending_profile_start->requestGeneration != request.requestGeneration ||
+        pending_profile_start->profileId != request.profileId) {
+        return;
+    }
+    pending_profile_start.reset();
+}
+
+void MainWindow::neko_start(
+    int _id,
+    CoreStartReason reason,
+    std::uint64_t expectedDaemonGeneration,
+    std::uint64_t expectedRequestGeneration) {
     if (NekoGui::dataStore->prepare_exit) return;
+    if (core_process == nullptr) {
+        MW_show_log(tr("The core controller is still initializing; no profile was started."));
+        return;
+    }
 
     auto ents = get_now_selected_list();
     auto ent = (_id < 0 && !ents.isEmpty()) ? ents.first() : NekoGui::profileManager->GetProfile(_id);
-    if (ent == nullptr) return;
+    const NekoGui_Runtime::DaemonProfileStartRequest readyRequest{
+        expectedDaemonGeneration,
+        expectedRequestGeneration,
+        _id,
+        expectedDaemonGeneration != 0 && expectedRequestGeneration != 0 && _id >= 0,
+    };
+    if (ent == nullptr) {
+        if (readyRequest.valid) {
+            (void) core_process->ConsumeQueuedProfileStart(
+                readyRequest.daemonGeneration,
+                readyRequest.requestGeneration,
+                readyRequest.profileId);
+            clear_pending_daemon_profile_start(readyRequest);
+        }
+        return;
+    }
 
-    if (select_mode) {
+    if (select_mode && !readyRequest.valid) {
         emit profile_selected(ent->id);
         select_mode = false;
         refresh_status();
         return;
     }
 
+    const auto transition = runtime_transition.TryBegin(
+        NekoGui_Runtime::TransitionKind::Start,
+        &NekoGui::dataStore->core_transition_depth);
+    if (!transition.valid) {
+        if (readyRequest.valid) {
+            MW_show_log(tr("Queued profile start is waiting for the current core transition to finish."));
+        } else {
+            MessageBoxWarning(software_name, tr("Wait for the current core transition to finish."));
+        }
+        return;
+    }
+    const auto finishTransition = [this, transition] {
+        finish_runtime_transition(transition);
+    };
+
+    if (readyRequest.valid) {
+        const auto consumed = core_process->ConsumeQueuedProfileStart(
+            readyRequest.daemonGeneration,
+            readyRequest.requestGeneration,
+            readyRequest.profileId);
+        clear_pending_daemon_profile_start(readyRequest);
+        if (!consumed) {
+            MW_show_log(tr("Discarded a stale or explicitly cancelled queued core-start event."));
+            finishTransition();
+            return;
+        }
+    } else {
+        // A direct user/reload Start supersedes every older daemon-ready
+        // request. Clear both CoreProcess's emitted capability and the local
+        // delivery record before this new candidate is built.
+        (void) core_process->CancelQueuedProfileStart();
+        std::lock_guard<std::mutex> pendingLock(pending_profile_start_mutex);
+        pending_profile_start.reset();
+    }
+
+    // Acquire before reading the live model. A mutation that passed its depth
+    // check just before this Start set the gate may still be in progress.
+    NekoGui_ConfigMutation::Guard candidateMutationGuard(false);
+    if (!candidateMutationGuard.acquired()) {
+        MW_show_log("<<<<<<<< " + tr("Profile start/reload could not snapshot the configuration because another model mutation is in progress."));
+        finishTransition();
+        return;
+    }
+
+    if (expectedDaemonGeneration != 0 &&
+        !core_process->IsDaemonReady(expectedDaemonGeneration)) {
+        MW_show_log(tr("Discarded a stale queued profile start for daemon generation %1.")
+                        .arg(expectedDaemonGeneration));
+        finishTransition();
+        return;
+    }
+
+    const auto recoveryBlock = configRecoveryBlockReason();
+    if (!recoveryBlock.isEmpty()) {
+        MessageBoxWarning(
+            software_name,
+            tr("Profile start/reload was blocked until configuration recovery is completed.\n%1")
+                .arg(recoveryBlock));
+        finishTransition();
+        return;
+    }
+
     auto group = NekoGui::profileManager->GetGroup(ent->gid);
-    if (group == nullptr || group->archive) return;
+    if (group == nullptr || group->archive) {
+        finishTransition();
+        return;
+    }
+    if (group->front_proxy_id >= 0) {
+        auto frontProxy = NekoGui::profileManager->GetProfile(group->front_proxy_id);
+        show_log_impl(tr("Group front proxy active: %1")
+                          .arg(frontProxy == nullptr || frontProxy->bean == nullptr
+                                   ? QStringLiteral("#%1").arg(group->front_proxy_id)
+                                   : frontProxy->bean->DisplayTypeAndName()));
+    }
 
     if (internalTunWouldBeInterrupted() &&
         reason != CoreStartReason::EnableInternalTun &&
         reason != CoreStartReason::DisableInternalTun &&
         reason != CoreStartReason::CoreCrashRecovery) {
-        MessageBoxWarning(software_name, internalTunReloadBlockedMessage());
+        MessageBoxWarning(software_name, internalTunContinuityBlockedMessage());
+        finishTransition();
         return;
     }
     if (tunModeChangePendingWhileRunning() &&
@@ -398,86 +1022,299 @@ void MainWindow::neko_start(int _id, CoreStartReason reason) {
         reason != CoreStartReason::DisableInternalTun &&
         reason != CoreStartReason::CoreCrashRecovery) {
         MessageBoxWarning(software_name, tunModeChangeBlockedMessage());
+        finishTransition();
         return;
     }
 
     auto result = BuildConfig(ent, false, false);
     if (!result->error.isEmpty()) {
         MessageBoxWarning("BuildConfig return error", result->error);
+        finishTransition();
         return;
     }
-    if (NekoGui::dataStore->aux_profile_ports.remove(ent->id) > 0) {
-        NekoGui::dataStore->Save();
+
+    const auto candidateProfileId = ent->id;
+    const auto candidateCoreConfigBytes = QJsonObject2QString(result->coreConfig, false).toUtf8();
+    const auto candidateCoreConfig = candidateCoreConfigBytes.toStdString();
+    const auto candidateConfigSha256 =
+        QCryptographicHash::hash(candidateCoreConfigBytes, QCryptographicHash::Sha256).toHex();
+    const auto candidateInternalTun = result->managedInternalTun;
+    const auto candidateConnectionStatistics = NekoGui::dataStore->connection_statistics;
+    const auto candidateTrafficLoopInterval = NekoGui::dataStore->traffic_loop_interval;
+    const auto candidateDaemonInstance = core_process->CurrentDaemonInstance();
+    const auto candidateDaemonGeneration = candidateDaemonInstance.generation;
+    const auto candidateDaemonInstanceId =
+        QString::fromStdString(candidateDaemonInstance.instanceId);
+
+    if (expectedDaemonGeneration != 0 &&
+        candidateDaemonGeneration != expectedDaemonGeneration) {
+        MW_show_log(tr("Discarded a queued profile start after the core daemon generation changed."));
+        finishTransition();
+        return;
+    }
+
+    if (!candidateDaemonInstance.valid() || candidateDaemonInstanceId.isEmpty() ||
+        !candidateDaemonInstance.ready ||
+        !core_process->IsDaemonReady(candidateDaemonGeneration)) {
+        if (expectedDaemonGeneration != 0) {
+            MW_show_log(tr("Discarded a queued profile start because its core daemon is no longer ready."));
+            finishTransition();
+            return;
+        }
+        const auto immediatelyReadyRequest =
+            core_process->QueueProfileStartWhenCoreIsUp(candidateProfileId);
+        if (immediatelyReadyRequest.valid) {
+            queue_daemon_profile_start(immediatelyReadyRequest);
+        } else {
+            runOnUiThread(
+                [=] {
+                    MW_show_log("Try to start the config, but the core has not listened to the grpc port, so restart it...");
+                    core_process->EnsureStarted();
+                },
+                DS_cores);
+        }
+        finishTransition();
+        return; // an identity-authenticated daemon-ready event resumes this request
     }
 
     auto neko_start_stage2 = [=] {
+        struct StartRpcResult {
+            bool requestSent = false;
+            bool confirmed = false;
+            bool confirmedStopped = false;
+            QString indeterminateReason;
+        };
+
+        if (!runtime_transition.IsCurrent(transition)) {
+            MW_show_log("<<<<<<<< " + tr("Ignoring a stale profile-start generation."));
+            return false;
+        }
+        // Keep the immutable candidate fenced against model/disk mutation
+        // through the Start RPC. Runtime bookkeeping is committed on the UI
+        // thread after these guards are released; otherwise UpdateStartedId's
+        // own durable Save would deadlock on a mutex owned by this worker.
+        const auto startRpc = [&]() -> StartRpcResult {
+            NekoGui_ConfigMutation::Guard stageMutationGuard(true);
+            if (!stageMutationGuard.acquired()) {
+                MW_show_log("<<<<<<<< " + tr("Profile start/reload could not acquire the configuration model lock."));
+                return {};
+            }
+            NekoGui_ConfigTransaction::DiskLockGuard stageDiskLock;
+            if (!stageDiskLock.acquired()) {
+                MW_show_log("<<<<<<<< " + tr("Profile start/reload could not acquire the configuration disk lock: %1")
+                                              .arg(stageDiskLock.error()));
+                return {};
+            }
+            const auto stageRecoveryBlock = configRecoveryBlockReason();
+            if (!stageRecoveryBlock.isEmpty()) {
+                MW_show_log("<<<<<<<< " + tr("Profile start/reload blocked by configuration recovery: %1")
+                                              .arg(stageRecoveryBlock));
+                return {};
+            }
+            if (!runtime_transition.IsCurrent(transition)) return {};
+            if (!core_process->IsDaemonReady(candidateDaemonGeneration)) return {};
 #ifndef NKR_NO_GRPC
-        libcore::LoadConfigReq req;
-        req.set_core_config(QJsonObject2QString(result->coreConfig, false).toStdString());
-        req.set_enable_nekoray_connections(NekoGui::dataStore->connection_statistics);
-        if (NekoGui::dataStore->traffic_loop_interval > 0) {
-            QSet<QString> statsTags;
-            for (const auto &item: result->outboundStats) {
-                const auto tag = QString::fromStdString(item->tag);
-                if (!tag.isEmpty()) statsTags.insert(tag);
+            libcore::LoadConfigReq req;
+            req.set_core_config(candidateCoreConfig);
+            req.set_enable_nekoray_connections(candidateConnectionStatistics);
+            if (candidateTrafficLoopInterval > 0) {
+                QSet<QString> statsTags;
+                for (const auto& item: result->outboundStats) {
+                    const auto tag = QString::fromStdString(item.outboundTag);
+                    if (!tag.isEmpty()) statsTags.insert(tag);
+                }
+                statsTags.insert("proxy");
+                for (const auto& tag: statsTags) {
+                    req.add_stats_outbounds(tag.toStdString());
+                }
+                req.add_stats_outbounds("bypass");
             }
-            statsTags.insert("proxy");
-            for (const auto &tag: statsTags) {
-                req.add_stats_outbounds(tag.toStdString());
+            bool rpcOK;
+            std::uint64_t commandSequence = 0;
+            const auto error = defaultClient->Start(
+                &rpcOK,
+                req,
+                candidateDaemonInstanceId,
+                &commandSequence);
+            if (rpcOK && !error.isEmpty()) {
+                runOnUiThread([=] { MessageBoxWarning("LoadConfig return error", error); });
+                const auto reconciliation = defaultClient->ReconcileStart(
+                    candidateDaemonInstanceId,
+                    commandSequence,
+                    candidateConfigSha256);
+                if (reconciliation.disposition ==
+                    NekoGui_rpc::LifecycleReconcileDisposition::Active) {
+                    MW_show_log(tr("The exact Start command was confirmed active by the daemon reconciliation barrier."));
+                    return {true, true, false, {}};
+                }
+                if (reconciliation.disposition ==
+                    NekoGui_rpc::LifecycleReconcileDisposition::Stopped) {
+                    MW_show_log(tr("The failed Start command was fenced and confirmed stopped."));
+                    return {true, false, true, {}};
+                }
+                return {
+                    true,
+                    false,
+                    false,
+                    tr("The Start RPC returned an application error and reconciliation remained indeterminate: %1 (%2)")
+                        .arg(error, reconciliation.detail),
+                };
+            } else if (!rpcOK) {
+                const auto reconciliation = defaultClient->ReconcileStart(
+                    candidateDaemonInstanceId,
+                    commandSequence,
+                    candidateConfigSha256);
+                if (reconciliation.disposition ==
+                    NekoGui_rpc::LifecycleReconcileDisposition::Active) {
+                    MW_show_log(tr("A lost Start response was reconciled to the exact active command."));
+                    return {true, true, false, {}};
+                }
+                if (reconciliation.disposition ==
+                    NekoGui_rpc::LifecycleReconcileDisposition::Stopped) {
+                    MW_show_log(tr("A lost Start response was fenced and confirmed stopped."));
+                    return {true, false, true, {}};
+                }
+                return {
+                    true,
+                    false,
+                    false,
+                    tr("The Start RPC transport failed and its reconciliation barrier remained indeterminate: %1")
+                        .arg(reconciliation.detail),
+                };
             }
-            req.add_stats_outbounds("bypass");
-        }
-        //
-        bool rpcOK;
-        QString error = defaultClient->Start(&rpcOK, req);
-        if (rpcOK && !error.isEmpty()) {
-            runOnUiThread([=] { MessageBoxWarning("LoadConfig return error", error); });
-            return false;
-        } else if (!rpcOK) {
-            return false;
-        }
-        //
-        NekoGui_traffic::trafficLooper->proxy = result->outboundStat.get();
-        NekoGui_traffic::trafficLooper->items = result->outboundStats;
-        NekoGui::dataStore->ignoreConnTag = result->ignoreConnTag;
-        NekoGui_traffic::trafficLooper->loop_enabled = true;
+            if (!core_process->IsDaemonReady(candidateDaemonGeneration)) {
+                return {
+                    true,
+                    false,
+                    false,
+                    tr("The core daemon changed or stopped before the successful Start response could be committed."),
+                };
+            }
 #endif
+            return {true, true, false, {}};
+        };
+        const auto startRpcResult = startRpc();
+        if (!startRpcResult.requestSent) return false;
+        if (startRpcResult.confirmedStopped) return false;
+        if (!startRpcResult.confirmed) {
+            bool indeterminateStateRecorded = false;
+            QMetaObject::invokeMethod(
+                this,
+                [=, &indeterminateStateRecorded] {
+                    if (!runtime_transition.IsCurrent(transition)) return;
+                    NekoGui::dataStore->ignoreConnTag = result->ignoreConnTag;
+                    NekoGui::dataStore->UpdateStartedId(candidateProfileId);
+                    // A candidate that requested Tun is conservatively treated
+                    // as active until this exact daemon identity reports a
+                    // stable outcome or that QProcess generation exits.
+                    running_internal_tun = running_internal_tun || candidateInternalTun;
+                    running_generation = transition.generation;
+                    // Every RPC is bound to this exact process identity. A new
+                    // daemon rejects the old identity before it can advance
+                    // its lifecycle ordering watermark.
+                    running_daemon_generation = candidateDaemonGeneration;
+                    running_daemon_instance_id = candidateDaemonInstanceId;
+                    running_config_sha256 = candidateConfigSha256;
+                    running = ent;
+                    runtime_state_indeterminate = true;
+                    runtime_state_indeterminate_reason = startRpcResult.indeterminateReason;
+                    refresh_status();
+                    refresh_proxy_list(candidateProfileId);
+                    indeterminateStateRecorded = true;
+                },
+                Qt::BlockingQueuedConnection);
+            if (indeterminateStateRecorded) {
+                MW_show_log(
+                    "<<<<<<<< " +
+                    tr("Runtime state is indeterminate. Automatic Tun cleanup and default-network restoration are "
+                       "forbidden; keep the application running until another permitted Stop succeeds. Use the explicit "
+                       "Tun-off control only if you intentionally authorize restoring the default network: %1")
+                        .arg(startRpcResult.indeterminateReason));
+            }
+            return false;
+        }
 
-        NekoGui::dataStore->UpdateStartedId(ent->id);
-        running_internal_tun = NekoGui::dataStore->vpn_internal_tun && NekoGui::dataStore->spmode_vpn;
-        running = ent;
+        if (!runtime_transition.IsCurrent(transition) ||
+            !core_process->IsDaemonReady(candidateDaemonGeneration)) {
+            // The request was acknowledged but ownership changed before the UI
+            // commit. Preserve a fail-closed observation instead of silently
+            // treating the candidate as stopped.
+            QMetaObject::invokeMethod(
+                this,
+                [=] {
+                    if (!runtime_transition.IsCurrent(transition)) return;
+                    NekoGui::dataStore->UpdateStartedId(candidateProfileId);
+                    running_internal_tun = running_internal_tun || candidateInternalTun;
+                    running_generation = transition.generation;
+                    running_daemon_generation = candidateDaemonGeneration;
+                    running_daemon_instance_id = candidateDaemonInstanceId;
+                    running_config_sha256 = candidateConfigSha256;
+                    running = ent;
+                    runtime_state_indeterminate = true;
+                    runtime_state_indeterminate_reason = tr(
+                        "The daemon generation changed between Start acknowledgement and runtime commit.");
+                    refresh_status();
+                    refresh_proxy_list(candidateProfileId);
+                },
+                Qt::BlockingQueuedConnection);
+            return false;
+        }
 
-        runOnUiThread([=] {
-            refresh_status();
-            refresh_proxy_list(ent->id);
-        });
-
-        return true;
-    };
-
-    if (!mu_starting.tryLock()) {
-        MessageBoxWarning(software_name, "Another profile is starting...");
-        return;
-    }
-    if (!mu_stopping.tryLock()) {
-        MessageBoxWarning(software_name, "Another profile is stopping...");
-        mu_starting.unlock();
-        return;
-    }
-    mu_stopping.unlock();
-
-    // check core state
-    if (!NekoGui::dataStore->core_running) {
-        runOnUiThread(
-            [=] {
-                MW_show_log("Try to start the config, but the core has not listened to the grpc port, so restart it...");
-                core_process->start_profile_when_core_is_up = ent->id;
-                core_process->Restart();
+        bool stateCommitted = false;
+        bool stateIndeterminate = false;
+        QMetaObject::invokeMethod(
+            this,
+            [=, &stateCommitted, &stateIndeterminate] {
+                if (!runtime_transition.IsCurrent(transition)) return;
+                if (!core_process->IsDaemonReady(candidateDaemonGeneration)) {
+                    // The daemon can stop after the worker's acknowledgement
+                    // check but before this UI-thread commit. The request was
+                    // still authenticated against the immutable candidate ID.
+                    NekoGui::dataStore->UpdateStartedId(candidateProfileId);
+                    running_internal_tun = running_internal_tun || candidateInternalTun;
+                    running_generation = transition.generation;
+                    running_daemon_generation = candidateDaemonGeneration;
+                    running_daemon_instance_id = candidateDaemonInstanceId;
+                    running_config_sha256 = candidateConfigSha256;
+                    running = ent;
+                    runtime_state_indeterminate = true;
+                    runtime_state_indeterminate_reason = tr(
+                        "The core daemon stopped after Start acknowledgement but before runtime state commit.");
+                    refresh_status();
+                    refresh_proxy_list(candidateProfileId);
+                    stateIndeterminate = true;
+                    return;
+                }
+                NekoGui::dataStore->ignoreConnTag = result->ignoreConnTag;
+                NekoGui::dataStore->UpdateStartedId(candidateProfileId);
+                running_internal_tun = candidateInternalTun;
+                running_generation = transition.generation;
+                running_daemon_generation = candidateDaemonGeneration;
+                running_daemon_instance_id = candidateDaemonInstanceId;
+                running_config_sha256 = candidateConfigSha256;
+                running = ent;
+                runtime_state_indeterminate = false;
+                runtime_state_indeterminate_reason.clear();
+                refresh_status();
+                refresh_proxy_list(candidateProfileId);
+                stateCommitted = true;
             },
-            DS_cores);
-        mu_starting.unlock();
-        return; // let CoreProcess call neko_start when core is up
-    }
+            Qt::BlockingQueuedConnection);
+
+#ifndef NKR_NO_GRPC
+        if (stateCommitted) {
+            QMutexLocker trafficLock(&NekoGui_traffic::trafficLooper->loop_mutex);
+            NekoGui_traffic::trafficLooper->proxy = result->outboundStat;
+            NekoGui_traffic::trafficLooper->items = result->outboundStats;
+            NekoGui_traffic::trafficLooper->loop_enabled = true;
+        }
+#endif
+        if (stateIndeterminate) {
+            MW_show_log("<<<<<<<< " + tr(
+                "Runtime state became indeterminate after Start acknowledgement; waiting for generation-bound cleanup."));
+        }
+        return stateCommitted;
+    };
 
     // timeout message
     auto restartMsgbox = new QMessageBox(QMessageBox::Question, software_name, tr("If there is no response for a long time, it is recommended to restart the software."),
@@ -496,15 +1333,28 @@ void MainWindow::neko_start(int _id, CoreStartReason reason) {
                 stopReason = CoreStopReason::CoreCrashCleanup;
                 stopCrash = true;
             }
-            runOnUiThread([=] { neko_stop(stopCrash, true, stopReason); });
+            const auto stopSucceeded = std::make_shared<std::atomic_bool>(false);
+            runOnUiThread([=] {
+                neko_stop(stopCrash, true, stopReason, true, stopSucceeded, transition);
+            });
             sem_stopped.acquire();
+            if (!stopSucceeded->load()) {
+                MW_show_log("<<<<<<<< " + tr("Profile start/reload was aborted because the old generation did not stop cleanly."));
+                finishTransition();
+                runOnUiThread([=] {
+                    restartMsgboxTimer->cancel();
+                    restartMsgboxTimer->deleteLater();
+                    restartMsgbox->deleteLater();
+                });
+                return;
+            }
         }
         // do start
         MW_show_log(">>>>>>>> " + tr("Starting profile %1").arg(ent->bean->DisplayTypeAndName()));
         if (!neko_start_stage2()) {
             MW_show_log("<<<<<<<< " + tr("Failed to start profile %1").arg(ent->bean->DisplayTypeAndName()));
         }
-        mu_starting.unlock();
+        finishTransition();
         // cancel timeout
         runOnUiThread([=] {
             restartMsgboxTimer->cancel();
@@ -520,9 +1370,89 @@ void MainWindow::neko_start(int _id, CoreStartReason reason) {
     });
 }
 
-void MainWindow::neko_stop(bool crash, bool sem, CoreStopReason reason) {
+void MainWindow::neko_stop(bool crash, bool sem, CoreStopReason reason,
+                           bool nestedTransition,
+                           const std::shared_ptr<std::atomic_bool>& completionResult,
+                           const NekoGui_Runtime::TransitionTicket& ownerTransition,
+                           std::uint64_t expectedCrashDaemonGeneration) {
+    if (completionResult != nullptr) completionResult->store(false);
+    if (core_process == nullptr) {
+        const auto nothingRunning = NekoGui::dataStore->started_id < 0;
+        if (completionResult != nullptr) completionResult->store(nothingRunning);
+        if (sem) sem_stopped.release();
+        if (!nothingRunning) {
+            MW_show_log(tr("The core controller is unavailable; refusing to clear observed runtime state."));
+        }
+        return;
+    }
+    // Explicit Stop revokes both queued and already-emitted daemon-ready
+    // requests even when another transition currently owns the coordinator.
+    if (reason == CoreStopReason::UserAction || reason == CoreStopReason::AppExit) {
+        (void) core_process->CancelQueuedProfileStart();
+    }
+
+    NekoGui_Runtime::TransitionTicket transition;
+    bool ownsTransition = false;
+    if (ownerTransition.valid) {
+        transition = ownerTransition;
+        const auto validNestedOwner = nestedTransition &&
+                                      transition.kind == NekoGui_Runtime::TransitionKind::Start;
+        const auto validCrashCleanupOwner = !nestedTransition &&
+                                            reason == CoreStopReason::CoreCrashCleanup &&
+                                            transition.kind == NekoGui_Runtime::TransitionKind::CrashCleanup;
+        if ((!validNestedOwner && !validCrashCleanupOwner) ||
+            !runtime_transition.IsCurrent(transition)) {
+            qCritical() << "Refusing Stop with an invalid transition owner.";
+            if (sem) sem_stopped.release();
+            return;
+        }
+        ownsTransition = validCrashCleanupOwner;
+    } else if (!nestedTransition) {
+        transition = runtime_transition.TryBegin(
+            NekoGui_Runtime::TransitionKind::Stop,
+            &NekoGui::dataStore->core_transition_depth);
+        if (!transition.valid) {
+            MessageBoxWarning(software_name, tr("Wait for the current core transition to finish."));
+            if (sem) sem_stopped.release();
+            return;
+        }
+        ownsTransition = true;
+    } else {
+        qCritical() << "Refusing a nested Stop without an owning Start transition.";
+        if (sem) sem_stopped.release();
+        return;
+    }
+
+    const auto finishTransition = [this, transition, ownsTransition] {
+        if (ownsTransition) finish_runtime_transition(transition);
+    };
+
+    if (reason == CoreStopReason::CoreCrashCleanup &&
+        (expectedCrashDaemonGeneration == 0 ||
+         running_daemon_generation != expectedCrashDaemonGeneration)) {
+        MW_show_log(tr("Ignored stale core-crash cleanup for daemon generation %1.")
+                        .arg(expectedCrashDaemonGeneration));
+        if (completionResult != nullptr) completionResult->store(true);
+        finishTransition();
+        if (sem) sem_stopped.release();
+        return;
+    }
+
     auto id = NekoGui::dataStore->started_id;
     if (id < 0) {
+        if (reason == CoreStopReason::CoreCrashCleanup) {
+            running_internal_tun = false;
+            running_generation = 0;
+            running_daemon_generation = 0;
+            running_daemon_instance_id.clear();
+            running_config_sha256.clear();
+            running = nullptr;
+            runtime_state_indeterminate = false;
+            runtime_state_indeterminate_reason.clear();
+            refresh_status();
+        }
+        if (completionResult != nullptr) completionResult->store(true);
+        finishTransition();
         if (sem) sem_stopped.release();
         return;
     }
@@ -530,56 +1460,134 @@ void MainWindow::neko_stop(bool crash, bool sem, CoreStopReason reason) {
     if (!crash && internalTunWouldBeInterrupted() &&
         reason != CoreStopReason::EnableInternalTun &&
         reason != CoreStopReason::DisableInternalTun) {
+        finishTransition();
         if (sem) sem_stopped.release();
-        MessageBoxWarning(software_name, internalTunReloadBlockedMessage());
+        MessageBoxWarning(software_name, internalTunContinuityBlockedMessage());
         return;
     }
 
+    const auto runningName = running == nullptr || running->bean == nullptr
+                                 ? QStringLiteral("#%1").arg(id)
+                                 : running->bean->DisplayTypeAndName();
+    const auto expectedStopDaemonInstanceId = running_daemon_instance_id;
+    const auto expectedStopConfigSha256 = running_config_sha256;
+    const auto persistTrafficOnStop = NekoGui::dataStore->traffic_loop_interval != 0;
+
     auto neko_stop_stage2 = [=] {
+        if (!runtime_transition.IsCurrent(transition)) return false;
 #ifndef NKR_NO_GRPC
-        NekoGui_traffic::trafficLooper->loop_enabled = false;
-        NekoGui_traffic::trafficLooper->loop_mutex.lock();
-        if (NekoGui::dataStore->traffic_loop_interval != 0) {
-            NekoGui_traffic::trafficLooper->UpdateAll();
-            for (const auto &item: NekoGui_traffic::trafficLooper->items) {
-                NekoGui::profileManager->GetProfile(item->id)->Save();
-                runOnUiThread([=] { refresh_proxy_list(item->id); });
+        bool trafficLoopWasEnabled = false;
+        QSet<int> trafficProfileIds;
+        {
+            QMutexLocker trafficLock(&NekoGui_traffic::trafficLooper->loop_mutex);
+            trafficLoopWasEnabled = NekoGui_traffic::trafficLooper->loop_enabled.load();
+            NekoGui_traffic::trafficLooper->loop_enabled.store(false);
+            if (persistTrafficOnStop && !crash) {
+                NekoGui_traffic::trafficLooper->UpdateAll();
+                for (const auto& item: NekoGui_traffic::trafficLooper->items) {
+                    if (item.profileId >= 0) trafficProfileIds.insert(item.profileId);
+                }
             }
         }
-        NekoGui_traffic::trafficLooper->loop_mutex.unlock();
+
+        if (!trafficProfileIds.isEmpty()) {
+            QMetaObject::invokeMethod(
+                this,
+                [=] {
+                    for (const auto profileId: trafficProfileIds) {
+                        const auto profile = NekoGui::profileManager->GetProfile(profileId);
+                        if (profile == nullptr) {
+                            qWarning() << "Skipping traffic save for an explicitly deleted profile:" << profileId;
+                            continue;
+                        }
+                        profile->Save();
+                        refresh_proxy_list(profileId);
+                    }
+                },
+                Qt::BlockingQueuedConnection);
+        }
+
+        const auto markStopIndeterminate = [=](const QString& detail) {
+            QMetaObject::invokeMethod(
+                this,
+                [=] {
+                    if (!runtime_transition.IsCurrent(transition)) return;
+                    // Preserve the last observed running/Tun state. A lost
+                    // response may mean Stop succeeded, while an application
+                    // error may mean shutdown retained resources.
+                    runtime_state_indeterminate = true;
+                    runtime_state_indeterminate_reason = detail;
+                    refresh_status();
+                },
+                Qt::BlockingQueuedConnection);
+        };
 
         if (!crash) {
             bool rpcOK;
-            QString error = defaultClient->Stop(&rpcOK);
-            if (rpcOK && !error.isEmpty()) {
-                runOnUiThread([=] { MessageBoxWarning("Stop return error", error); });
-                return false;
-            } else if (!rpcOK) {
-                return false;
+            std::uint64_t commandSequence = 0;
+            QString error = defaultClient->Stop(
+                &rpcOK,
+                expectedStopDaemonInstanceId,
+                &commandSequence);
+            if (!rpcOK || !error.isEmpty()) {
+                const auto reconciliation = defaultClient->ReconcileStop(
+                    expectedStopDaemonInstanceId,
+                    commandSequence,
+                    expectedStopConfigSha256);
+                if (reconciliation.disposition ==
+                    NekoGui_rpc::LifecycleReconcileDisposition::Stopped) {
+                    MW_show_log(tr("The Stop command was confirmed stopped by the daemon reconciliation barrier."));
+                } else {
+                    {
+                        QMutexLocker trafficLock(&NekoGui_traffic::trafficLooper->loop_mutex);
+                        NekoGui_traffic::trafficLooper->loop_enabled.store(trafficLoopWasEnabled);
+                    }
+                    if (reconciliation.disposition ==
+                        NekoGui_rpc::LifecycleReconcileDisposition::Active) {
+                        MW_show_log(tr("The Stop command did not take effect; the exact prior runtime remains active."));
+                        if (!error.isEmpty()) {
+                            runOnUiThread([=] { MessageBoxWarning("Stop return error", error); });
+                        }
+                        return false;
+                    }
+                    const auto detail = !error.isEmpty()
+                                            ? tr("The Stop RPC returned an application error and reconciliation remained indeterminate: %1 (%2)")
+                                                  .arg(error, reconciliation.detail)
+                                            : tr("The Stop RPC transport failed and reconciliation remained indeterminate: %1")
+                                                  .arg(reconciliation.detail);
+                    markStopIndeterminate(detail);
+                    if (!error.isEmpty()) {
+                        runOnUiThread([=] { MessageBoxWarning("Stop return error", error); });
+                    }
+                    return false;
+                }
             }
         }
 #endif
 
-        const auto clearedAuxProfiles = !sem && !crash && !NekoGui::dataStore->aux_profile_ports.isEmpty();
-        if (clearedAuxProfiles) NekoGui::dataStore->aux_profile_ports.clear();
-        NekoGui::dataStore->UpdateStartedId(-1919);
-        if (clearedAuxProfiles) NekoGui::dataStore->Save();
-        NekoGui::dataStore->need_keep_vpn_off = false;
-        running_internal_tun = false;
-        running = nullptr;
-
-        runOnUiThread([=] {
-            refresh_status();
-            refresh_proxy_list(clearedAuxProfiles ? -1 : id);
-        });
+        // Auxiliary port bindings are persistent user configuration. Stopping,
+        // restarting, crashing or exiting the current line must not silently
+        // delete them; only an explicit mapping edit may change this state.
+        QMetaObject::invokeMethod(
+            this,
+            [=] {
+                NekoGui::dataStore->UpdateStartedId(-1919);
+                NekoGui::dataStore->need_keep_vpn_off = false;
+                running_internal_tun = false;
+                running_generation = 0;
+                running_daemon_generation = 0;
+                running_daemon_instance_id.clear();
+                running_config_sha256.clear();
+                running = nullptr;
+                runtime_state_indeterminate = false;
+                runtime_state_indeterminate_reason.clear();
+                refresh_status();
+                refresh_proxy_list(id);
+            },
+            Qt::BlockingQueuedConnection);
 
         return true;
     };
-
-    if (!mu_stopping.tryLock()) {
-        if (sem) sem_stopped.release();
-        return;
-    }
 
     // timeout message
     auto restartMsgbox = new QMessageBox(QMessageBox::Question, software_name, tr("If there is no response for a long time, it is recommended to restart the software."),
@@ -589,11 +1597,13 @@ void MainWindow::neko_stop(bool crash, bool sem, CoreStopReason reason) {
 
     runOnNewThread([=] {
         // do stop
-        MW_show_log(">>>>>>>> " + tr("Stopping profile %1").arg(running->bean->DisplayTypeAndName()));
-        if (!neko_stop_stage2()) {
+        MW_show_log(">>>>>>>> " + tr("Stopping profile %1").arg(runningName));
+        const auto stopped = neko_stop_stage2();
+        if (!stopped) {
             MW_show_log("<<<<<<<< " + tr("Failed to stop, please restart the program."));
         }
-        mu_stopping.unlock();
+        if (completionResult != nullptr) completionResult->store(stopped);
+        finishTransition();
         if (sem) sem_stopped.release();
         // cancel timeout
         runOnUiThread([=] {
@@ -605,67 +1615,7 @@ void MainWindow::neko_stop(bool crash, bool sem, CoreStopReason reason) {
 }
 
 void MainWindow::CheckUpdate() {
-    // on new thread...
-#ifndef NKR_NO_GRPC
-    bool ok;
-    libcore::UpdateReq request;
-    request.set_action(libcore::UpdateAction::Check);
-    request.set_check_pre_release(NekoGui::dataStore->check_include_pre);
-    auto response = NekoGui_rpc::defaultClient->Update(&ok, request);
-    if (!ok) return;
-
-    auto err = response.error();
-    if (!err.empty()) {
-        runOnUiThread([=] {
-            MessageBoxWarning(QObject::tr("Update"), err.c_str());
-        });
-        return;
-    }
-
-    if (response.release_download_url() == nullptr) {
-        runOnUiThread([=] {
-            MessageBoxInfo(QObject::tr("Update"), QObject::tr("No update"));
-        });
-        return;
-    }
-
     runOnUiThread([=] {
-        auto allow_updater = !NekoGui::dataStore->flag_use_appdata;
-        auto note_pre_release = response.is_pre_release() ? " (Pre-release)" : "";
-        QMessageBox box(QMessageBox::Question, QObject::tr("Update") + note_pre_release,
-                        QObject::tr("Update found: %1\nRelease note:\n%2").arg(response.assets_name().c_str(), response.release_note().c_str()));
-        //
-        QAbstractButton *btn1 = nullptr;
-        if (allow_updater) {
-            btn1 = box.addButton(QObject::tr("Update"), QMessageBox::AcceptRole);
-        }
-        QAbstractButton *btn2 = box.addButton(QObject::tr("Open in browser"), QMessageBox::AcceptRole);
-        box.addButton(QObject::tr("Close"), QMessageBox::RejectRole);
-        box.exec();
-        //
-        if (btn1 == box.clickedButton() && allow_updater) {
-            // Download Update
-            runOnNewThread([=] {
-                bool ok2;
-                libcore::UpdateReq request2;
-                request2.set_action(libcore::UpdateAction::Download);
-                auto response2 = NekoGui_rpc::defaultClient->Update(&ok2, request2);
-                runOnUiThread([=] {
-                    if (response2.error().empty()) {
-                        auto q = QMessageBox::question(nullptr, QObject::tr("Update"),
-                                                       QObject::tr("Update is ready, restart to install?"));
-                        if (q == QMessageBox::StandardButton::Yes) {
-                            this->exit_reason = 1;
-                            on_menu_exit_triggered();
-                        }
-                    } else {
-                        MessageBoxWarning(QObject::tr("Update"), response2.error().c_str());
-                    }
-                });
-            });
-        } else if (btn2 == box.clickedButton()) {
-            QDesktopServices::openUrl(QUrl(response.release_url().c_str()));
-        }
+        MessageBoxInfo(QObject::tr("Update"), QObject::tr("Online update is disabled in this private build."));
     });
-#endif
 }

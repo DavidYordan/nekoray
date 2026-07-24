@@ -1,12 +1,18 @@
 #include "db/ProfileFilter.hpp"
+#include "db/ResolverConfig.hpp"
 #include "fmt/includes.h"
 #include "fmt/Preset.hpp"
+#include "main/ConfigMutation.hpp"
 #include "main/HTTPRequestHelper.hpp"
 
+#include "ClashResolverPolicy.hpp"
 #include "GroupUpdater.hpp"
 
 #include <QInputDialog>
+#include <QCoreApplication>
+#include <QMap>
 #include <QSet>
+#include <QThread>
 #include <QUrl>
 #include <QUrlQuery>
 
@@ -18,9 +24,56 @@
 
 namespace NekoGui_sub {
 
-    GroupUpdater *groupUpdater = new GroupUpdater;
+    GroupUpdater* groupUpdater = new GroupUpdater;
 
-    void RawUpdater_FixEnt(const std::shared_ptr<NekoGui::ProxyEntity> &ent) {
+    struct GroupCommitSnapshot {
+        qint64 subLastUpdate = 0;
+        QString info;
+        QString sourceType;
+        QString defaultClientMode;
+        QString defaultClientValue;
+        QString defaultClientSource;
+        QString defaultResolverDoh;
+        QString defaultResolverSource;
+        QString defaultResolverOrigin;
+        int defaultResolverPolicyVersion = 0;
+        bool defaultResolverFallback = false;
+        QList<int> order;
+
+        explicit GroupCommitSnapshot(const std::shared_ptr<NekoGui::Group>& group) {
+            if (group == nullptr) return;
+            subLastUpdate = group->sub_last_update;
+            info = group->info;
+            sourceType = group->source_type;
+            defaultClientMode = group->default_client_mode;
+            defaultClientValue = group->default_client_value;
+            defaultClientSource = group->default_client_source;
+            defaultResolverDoh = group->default_server_resolver_doh;
+            defaultResolverSource = group->default_server_resolver_source;
+            defaultResolverOrigin = group->default_server_resolver_origin;
+            defaultResolverPolicyVersion = group->default_server_resolver_policy_version;
+            defaultResolverFallback = group->default_server_resolver_allow_local_fallback;
+            order = group->order;
+        }
+
+        void Restore(const std::shared_ptr<NekoGui::Group>& group) const {
+            if (group == nullptr) return;
+            group->sub_last_update = subLastUpdate;
+            group->info = info;
+            group->source_type = sourceType;
+            group->default_client_mode = defaultClientMode;
+            group->default_client_value = defaultClientValue;
+            group->default_client_source = defaultClientSource;
+            group->default_server_resolver_doh = defaultResolverDoh;
+            group->default_server_resolver_source = defaultResolverSource;
+            group->default_server_resolver_origin = defaultResolverOrigin;
+            group->default_server_resolver_policy_version = defaultResolverPolicyVersion;
+            group->default_server_resolver_allow_local_fallback = defaultResolverFallback;
+            group->order = order;
+        }
+    };
+
+    void RawUpdater_FixEnt(const std::shared_ptr<NekoGui::ProxyEntity>& ent) {
         if (ent == nullptr) return;
         auto stream = NekoGui_fmt::GetStreamSettings(ent->bean.get());
         if (stream == nullptr) return;
@@ -36,7 +89,7 @@ namespace NekoGui_sub {
         }
     }
 
-    void RawUpdater::update(const QString &str) {
+    void RawUpdater::update(const QString& str) {
         // Base64 encoded subscription
         if (auto str2 = DecodeB64IfValid(str); !str2.isEmpty()) {
             update(str2);
@@ -52,7 +105,7 @@ namespace NekoGui_sub {
         // Multi line
         if (str.count("\n") > 0) {
             auto list = str.split("\n");
-            for (const auto &str2: list) {
+            for (const auto& str2: list) {
                 update(str2.trimmed());
             }
             return;
@@ -116,7 +169,9 @@ namespace NekoGui_sub {
             if (!ok) return;
         }
 
-        // Naive is intentionally not imported in the sing-box-only mainline.
+        // Naive was removed by the previous out-of-scope core convergence.
+        // Keep this explicit unsupported branch until the NekoRay capability
+        // is restored; it is not a product decision to drop the protocol.
         if (str.startsWith("naive+")) {
             return;
         }
@@ -150,23 +205,22 @@ namespace NekoGui_sub {
         // Fix
         if (needFix) RawUpdater_FixEnt(ent);
 
-        // End
-        NekoGui::profileManager->AddProfile(ent, gid_add_to);
+        // Stage only. GroupUpdater commits after the complete input is valid.
         updated_order += ent;
     }
 
 #ifndef NKR_NO_YAML
 
-    QString Node2QString(const YAML::Node &n, const QString &def = "") {
+    QString Node2QString(const YAML::Node& n, const QString& def = "") {
         try {
             return n.as<std::string>().c_str();
-        } catch (const YAML::Exception &ex) {
+        } catch (const YAML::Exception& ex) {
             qDebug() << ex.what();
             return def;
         }
     }
 
-    QStringList Node2QStringList(const YAML::Node &n) {
+    QStringList Node2QStringList(const YAML::Node& n) {
         try {
             if (n.IsSequence()) {
                 QStringList list;
@@ -179,28 +233,28 @@ namespace NekoGui_sub {
             } else {
                 return {};
             }
-        } catch (const YAML::Exception &ex) {
+        } catch (const YAML::Exception& ex) {
             qDebug() << ex.what();
             return {};
         }
     }
 
-    int Node2Int(const YAML::Node &n, const int &def = 0) {
+    int Node2Int(const YAML::Node& n, const int& def = 0) {
         try {
             return n.as<int>();
-        } catch (const YAML::Exception &ex) {
+        } catch (const YAML::Exception& ex) {
             qDebug() << ex.what();
             return def;
         }
     }
 
-    bool Node2Bool(const YAML::Node &n, const bool &def = false) {
+    bool Node2Bool(const YAML::Node& n, const bool& def = false) {
         try {
             return n.as<bool>();
-        } catch (const YAML::Exception &ex) {
+        } catch (const YAML::Exception& ex) {
             try {
                 return n.as<int>();
-            } catch (const YAML::Exception &ex2) {
+            } catch (const YAML::Exception& ex2) {
                 qDebug() << ex2.what();
             }
             qDebug() << ex.what();
@@ -208,7 +262,7 @@ namespace NekoGui_sub {
         }
     }
 
-    QString Node2DurationSeconds(const YAML::Node &n) {
+    QString Node2DurationSeconds(const YAML::Node& n) {
         if (!n.IsDefined()) return {};
 
         auto duration = Node2QString(n).trimmed();
@@ -224,54 +278,15 @@ namespace NekoGui_sub {
     }
 
     // NodeChild returns the first defined children or Null Node
-    YAML::Node NodeChild(const YAML::Node &n, const std::list<std::string> &keys) {
-        for (const auto &key: keys) {
+    YAML::Node NodeChild(const YAML::Node& n, const std::list<std::string>& keys) {
+        for (const auto& key: keys) {
             auto child = n[key];
             if (child.IsDefined()) return child;
         }
         return {};
     }
 
-    bool IsValidClashDohUpstream(const QString &raw) {
-        const auto url = QUrl(raw.trimmed());
-        if (!url.isValid() || url.scheme().toLower() != "https") return false;
-        if (url.host().isEmpty()) return false;
-        if (url.path().isEmpty() || url.path() == "/") return false;
-        if (!url.userName().isEmpty() || !url.password().isEmpty()) return false;
-        if (url.hasQuery() || url.hasFragment()) return false;
-        return true;
-    }
-
-    QStringList FilterClashDohUpstreams(const QStringList &rawList) {
-        QStringList out;
-        QSet<QString> seen;
-        for (const auto &raw: rawList) {
-            const auto value = raw.trimmed();
-            if (value.isEmpty() || seen.contains(value) || !IsValidClashDohUpstream(value)) continue;
-            seen.insert(value);
-            out << value;
-        }
-        return out;
-    }
-
-    QStringList ExtractClashProxyServerDohUpstreams(const YAML::Node &root) {
-        auto dns = root["dns"];
-        if (!dns.IsMap()) return {};
-
-        auto upstreams = FilterClashDohUpstreams(Node2QStringList(NodeChild(dns, {
-            "proxy-server-nameserver",
-            "proxy_server_nameserver",
-        })));
-
-        if (upstreams.isEmpty()) {
-            upstreams = FilterClashDohUpstreams(Node2QStringList(NodeChild(dns, {
-                "nameserver",
-            })));
-        }
-        return upstreams;
-    }
-
-    bool IsVisibleAsciiAnyTLSClientValue(const QString &value) {
+    bool IsVisibleAsciiAnyTLSClientValue(const QString& value) {
         if (value.isEmpty() || value.size() > 128) return false;
         for (auto ch: value) {
             const auto code = ch.unicode();
@@ -283,15 +298,37 @@ namespace NekoGui_sub {
 #endif
 
     // https://github.com/Dreamacro/clash/wiki/configuration
-    void RawUpdater::updateClash(const QString &str) {
+    void RawUpdater::updateClash(const QString& str) {
 #ifndef NKR_NO_YAML
         try {
             auto root = YAML::Load(str.toStdString());
-            const auto clashDohUpstreams = ExtractClashProxyServerDohUpstreams(root);
+            if (!root.IsMap()) {
+                parse_failed = true;
+                parse_error = QObject::tr("The Clash subscription root is not a map.");
+                return;
+            }
+
+            auto proxies = root["proxies"];
+            if (!proxies.IsSequence()) {
+                parse_failed = true;
+                parse_error = QObject::tr("The Clash subscription does not contain a valid proxies list.");
+                return;
+            }
+
+            const auto clashResolver = ExtractClashServerResolver(root);
+            if (!clashResolver.invalidDohEntries.isEmpty()) {
+                parse_failed = true;
+                parse_error = QObject::tr(
+                    "The selected Clash server resolver source contains an invalid HTTPS DoH endpoint.");
+                return;
+            }
+            const auto clashDohUpstreams = clashResolver.dohUpstreams;
             detected_source_type = "clash";
             detected_doh_upstreams = clashDohUpstreams;
-            auto proxies = root["proxies"];
+            detected_unsupported_resolver_entries = clashResolver.unsupportedEntries;
+            detected_resolver_origin = ClashResolverSourceName(clashResolver.source);
             for (auto proxy: proxies) {
+                if (!proxy.IsMap()) continue;
                 auto type = Node2QString(proxy["type"]).toLower();
                 auto type_clash = type;
 
@@ -307,17 +344,12 @@ namespace NekoGui_sub {
                 ent->bean->name = Node2QString(proxy["name"]);
                 ent->bean->serverAddress = Node2QString(proxy["server"]);
                 ent->bean->serverPort = Node2Int(proxy["port"]);
-                auto serverResolver = NodeChild(proxy, {"server-resolver", "server_resolver"});
-                bool hasExplicitServerResolver = false;
-                if (serverResolver.IsMap()) {
-                    hasExplicitServerResolver = true;
-                    ent->bean->inheritSubscriptionResolver = false;
-                    ent->bean->serverResolverDohUpstreams = Node2QStringList(NodeChild(serverResolver, {"doh-upstreams", "doh_upstreams"})).join("\n");
-                    auto fallback = NodeChild(serverResolver, {"allow-local-fallback", "allow_local_fallback"});
-                    ent->bean->serverResolverAllowLocalFallback = fallback.IsDefined() ? Node2Bool(fallback, true) : true;
-                }
-                if (!hasExplicitServerResolver && !clashDohUpstreams.isEmpty() &&
-                    !ent->bean->serverAddress.isEmpty() && !IsIpAddress(ent->bean->serverAddress)) {
+                // Resolver policy is subscription-owned: an explicit
+                // proxy-server-nameserver is authoritative; only when that
+                // field is absent may HTTPS entries in dns.nameserver be
+                // inherited. Never import the prior private per-proxy
+                // resolver or local-fallback schema.
+                if (!ent->bean->serverAddress.isEmpty() && !IsIpAddress(ent->bean->serverAddress)) {
                     ent->bean->inheritSubscriptionResolver = true;
                     ent->bean->serverResolverDohUpstreams = "";
                     ent->bean->serverResolverAllowLocalFallback = false;
@@ -379,7 +411,7 @@ namespace NekoGui_sub {
                     bean->stream->allow_insecure = Node2Bool(proxy["skip-cert-verify"]);
                     bean->stream->utlsFingerprint = Node2QString(proxy["client-fingerprint"]);
                     if (bean->stream->utlsFingerprint.isEmpty()) {
-                        bean->stream->utlsFingerprint = NekoGui::dataStore->utlsFingerprint;
+                        bean->stream->utlsFingerprint = fallback_utls_fingerprint;
                     }
 
                     // sing-mux
@@ -424,7 +456,7 @@ namespace NekoGui_sub {
                     bean->stream->utlsFingerprint = Node2QString(proxy["client-fingerprint"]);
                     bean->stream->utlsFingerprint = Node2QString(proxy["client-fingerprint"]);
                     if (bean->stream->utlsFingerprint.isEmpty()) {
-                        bean->stream->utlsFingerprint = NekoGui::dataStore->utlsFingerprint;
+                        bean->stream->utlsFingerprint = fallback_utls_fingerprint;
                     }
 
                     // sing-mux
@@ -549,9 +581,12 @@ namespace NekoGui_sub {
                                                ? Node2Int(proxy["min-idle-session"])
                                                : Node2Int(proxy["min_idle_session"]);
                     bean->anytlsClientMode = FIRST_OR_SECOND(Node2QString(proxy["anytls-client-mode"]),
-                                                             Node2QString(proxy["anytls_client_mode"])).trimmed().toLower();
+                                                             Node2QString(proxy["anytls_client_mode"]))
+                                                 .trimmed()
+                                                 .toLower();
                     bean->anytlsClientValue = FIRST_OR_SECOND(Node2QString(proxy["anytls-client-value"]),
-                                                              Node2QString(proxy["anytls_client_value"])).trimmed();
+                                                              Node2QString(proxy["anytls_client_value"]))
+                                                  .trimmed();
                     const auto clashAnyTLSClient = Node2QString(proxy["client"]).trimmed();
                     auto hasExplicitAnyTLSClient = !bean->anytlsClientMode.isEmpty() || !clashAnyTLSClient.isEmpty();
                     if (bean->anytlsClientMode.isEmpty() && !clashAnyTLSClient.isEmpty()) {
@@ -584,20 +619,39 @@ namespace NekoGui_sub {
                     continue;
                 }
 
+                // All Clash proxy types supported here require a concrete
+                // network endpoint. An empty entry must not make an otherwise
+                // invalid response destructive.
+                if (ent->bean->serverAddress.trimmed().isEmpty() ||
+                    ent->bean->serverPort < 1 || ent->bean->serverPort > 65535) {
+                    continue;
+                }
+
                 if (needFix) RawUpdater_FixEnt(ent);
-                NekoGui::profileManager->AddProfile(ent, gid_add_to);
                 updated_order += ent;
             }
-        } catch (const YAML::Exception &ex) {
+        } catch (const YAML::Exception& ex) {
+            parse_failed = true;
+            parse_error = QString::fromUtf8(ex.what());
             runOnUiThread([=] {
                 MessageBoxWarning("YAML Exception", ex.what());
             });
+        } catch (const std::exception& ex) {
+            parse_failed = true;
+            parse_error = QString::fromUtf8(ex.what());
+        } catch (...) {
+            parse_failed = true;
+            parse_error = QObject::tr("Unknown Clash subscription parsing error.");
         }
+#else
+        Q_UNUSED(str);
+        parse_failed = true;
+        parse_error = QObject::tr("This build does not support Clash YAML subscriptions.");
 #endif
     }
 
     // 在新的 thread 运行
-    void GroupUpdater::AsyncUpdate(const QString &str, int _sub_gid, const std::function<void()> &finish) {
+    void GroupUpdater::AsyncUpdate(const QString& str, int _sub_gid, const std::function<void()>& finish) {
         auto content = str.trimmed();
         bool asURL = false;
         bool createNewGroup = false;
@@ -619,24 +673,17 @@ namespace NekoGui_sub {
         }
 
         runOnNewThread([=] {
-            auto gid = _sub_gid;
-            if (createNewGroup) {
-                auto group = NekoGui::ProfileManager::NewGroup();
-                group->name = QUrl(str).host();
-                group->url = str;
-                NekoGui::profileManager->AddGroup(group);
-                gid = group->id;
-                MW_dialog_message("SubUpdater", "NewGroup");
-            }
-            Update(str, gid, asURL);
-            emit asyncUpdateCallback(gid);
-            if (finish != nullptr) finish();
+            const auto gid = Update(str, _sub_gid, asURL, createNewGroup);
+            runOnUiThread([=] {
+                emit asyncUpdateCallback(gid);
+                if (finish != nullptr) finish();
+            });
         });
     }
 
-    void GroupUpdater::Update(const QString &_str, int _sub_gid, bool _not_sub_as_url) {
+    int GroupUpdater::Update(const QString& _str, int _sub_gid, bool _not_sub_as_url,
+                             bool _create_new_group) {
         // 创建 rawUpdater
-        NekoGui::dataStore->imported_count = 0;
         auto rawUpdater = std::make_unique<RawUpdater>();
         rawUpdater->gid_add_to = _sub_gid;
 
@@ -644,18 +691,84 @@ namespace NekoGui_sub {
         QString sub_user_info;
         bool asURL = _sub_gid >= 0 || _not_sub_as_url; // 把 _str 当作 url 处理（下载内容）
         auto content = _str.trimmed();
-        auto group = NekoGui::profileManager->GetGroup(_sub_gid);
-        if (group != nullptr && group->archive) return;
+        std::shared_ptr<NekoGui::Group> group;
+        std::shared_ptr<NekoGui::Group> requestedGroup;
+        int requestedGroupId = -1;
+        QByteArray requestedGroupState;
+        QMap<int, std::shared_ptr<NekoGui::ProxyEntity>> requestedGroupMembers;
+        QMap<int, QByteArray> requestedGroupMemberStates;
+        QString requestedGroupName;
+        NekoGui_network::NekoHTTPRequestOptions requestOptions;
+        bool clearExistingProfiles = false;
+        const bool updatesExistingSubscriptionGroup = _sub_gid >= 0 && !_create_new_group;
+        auto captureRequestedState = [&]() {
+            NekoGui_ConfigMutation::Guard snapshotGuard(true);
+            if (NekoGui::dataStore->prepare_exit || QCoreApplication::closingDown()) return false;
+            if (NekoGui::dataStore->core_transition_depth.load() > 0) return false;
+            NekoGui::dataStore->imported_count = 0;
+            rawUpdater->fallback_utls_fingerprint = NekoGui::dataStore->utlsFingerprint;
+            clearExistingProfiles = NekoGui::dataStore->sub_clear;
+            requestOptions.useProxy = NekoGui::dataStore->sub_use_proxy;
+            requestOptions.proxyAvailable = NekoGui::dataStore->started_id >= 0;
+            requestOptions.proxyPort = NekoGui::dataStore->inbound_socks_port;
+            if (NekoGui::dataStore->inbound_auth->NeedAuth()) {
+                requestOptions.proxyUsername = NekoGui::dataStore->inbound_auth->username;
+                requestOptions.proxyPassword = NekoGui::dataStore->inbound_auth->password;
+            }
+            requestOptions.userAgent = NekoGui::dataStore->GetUserAgent();
+            requestOptions.insecureTls = NekoGui::dataStore->sub_insecure;
+
+            if (!_create_new_group) {
+                requestedGroupId = _sub_gid >= 0
+                                       ? _sub_gid
+                                       : NekoGui::dataStore->current_group;
+                requestedGroup = NekoGui::profileManager->GetGroup(requestedGroupId);
+                if (requestedGroup == nullptr || requestedGroup->archive ||
+                    requestedGroup->save_control_no_save) {
+                    return false;
+                }
+                requestedGroupState = requestedGroup->ToJsonBytes();
+                requestedGroupMembers.clear();
+                requestedGroupMemberStates.clear();
+                for (const auto& profile: requestedGroup->Profiles()) {
+                    if (profile == nullptr || profile->id < 0 ||
+                        profile->save_control_no_save || profile->gid != requestedGroupId ||
+                        requestedGroupMembers.contains(profile->id)) {
+                        return false;
+                    }
+                    requestedGroupMembers.insert(profile->id, profile);
+                    requestedGroupMemberStates.insert(profile->id, profile->ToJsonBytes());
+                }
+                requestedGroupName = requestedGroup->name;
+                rawUpdater->gid_add_to = requestedGroupId;
+                if (updatesExistingSubscriptionGroup) group = requestedGroup;
+            }
+            return true;
+        };
+        bool targetEligible = false;
+        auto* application = QCoreApplication::instance();
+        if (application != nullptr && QThread::currentThread() != application->thread()) {
+            const auto invoked = QMetaObject::invokeMethod(
+                application,
+                [&] { targetEligible = captureRequestedState(); },
+                Qt::BlockingQueuedConnection);
+            if (!invoked) return _sub_gid;
+        } else {
+            targetEligible = captureRequestedState();
+        }
+        if (!targetEligible) return _sub_gid;
 
         // 网络请求
         if (asURL) {
-            auto groupName = group == nullptr ? content : group->name;
+            auto groupName = requestedGroup == nullptr ? content : requestedGroupName;
             MW_show_log(">>>>>>>> " + QObject::tr("Requesting subscription: %1").arg(groupName));
 
-            auto resp = NetworkRequestHelper::HttpGet(content);
+            auto resp = NetworkRequestHelper::HttpGet(content, requestOptions);
             if (!resp.error.isEmpty()) {
-                MW_show_log("<<<<<<<< " + QObject::tr("Requesting subscription %1 error: %2").arg(groupName, resp.error + "\n" + resp.data));
-                return;
+                // The response body may be an HTML login page, a subscription
+                // payload, or contain credentials. Never copy it into logs.
+                MW_show_log("<<<<<<<< " + QObject::tr("Requesting subscription %1 error: %2").arg(groupName, resp.error));
+                return _sub_gid;
             }
 
             content = resp.data;
@@ -672,103 +785,259 @@ namespace NekoGui_sub {
         QList<std::shared_ptr<NekoGui::ProxyEntity>> update_del;  // 更新前后都有的，需要删除的新配置
         QList<std::shared_ptr<NekoGui::ProxyEntity>> update_keep; // 更新前后都有的，被保留的旧配置
 
-        // 订阅解析前
-        if (group != nullptr) {
-            in = group->Profiles();
-            group->sub_last_update = QDateTime::currentMSecsSinceEpoch() / 1000;
-            group->info = sub_user_info;
-            group->order.clear();
-            group->Save();
-            //
-            if (NekoGui::dataStore->sub_clear) {
-                MW_show_log(QObject::tr("Clearing servers..."));
-                for (const auto &profile: in) {
-                    NekoGui::profileManager->DeleteProfile(profile->id);
-                }
-            }
-        }
-
-        // 解析并添加 profile
+        // Parse the complete response without touching groups or profile files.
         rawUpdater->update(content);
 
-        if (group != nullptr) {
-            if (rawUpdater->detected_source_type == "clash") {
-                group->source_type = "clash";
-                if (group->DefaultClientManagedBySubscription()) {
-                    group->default_client_mode = "mihomo";
-                    group->default_client_value = "mihomo/1.19.28";
-                    group->SetDefaultClientManagedBySubscription(true);
-                }
-                if (group->DefaultResolverManagedBySubscription()) {
-                    group->default_server_resolver_doh = rawUpdater->detected_doh_upstreams.join("\n");
-                    group->default_server_resolver_allow_local_fallback = false;
-                    group->SetDefaultResolverManagedBySubscription(true);
-                }
-            } else if (group->source_type.isEmpty() && asURL) {
-                group->source_type = "subscription";
-            }
-            group->Save();
-
-            out_all = group->Profiles();
-
-            QString change_text;
-
-            if (NekoGui::dataStore->sub_clear) {
-                // all is new profile
-                for (const auto &ent: out_all) {
-                    change_text += "[+] " + ent->bean->DisplayTypeAndName() + "\n";
-                }
-            } else {
-                // find and delete not updated profile by ProfileFilter
-                NekoGui::ProfileFilter::OnlyInSrc_ByPointer(out_all, in, out);
-                NekoGui::ProfileFilter::OnlyInSrc(in, out, only_in);
-                NekoGui::ProfileFilter::OnlyInSrc(out, in, only_out);
-                NekoGui::ProfileFilter::Common(in, out, update_keep, update_del, false);
-
-                QString notice_added;
-                QString notice_deleted;
-                for (const auto &ent: only_out) {
-                    notice_added += "[+] " + ent->bean->DisplayTypeAndName() + "\n";
-                }
-                for (const auto &ent: only_in) {
-                    notice_deleted += "[-] " + ent->bean->DisplayTypeAndName() + "\n";
-                }
-
-                // sort according to order in remote
-                group->order = {};
-                for (const auto &ent: rawUpdater->updated_order) {
-                    auto deleted_index = update_del.indexOf(ent);
-                    if (deleted_index > 0) {
-                        if (deleted_index >= update_keep.count()) continue; // should not happen
-                        auto ent2 = update_keep[deleted_index];
-                        group->order.append(ent2->id);
-                    } else {
-                        group->order.append(ent->id);
-                    }
-                }
-                group->Save();
-
-                // cleanup
-                for (const auto &ent: out_all) {
-                    if (!group->order.contains(ent->id)) {
-                        NekoGui::profileManager->DeleteProfile(ent->id);
-                    }
-                }
-
-                change_text = "\n" + QObject::tr("Added %1 profiles:\n%2\nDeleted %3 Profiles:\n%4")
-                                         .arg(only_out.length())
-                                         .arg(notice_added)
-                                         .arg(only_in.length())
-                                         .arg(notice_deleted);
-                if (only_out.length() + only_in.length() == 0) change_text = QObject::tr("Nothing");
-            }
-
-            MW_show_log("<<<<<<<< " + QObject::tr("Change of %1:").arg(group->name) + "\n" + change_text);
-            MW_dialog_message("SubUpdater", "finish-dingyue");
-        } else {
-            NekoGui::dataStore->imported_count = rawUpdater->updated_order.count();
-            MW_dialog_message("SubUpdater", "finish");
+        if (rawUpdater->parse_failed || rawUpdater->updated_order.isEmpty()) {
+            auto reason = rawUpdater->parse_failed
+                              ? rawUpdater->parse_error
+                              : QObject::tr("No supported profiles were found.");
+            if (reason.isEmpty()) reason = QObject::tr("Subscription parsing failed.");
+            MW_show_log("<<<<<<<< " + QObject::tr("Subscription update aborted without changes: %1").arg(reason));
+            return _sub_gid;
         }
+        if (!rawUpdater->detected_unsupported_resolver_entries.isEmpty()) {
+            MW_show_log(QObject::tr(
+                            "Ignored %1 non-HTTPS server resolver item(s) from %2; this project only extends HTTPS DoH resolution.")
+                            .arg(rawUpdater->detected_unsupported_resolver_entries.size())
+                            .arg(rawUpdater->detected_resolver_origin));
+        }
+
+        // Downloads and parsing stay off the UI thread. The complete legacy
+        // commit is then dispatched to the UI thread and serialized with all
+        // guarded background saves, preventing UI model edits from racing the
+        // profile/group containers while this transitional path is retained.
+        auto commitParsedUpdate = [&]() -> int {
+            NekoGui_ConfigMutation::Guard mutationGuard(true);
+            if (NekoGui::dataStore->prepare_exit || QCoreApplication::closingDown()) {
+                return _sub_gid;
+            }
+            if (NekoGui::dataStore->core_transition_depth.load() > 0) {
+                MW_show_log("<<<<<<<< " + QObject::tr(
+                                              "Subscription update aborted without changes during a core transition."));
+                return _sub_gid;
+            }
+            if (!_create_new_group) {
+                const auto currentGroup = NekoGui::profileManager->GetGroup(requestedGroupId);
+                if (currentGroup == nullptr || currentGroup != requestedGroup ||
+                    currentGroup->save_control_no_save || currentGroup->archive ||
+                    currentGroup->ToJsonBytes() != requestedGroupState) {
+                    MW_show_log("<<<<<<<< " + QObject::tr(
+                                                  "Subscription update aborted without changes because the target group changed while downloading."));
+                    return _sub_gid;
+                }
+                const auto currentMembers = currentGroup->Profiles();
+                bool membersUnchanged = currentMembers.size() == requestedGroupMembers.size();
+                for (const auto& current: currentMembers) {
+                    if (!membersUnchanged) break;
+                    membersUnchanged = current != nullptr && current->id >= 0 &&
+                                       requestedGroupMembers.value(current->id) == current &&
+                                       current->gid == requestedGroupId &&
+                                       !current->save_control_no_save &&
+                                       requestedGroupMemberStates.value(current->id) ==
+                                           current->ToJsonBytes();
+                }
+                if (!membersUnchanged) {
+                    MW_show_log("<<<<<<<< " + QObject::tr(
+                                                  "Subscription update aborted without changes because the target group's members changed while downloading."));
+                    return _sub_gid;
+                }
+                rawUpdater->gid_add_to = requestedGroupId;
+                if (updatesExistingSubscriptionGroup) group = currentGroup;
+            }
+
+            // Create a requested subscription group only after validation, so an
+            // invalid response cannot leave an empty group behind.
+            bool createdGroup = false;
+            if (_create_new_group) {
+                group = NekoGui::ProfileManager::NewGroup();
+                group->name = QUrl(_str).host();
+                group->url = _str;
+                if (!NekoGui::profileManager->AddGroup(group)) {
+                    MW_show_log("<<<<<<<< " + QObject::tr("Subscription update aborted: failed to create the group."));
+                    return _sub_gid;
+                }
+                _sub_gid = group->id;
+                rawUpdater->gid_add_to = _sub_gid;
+                createdGroup = true;
+            }
+
+            if (group != nullptr) in = group->Profiles();
+            const GroupCommitSnapshot groupSnapshot(group);
+
+            // Commit all staged profiles before changing group metadata or deleting
+            // old profiles. Roll back new insertions if one is rejected before the
+            // group commit begins.
+            QList<std::shared_ptr<NekoGui::ProxyEntity>> committed;
+            bool rollbackIncomplete = false;
+            auto rollbackCommitted = [&](const QString& reason) {
+                bool complete = true;
+                for (const auto& added: committed) {
+                    QString deletionError;
+                    if (!NekoGui::profileManager->DeleteProfile(added->id, reason, &deletionError)) {
+                        complete = false;
+                        qCritical() << "Subscription rollback preserved profile" << added->id << deletionError;
+                    }
+                }
+                if (createdGroup) {
+                    QString deletionError;
+                    if (!NekoGui::profileManager->DeleteGroup(_sub_gid, reason, &deletionError)) {
+                        complete = false;
+                        qCritical() << "Subscription rollback preserved group" << _sub_gid << deletionError;
+                    }
+                }
+                if (!complete) {
+                    rollbackIncomplete = true;
+                    MW_show_log("<<<<<<<< " + QObject::tr(
+                                                  "Subscription rollback was incomplete; preserved files remain loaded for manual review."));
+                }
+                return complete;
+            };
+            for (const auto& ent: rawUpdater->updated_order) {
+                if (!NekoGui::profileManager->AddProfile(ent, rawUpdater->gid_add_to)) {
+                    rollbackCommitted(QStringLiteral("Rollback of an uncommitted subscription update."));
+                    MW_show_log("<<<<<<<< " + QObject::tr("Subscription update aborted: failed to add all staged profiles."));
+                    return createdGroup && !rollbackIncomplete ? -1 : _sub_gid;
+                }
+                committed += ent;
+            }
+
+            if (group != nullptr) {
+                group->sub_last_update = QDateTime::currentMSecsSinceEpoch() / 1000;
+                group->info = sub_user_info;
+                if (rawUpdater->detected_source_type == "clash") {
+                    group->source_type = "clash";
+                    if (group->DefaultClientManagedBySubscription()) {
+                        group->default_client_mode = "mihomo";
+                        group->default_client_value = "mihomo/1.19.28";
+                        group->SetDefaultClientManagedBySubscription(true);
+                    }
+                    if (group->DefaultResolverManagedBySubscription()) {
+                        group->default_server_resolver_doh = rawUpdater->detected_doh_upstreams.join("\n");
+                        group->default_server_resolver_origin = rawUpdater->detected_resolver_origin;
+                        group->default_server_resolver_policy_version =
+                            NekoGui_resolver::SubscriptionResolverPolicyVersion;
+                        group->default_server_resolver_allow_local_fallback = false;
+                        group->SetDefaultResolverManagedBySubscription(true);
+                    }
+                } else if (group->source_type.isEmpty() && asURL) {
+                    group->source_type = "subscription";
+                }
+
+                out_all = group->Profiles();
+
+                auto saveGroupOrRollback = [&]() {
+                    group->Save();
+                    if (group->last_save_succeeded) return true;
+                    if (group->last_save_indeterminate) {
+                        MW_show_log("<<<<<<<< " + QObject::tr(
+                                                      "Subscription update became indeterminate; new and old profiles were preserved for explicit recovery."));
+                        return false;
+                    }
+
+                    groupSnapshot.Restore(group);
+                    rollbackCommitted(QStringLiteral("Rollback after subscription group metadata save failed."));
+                    MW_show_log("<<<<<<<< " + QObject::tr(
+                                                  "Subscription update aborted: group metadata could not be committed; old profiles were preserved."));
+                    return false;
+                };
+
+                QString change_text;
+                int deletionFailures = 0;
+                auto deleteOldProfile = [&](const std::shared_ptr<NekoGui::ProxyEntity>& profile,
+                                            const QString& reason) {
+                    QString deletionError;
+                    if (NekoGui::profileManager->DeleteProfile(profile->id, reason, &deletionError)) return;
+                    deletionFailures++;
+                    qCritical() << "Subscription cleanup preserved profile" << profile->id << deletionError;
+                };
+
+                if (clearExistingProfiles) {
+                    group->order.clear();
+                    for (const auto& ent: rawUpdater->updated_order) {
+                        group->order.append(ent->id);
+                        change_text += "[+] " + ent->bean->DisplayTypeAndName() + "\n";
+                    }
+                    if (!saveGroupOrRollback()) return createdGroup ? -1 : _sub_gid;
+
+                    MW_show_log(QObject::tr("Clearing servers..."));
+                    for (const auto& profile: in) {
+                        deleteOldProfile(
+                            profile, QStringLiteral("Subscription clear removed an old profile."));
+                    }
+                } else {
+                    // find and delete not updated profile by ProfileFilter
+                    NekoGui::ProfileFilter::OnlyInSrc_ByPointer(out_all, in, out);
+                    NekoGui::ProfileFilter::OnlyInSrc(in, out, only_in);
+                    NekoGui::ProfileFilter::OnlyInSrc(out, in, only_out);
+                    NekoGui::ProfileFilter::Common(in, out, update_keep, update_del, false);
+
+                    QString notice_added;
+                    QString notice_deleted;
+                    for (const auto& ent: only_out) {
+                        notice_added += "[+] " + ent->bean->DisplayTypeAndName() + "\n";
+                    }
+                    for (const auto& ent: only_in) {
+                        notice_deleted += "[-] " + ent->bean->DisplayTypeAndName() + "\n";
+                    }
+
+                    // sort according to order in remote
+                    group->order = {};
+                    for (const auto& ent: rawUpdater->updated_order) {
+                        auto deleted_index = update_del.indexOf(ent);
+                        if (deleted_index >= 0) {
+                            if (deleted_index >= update_keep.count()) continue; // should not happen
+                            auto ent2 = update_keep[deleted_index];
+                            group->order.append(ent2->id);
+                        } else {
+                            group->order.append(ent->id);
+                        }
+                    }
+                    if (!saveGroupOrRollback()) return createdGroup ? -1 : _sub_gid;
+
+                    // cleanup
+                    for (const auto& ent: out_all) {
+                        if (!group->order.contains(ent->id)) {
+                            deleteOldProfile(
+                                ent, QStringLiteral("Subscription refresh removed a superseded profile."));
+                        }
+                    }
+
+                    change_text = "\n" + QObject::tr("Added %1 profiles:\n%2\nDeleted %3 Profiles:\n%4")
+                                             .arg(only_out.length())
+                                             .arg(notice_added)
+                                             .arg(only_in.length())
+                                             .arg(notice_deleted);
+                    if (only_out.length() + only_in.length() == 0) change_text = QObject::tr("Nothing");
+                }
+
+                if (deletionFailures > 0) {
+                    change_text += "\n" + QObject::tr(
+                                              "%1 old profile(s) could not be deleted and were preserved for manual review.")
+                                              .arg(deletionFailures);
+                }
+
+                MW_show_log("<<<<<<<< " + QObject::tr("Change of %1:").arg(group->name) + "\n" + change_text);
+                if (createdGroup) MW_dialog_message("SubUpdater", "NewGroup");
+                MW_dialog_message("SubUpdater", "finish-dingyue");
+            } else {
+                NekoGui::dataStore->imported_count = rawUpdater->updated_order.count();
+                MW_dialog_message("SubUpdater", "finish");
+            }
+            return _sub_gid;
+        };
+
+        if (application == nullptr || QThread::currentThread() == application->thread()) {
+            return commitParsedUpdate();
+        }
+        if (QCoreApplication::closingDown()) return _sub_gid;
+        int commitResult = _sub_gid;
+        const auto invoked = QMetaObject::invokeMethod(
+            application,
+            [&] { commitResult = commitParsedUpdate(); },
+            Qt::BlockingQueuedConnection);
+        if (!invoked) return _sub_gid;
+        return commitResult;
     }
 } // namespace NekoGui_sub
 
@@ -776,7 +1045,7 @@ bool UI_update_all_groups_Updating = false;
 
 #define should_skip_group(g) (g == nullptr || g->url.isEmpty() || g->archive || (onlyAllowed && g->skip_auto_update))
 
-void serialUpdateSubscription(const QList<int> &groupsTabOrder, int _order, bool onlyAllowed) {
+void serialUpdateSubscription(const QList<int>& groupsTabOrder, int _order, bool onlyAllowed) {
     if (_order >= groupsTabOrder.size()) {
         UI_update_all_groups_Updating = false;
         return;

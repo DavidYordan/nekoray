@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.5)
 
 project(nekobox VERSION 0.1 LANGUAGES CXX)
 
+include(CTest)
+
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -74,7 +76,7 @@ endif ()
 
 # grpc
 if (NKR_NO_GRPC)
-    nkr_add_compile_definitions(NKR_NO_GRPC)
+    message(FATAL_ERROR "This Windows RouteFluent build requires the authenticated GUI/core RPC protocol; NKR_NO_GRPC is unsupported.")
 else ()
     # My proto
     include("cmake/myproto.cmake")
@@ -125,7 +127,12 @@ set(PROJECT_SOURCES
         main/main.cpp
         main/NekoGui.cpp
         main/NekoGui_Utils.cpp
+        main/ConfigMutation.cpp
+        main/ConfigPathSafety.cpp
+        main/ConfigRecovery.cpp
+        main/ConfigTransaction.cpp
         main/HTTPRequestHelper.cpp
+        main/RuntimeTransition.cpp
 
         3rdparty/base64.cpp
         3rdparty/qrcodegen.cpp
@@ -144,15 +151,17 @@ set(PROJECT_SOURCES
         db/traffic/TrafficLooper.cpp
         db/ProfileFilter.cpp
         db/ConfigBuilder.cpp
+        db/ResolverConfig.cpp
 
         fmt/AbstractBean.cpp
         fmt/Bean2CoreObj_box.cpp
         fmt/Bean2Link.cpp
         fmt/Link2Bean.cpp
+        fmt/ShareFormats.cpp
         fmt/ChainBean.hpp # translate
 
         sub/GroupUpdater.cpp
-        sub/MultiMapperExport.cpp
+        sub/ClashResolverPolicy.cpp
 
         sys/CoreProcess.cpp
         sys/AutoRun.cpp
@@ -296,4 +305,107 @@ target_link_libraries(nekobox PRIVATE
 
 if (QT_VERSION_MAJOR EQUAL 6)
     qt_finalize_executable(nekobox)
+endif ()
+
+if (BUILD_TESTING)
+    add_executable(config_recovery_test
+            test/config_recovery_test.cpp
+            main/ConfigMutation.cpp
+            main/ConfigPathSafety.cpp
+            main/ConfigRecovery.cpp
+            main/ConfigTransaction.cpp
+    )
+    target_compile_definitions(config_recovery_test PRIVATE NEKORAY_CONFIG_TRANSACTION_TESTING)
+    target_link_libraries(config_recovery_test PRIVATE Qt${QT_VERSION_MAJOR}::Core)
+    add_test(NAME config_recovery_test COMMAND config_recovery_test)
+    set_tests_properties(config_recovery_test PROPERTIES TIMEOUT 15)
+    add_executable(runtime_transition_test
+            test/runtime_transition_test.cpp
+            main/RuntimeTransition.cpp
+    )
+    target_link_libraries(runtime_transition_test PRIVATE Qt${QT_VERSION_MAJOR}::Core Threads::Threads)
+    add_test(NAME runtime_transition_test COMMAND runtime_transition_test)
+    set_tests_properties(runtime_transition_test PROPERTIES TIMEOUT 15)
+    add_executable(share_format_test
+            test/share_format_test.cpp
+            fmt/ShareFormats.cpp
+    )
+    target_link_libraries(share_format_test PRIVATE
+            Qt${QT_VERSION_MAJOR}::Core
+            Qt${QT_VERSION_MAJOR}::Network
+    )
+    add_test(NAME share_format_test COMMAND share_format_test)
+    set_tests_properties(share_format_test PROPERTIES TIMEOUT 15)
+    if (NOT NKR_NO_YAML)
+        add_executable(resolver_policy_test
+                test/resolver_policy_test.cpp
+                db/ResolverConfig.cpp
+                sub/ClashResolverPolicy.cpp
+        )
+        target_link_libraries(resolver_policy_test PRIVATE
+                Qt${QT_VERSION_MAJOR}::Core
+                Qt${QT_VERSION_MAJOR}::Network
+                yaml-cpp
+        )
+        add_test(NAME resolver_policy_test COMMAND resolver_policy_test)
+        set_tests_properties(resolver_policy_test PROPERTIES TIMEOUT 15)
+    endif ()
+    if (WIN32)
+        add_executable(core_exit_integration_test
+                test/core_exit_integration_test.cpp
+        )
+        target_link_libraries(core_exit_integration_test PRIVATE
+                Qt${QT_VERSION_MAJOR}::Core
+                Qt${QT_VERSION_MAJOR}::Network
+                myproto
+        )
+        # This executable starts and, on failure, may terminate the exact core
+        # process that it created.  Do not register it with CTest: a CMake
+        # build cannot prove that an ignored deployment core is from the
+        # current source tree.  The complete Windows packaging script invokes
+        # it only after building the package core and supplies an exact
+        # path/hash authorization through the child environment.
+        add_custom_command(TARGET config_recovery_test POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:Qt${QT_VERSION_MAJOR}::Core>
+                $<TARGET_FILE_DIR:config_recovery_test>
+        )
+        add_custom_command(TARGET runtime_transition_test POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:Qt${QT_VERSION_MAJOR}::Core>
+                $<TARGET_FILE_DIR:runtime_transition_test>
+        )
+        add_custom_command(TARGET share_format_test POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:Qt${QT_VERSION_MAJOR}::Core>
+                $<TARGET_FILE_DIR:share_format_test>
+        )
+        if (TARGET resolver_policy_test)
+            add_custom_command(TARGET resolver_policy_test POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    $<TARGET_FILE:Qt${QT_VERSION_MAJOR}::Core>
+                    $<TARGET_FILE_DIR:resolver_policy_test>
+            )
+            add_custom_command(TARGET resolver_policy_test POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    $<TARGET_FILE:Qt${QT_VERSION_MAJOR}::Network>
+                    $<TARGET_FILE_DIR:resolver_policy_test>
+            )
+        endif ()
+        add_custom_command(TARGET share_format_test POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:Qt${QT_VERSION_MAJOR}::Network>
+                $<TARGET_FILE_DIR:share_format_test>
+        )
+        add_custom_command(TARGET core_exit_integration_test POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:Qt${QT_VERSION_MAJOR}::Core>
+                $<TARGET_FILE_DIR:core_exit_integration_test>
+        )
+        add_custom_command(TARGET core_exit_integration_test POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:Qt${QT_VERSION_MAJOR}::Network>
+                $<TARGET_FILE_DIR:core_exit_integration_test>
+        )
+    endif ()
 endif ()

@@ -3,10 +3,12 @@
 
 #include "fmt/includes.h"
 #include "fmt/Preset.hpp"
+#include "fmt/ShareFormats.hpp"
+#include "main/ConfigRecovery.hpp"
 #include "db/ProfileFilter.hpp"
 #include "db/ConfigBuilder.hpp"
 #include "sub/GroupUpdater.hpp"
-#include "sub/MultiMapperExport.hpp"
+#include "rpc/gRPC.h"
 #include "sys/CoreProcess.hpp"
 #include "sys/AutoRun.hpp"
 
@@ -49,213 +51,14 @@
 #include <QMessageBox>
 #include <QDir>
 #include <QFileInfo>
-#include <QMap>
-#include <QSet>
-#include <QElapsedTimer>
-#include <QEventLoop>
 #include <QHostAddress>
-#include <QHostInfo>
 #include <QJsonArray>
 #include <QJsonObject>
-#include <QNetworkAccessManager>
-#include <QNetworkProxy>
-#include <QNetworkReply>
-#include <QNetworkRequest>
-#include <QPointer>
-#include <QProgressDialog>
+#include <QSet>
 #include <QTcpServer>
 
-#include <atomic>
-#include <cstring>
-
 namespace {
-    enum class ResolveServerMode {
-        SubscriptionDoh,
-        ProviderDoh,
-        RemoteDoh,
-        DirectDoh,
-        PublicDoh,
-        CustomDoh,
-        System,
-    };
-
-    enum class ResolveOutboundMode {
-        Direct,
-        MainProxy,
-        AuxProxy,
-    };
-
-    struct ResolveOptions {
-        ResolveServerMode serverMode = ResolveServerMode::SubscriptionDoh;
-        ResolveOutboundMode outboundMode = ResolveOutboundMode::Direct;
-        std::shared_ptr<std::atomic_bool> cancelToken;
-        QStringList customDohUpstreams;
-        QString resolverName;
-        int outboundPort = 0;
-        QString outboundName = "Direct";
-    };
-
-    struct ServerResolveResult {
-        std::shared_ptr<NekoGui::ProxyEntity> profile;
-        QString originalAddress;
-        QString resolvedAddress;
-        QStringList allAddresses;
-        QString resolverName;
-        QString outboundName;
-        QString method;
-        QString error;
-        qint64 elapsedMs = 0;
-        bool skipped = false;
-
-        bool ok() const {
-            return !resolvedAddress.isEmpty() && error.isEmpty() && !skipped;
-        }
-    };
-
-    QStringList splitResolverLines(const QString &raw) {
-        auto normalized = raw;
-        normalized.replace(",", "\n");
-        QStringList out;
-        QSet<QString> seen;
-        for (const auto &line: SplitLinesSkipSharp(normalized)) {
-            const auto value = line.trimmed();
-            if (value.isEmpty() || seen.contains(value)) continue;
-            seen.insert(value);
-            out << value;
-        }
-        return out;
-    }
-
-    QString resolveServerModeName(ResolveServerMode mode) {
-        switch (mode) {
-            case ResolveServerMode::SubscriptionDoh:
-                return "Subscription DoH";
-            case ResolveServerMode::ProviderDoh:
-                return "Profile DoH override";
-            case ResolveServerMode::RemoteDoh:
-                return "Routing Remote DNS DoH";
-            case ResolveServerMode::DirectDoh:
-                return "Routing Direct DNS DoH";
-            case ResolveServerMode::PublicDoh:
-                return "Public DoH";
-            case ResolveServerMode::CustomDoh:
-                return "Custom DoH";
-            case ResolveServerMode::System:
-                return "System resolver";
-        }
-        return "Resolver";
-    }
-
-    QStringList httpsDohOnly(const QStringList &items) {
-        QStringList out;
-        for (const auto &item: items) {
-            const QUrl url(item.trimmed());
-            if (url.isValid() && url.scheme().toLower() == "https" && !url.host().isEmpty()) out << item.trimmed();
-        }
-        return out;
-    }
-
-    void append16(QByteArray &out, quint16 value) {
-        out.append(char((value >> 8) & 0xff));
-        out.append(char(value & 0xff));
-    }
-
-    quint16 read16(const QByteArray &data, int offset) {
-        return (quint8(data[offset]) << 8) | quint8(data[offset + 1]);
-    }
-
-    QByteArray buildDnsQuery(const QString &domain, quint16 qtype) {
-        QByteArray out;
-        append16(out, 0x4e4b);
-        append16(out, 0x0100);
-        append16(out, 1);
-        append16(out, 0);
-        append16(out, 0);
-        append16(out, 0);
-
-        for (const auto &label: domain.split(".", Qt::SkipEmptyParts)) {
-            auto bytes = label.toUtf8();
-            if (bytes.size() > 63) return {};
-            out.append(char(bytes.size()));
-            out.append(bytes);
-        }
-        out.append(char(0));
-        append16(out, qtype);
-        append16(out, 1);
-        return out;
-    }
-
-    bool skipDnsName(const QByteArray &data, int &offset) {
-        while (offset < data.size()) {
-            const auto len = quint8(data[offset++]);
-            if (len == 0) return true;
-            if ((len & 0xc0) == 0xc0) {
-                if (offset >= data.size()) return false;
-                offset++;
-                return true;
-            }
-            if ((len & 0xc0) != 0) return false;
-            offset += len;
-            if (offset > data.size()) return false;
-        }
-        return false;
-    }
-
-    QStringList parseDnsAddresses(const QByteArray &data, quint16 qtype) {
-        QStringList out;
-        if (data.size() < 12) return out;
-        const auto qdCount = read16(data, 4);
-        const auto anCount = read16(data, 6);
-        int offset = 12;
-        for (int i = 0; i < qdCount; i++) {
-            if (!skipDnsName(data, offset)) return {};
-            offset += 4;
-            if (offset > data.size()) return {};
-        }
-        for (int i = 0; i < anCount; i++) {
-            if (!skipDnsName(data, offset)) return out;
-            if (offset + 10 > data.size()) return out;
-            const auto type = read16(data, offset);
-            const auto klass = read16(data, offset + 2);
-            const auto rdLength = read16(data, offset + 8);
-            offset += 10;
-            if (offset + rdLength > data.size()) return out;
-            if (klass == 1 && type == qtype) {
-                if (type == 1 && rdLength == 4) {
-                    out << QStringLiteral("%1.%2.%3.%4")
-                               .arg(quint8(data[offset]))
-                               .arg(quint8(data[offset + 1]))
-                               .arg(quint8(data[offset + 2]))
-                               .arg(quint8(data[offset + 3]));
-                } else if (type == 28 && rdLength == 16) {
-                    Q_IPV6ADDR addr{};
-                    memcpy(addr.c, data.constData() + offset, 16);
-                    out << QHostAddress(addr).toString();
-                }
-            }
-            offset += rdLength;
-        }
-        return out;
-    }
-
-    QStringList publicDohUpstreams() {
-        return {
-            "https://cloudflare-dns.com/dns-query",
-            "https://dns.google/dns-query",
-            "https://dns.alidns.com/dns-query",
-            "https://doh.pub/dns-query",
-        };
-    }
-
-    void appendUniqueAddresses(QStringList &target, const QStringList &addresses) {
-        for (const auto &address: addresses) {
-            if (!target.contains(address)) target << address;
-        }
-    }
-
-    bool isResolveCanceled(const ResolveOptions &options) {
-        return options.cancelToken != nullptr && options.cancelToken->load();
-    }
+    constexpr auto ExitContinuationProperty = "routefluent_exit_continuation_authorized";
 
     bool canListenLocalPort(int port) {
         if (!IsValidPort(port)) return false;
@@ -277,24 +80,15 @@ namespace {
     }
 
     void pruneAuxiliaryProfilePorts() {
-        QMap<int, int> normalized;
-        QSet<int> seenPorts;
-        for (auto it = NekoGui::dataStore->aux_profile_ports.constBegin(); it != NekoGui::dataStore->aux_profile_ports.constEnd(); ++it) {
-            auto profile = NekoGui::profileManager->GetProfile(it.key());
-            auto group = profile == nullptr ? nullptr : NekoGui::profileManager->GetGroup(profile->gid);
-            if (profile == nullptr || profile->bean == nullptr || group == nullptr || group->archive) continue;
-            if (!IsValidPort(it.value()) || seenPorts.contains(it.value())) continue;
-            normalized.insert(it.key(), it.value());
-            seenPorts.insert(it.value());
-        }
-        if (normalized != NekoGui::dataStore->aux_profile_ports) {
-            NekoGui::dataStore->aux_profile_ports = normalized;
-        }
+        // Kept as a compatibility call site only. Missing/unknown profiles,
+        // invalid persisted entries and archived groups must never be silently
+        // removed during UI refresh; load/build validation reports them and
+        // only an explicit mapping action may change the stored map.
     }
 
-    void collectCustomInboundPorts(QSet<int> &used) {
+    void collectCustomInboundPorts(QSet<int>& used) {
         const auto inbounds = QString2QJsonObject(NekoGui::dataStore->custom_inbound)["inbounds"].toArray();
-        for (const auto &value: inbounds) {
+        for (const auto& value: inbounds) {
             if (!value.isObject()) continue;
             const auto port = value.toObject()["listen_port"].toInt(-1);
             if (IsValidPort(port)) used.insert(port);
@@ -302,7 +96,6 @@ namespace {
     }
 
     int allocateAuxiliaryPort() {
-        pruneAuxiliaryProfilePorts();
         NekoGui::dataStore->NormalizeAuxiliaryPortSettings();
         QSet<int> used{
             NekoGui::dataStore->inbound_socks_port,
@@ -329,285 +122,11 @@ namespace {
         return QStringLiteral("socks5h://127.0.0.1:%1\nhttp://127.0.0.1:%1").arg(port);
     }
 
-    bool profilesContainAuxiliaryPort(const QList<std::shared_ptr<NekoGui::ProxyEntity>> &profiles) {
-        for (const auto &profile: profiles) {
+    bool profilesContainAuxiliaryPort(const QList<std::shared_ptr<NekoGui::ProxyEntity>>& profiles) {
+        for (const auto& profile: profiles) {
             if (profile != nullptr && NekoGui::dataStore->aux_profile_ports.contains(profile->id)) return true;
         }
         return false;
-    }
-
-    QStringList groupResolverUpstreams(const std::shared_ptr<NekoGui::ProxyEntity> &profile) {
-        if (profile == nullptr) return {};
-        auto group = NekoGui::profileManager->GetGroup(profile->gid);
-        if (group == nullptr) return {};
-        return splitResolverLines(group->default_server_resolver_doh);
-    }
-
-    QStringList queryDoh(const QUrl &url, const QString &domain, quint16 qtype, const ResolveOptions &options, QString *error) {
-        if (isResolveCanceled(options)) {
-            if (error != nullptr) *error = "canceled";
-            return {};
-        }
-        const auto query = buildDnsQuery(domain, qtype);
-        if (query.isEmpty()) {
-            if (error != nullptr) *error = "invalid domain name";
-            return {};
-        }
-
-        QNetworkAccessManager manager;
-        if (options.outboundMode == ResolveOutboundMode::MainProxy || options.outboundMode == ResolveOutboundMode::AuxProxy) {
-            const auto port = options.outboundMode == ResolveOutboundMode::MainProxy ? NekoGui::dataStore->inbound_socks_port : options.outboundPort;
-            if (options.outboundMode == ResolveOutboundMode::MainProxy && NekoGui::dataStore->started_id < 0) {
-                if (error != nullptr) *error = "main profile is not running";
-                return {};
-            }
-            if (!IsValidPort(port)) {
-                if (error != nullptr) *error = "selected proxy port is invalid";
-                return {};
-            }
-            QNetworkProxy proxy;
-            proxy.setType(QNetworkProxy::Socks5Proxy);
-            proxy.setHostName("127.0.0.1");
-            proxy.setPort(port);
-            proxy.setCapabilities(proxy.capabilities() | QNetworkProxy::HostNameLookupCapability);
-            manager.setProxy(proxy);
-        }
-        QNetworkRequest request(url);
-        request.setHeader(QNetworkRequest::ContentTypeHeader, "application/dns-message");
-        request.setRawHeader("Accept", "application/dns-message");
-        auto reply = manager.post(request, query);
-
-        bool timedOut = false;
-        bool canceled = false;
-        QTimer timeoutTimer;
-        timeoutTimer.setSingleShot(true);
-        timeoutTimer.setInterval(10000);
-        QObject::connect(&timeoutTimer, &QTimer::timeout, reply, [&] {
-            timedOut = true;
-            reply->abort();
-        });
-        QTimer cancelTimer;
-        cancelTimer.setInterval(100);
-        QObject::connect(&cancelTimer, &QTimer::timeout, reply, [&] {
-            if (!isResolveCanceled(options)) return;
-            canceled = true;
-            reply->abort();
-        });
-        QEventLoop loop;
-        QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
-        timeoutTimer.start();
-        cancelTimer.start();
-        loop.exec();
-        timeoutTimer.stop();
-        cancelTimer.stop();
-
-        if (reply->error() != QNetworkReply::NoError) {
-            if (error != nullptr) {
-                if (canceled || isResolveCanceled(options)) {
-                    *error = "canceled";
-                } else if (timedOut) {
-                    *error = "timeout";
-                } else {
-                    *error = reply->errorString();
-                }
-            }
-            reply->deleteLater();
-            return {};
-        }
-        const auto body = reply->readAll();
-        reply->deleteLater();
-        return parseDnsAddresses(body, qtype);
-    }
-
-    QStringList resolveViaDoh(const QString &domain, const QStringList &upstreams, const ResolveOptions &options, QString *method, QString *error) {
-        if (isResolveCanceled(options)) {
-            if (error != nullptr) *error = "canceled";
-            return {};
-        }
-        const auto dohUpstreams = httpsDohOnly(upstreams);
-        if (dohUpstreams.isEmpty()) {
-            if (error != nullptr) *error = "no HTTPS DoH upstream";
-            return {};
-        }
-
-        QString lastError;
-        for (const auto &upstream: dohUpstreams) {
-            if (isResolveCanceled(options)) {
-                if (error != nullptr) *error = "canceled";
-                return {};
-            }
-            const QUrl url(upstream);
-            QString errA;
-            QString errAAAA;
-            QStringList addresses;
-            appendUniqueAddresses(addresses, queryDoh(url, domain, 1, options, &errA));
-            if (!isResolveCanceled(options)) appendUniqueAddresses(addresses, queryDoh(url, domain, 28, options, &errAAAA));
-            if (!addresses.isEmpty()) {
-                if (method != nullptr) *method = "DoH " + upstream + " via " + options.outboundName;
-                return addresses;
-            }
-            QStringList upstreamErrors;
-            if (!errA.isEmpty()) upstreamErrors << "A: " + errA;
-            if (!errAAAA.isEmpty()) upstreamErrors << "AAAA: " + errAAAA;
-            if (!upstreamErrors.isEmpty()) lastError = upstream + ": " + upstreamErrors.join("; ");
-        }
-        if (error != nullptr) *error = lastError.isEmpty() ? "no DNS answers" : lastError;
-        return {};
-    }
-
-    QStringList resolveViaSystem(const QString &domain, QString *method, QString *error) {
-        const auto host = QHostInfo::fromName(domain);
-        if (host.error() != QHostInfo::NoError) {
-            if (error != nullptr) *error = host.errorString();
-            return {};
-        }
-        QStringList v4;
-        QStringList other;
-        for (const auto &address: host.addresses()) {
-            if (address.protocol() == QAbstractSocket::IPv4Protocol) {
-                v4 << address.toString();
-            } else if (address.protocol() == QAbstractSocket::IPv6Protocol) {
-                other << address.toString();
-            }
-        }
-        if (method != nullptr) *method = "System";
-        appendUniqueAddresses(v4, other);
-        return v4;
-    }
-
-    bool profileCanResolve(const std::shared_ptr<NekoGui::ProxyEntity> &profile, QString *reason = nullptr) {
-        if (profile == nullptr || profile->bean == nullptr) {
-            if (reason != nullptr) *reason = "empty profile";
-            return false;
-        }
-        if (profile->type == "chain" || profile->type == "custom") {
-            if (reason != nullptr) *reason = "unsupported profile type";
-            return false;
-        }
-        if (profile->bean->serverAddress.trimmed().isEmpty()) {
-            if (reason != nullptr) *reason = "empty server address";
-            return false;
-        }
-        if (IsIpAddress(profile->bean->serverAddress)) {
-            if (reason != nullptr) *reason = "already an IP address";
-            return false;
-        }
-        return true;
-    }
-
-    QStringList resolverUpstreamsForMode(const std::shared_ptr<NekoGui::ProxyEntity> &profile, ResolveServerMode mode, const QStringList &customDohUpstreams) {
-        if (mode == ResolveServerMode::SubscriptionDoh) return groupResolverUpstreams(profile);
-        if (mode == ResolveServerMode::ProviderDoh) return splitResolverLines(profile->bean->serverResolverDohUpstreams);
-        if (mode == ResolveServerMode::RemoteDoh) return splitResolverLines(NekoGui::dataStore->routing->remote_dns);
-        if (mode == ResolveServerMode::DirectDoh) return splitResolverLines(NekoGui::dataStore->routing->direct_dns);
-        if (mode == ResolveServerMode::PublicDoh) return publicDohUpstreams();
-        if (mode == ResolveServerMode::CustomDoh) return customDohUpstreams;
-        return {};
-    }
-
-    ServerResolveResult resolveProfileServer(const std::shared_ptr<NekoGui::ProxyEntity> &profile, const ResolveOptions &options) {
-        ServerResolveResult result;
-        result.profile = profile;
-        result.resolverName = options.resolverName.isEmpty() ? resolveServerModeName(options.serverMode) : options.resolverName;
-        result.outboundName = options.outboundName;
-        if (profile != nullptr && profile->bean != nullptr) result.originalAddress = profile->bean->serverAddress;
-
-        QString skipReason;
-        if (!profileCanResolve(profile, &skipReason)) {
-            result.skipped = true;
-            result.error = skipReason;
-            return result;
-        }
-
-        QString method;
-        QString error;
-        QStringList addresses;
-        QElapsedTimer elapsed;
-        elapsed.start();
-        if (options.serverMode == ResolveServerMode::System) {
-            if (options.outboundMode != ResolveOutboundMode::Direct) {
-                result.error = "system resolver cannot use a selected proxy path";
-                return result;
-            }
-            addresses = resolveViaSystem(result.originalAddress, &method, &error);
-        } else {
-            addresses = resolveViaDoh(result.originalAddress,
-                                      resolverUpstreamsForMode(profile, options.serverMode, options.customDohUpstreams),
-                                      options,
-                                      &method,
-                                      &error);
-        }
-        result.elapsedMs = elapsed.elapsed();
-
-        result.method = method;
-        result.allAddresses = addresses;
-        if (!addresses.isEmpty()) {
-            result.resolvedAddress = addresses.first();
-        } else {
-            result.error = error.isEmpty() ? "no address resolved" : error;
-        }
-        return result;
-    }
-
-    void applyResolvedServerAddress(const std::shared_ptr<NekoGui::ProxyEntity> &profile, const QString &address) {
-        if (profile == nullptr || profile->bean == nullptr || address.isEmpty()) return;
-        const auto domain = profile->bean->serverAddress;
-        profile->bean->serverAddress = address;
-
-        if (auto stream = NekoGui_fmt::GetStreamSettings(profile->bean.get()); stream != nullptr) {
-            if (stream->security == "tls" && stream->sni.isEmpty()) stream->sni = domain;
-            if (stream->network == "ws" && stream->host.isEmpty()) stream->host = domain;
-        }
-        if (profile->type == "anytls") {
-            auto bean = profile->AnyTLSBean();
-            if (bean->sni.isEmpty()) bean->sni = domain;
-        } else if (profile->type == "hysteria2" || profile->type == "tuic") {
-            auto bean = profile->QUICBean();
-            if (bean->sni.isEmpty()) bean->sni = domain;
-        }
-    }
-
-    std::shared_ptr<NekoGui::ProxyEntity> cloneProfileForResolvedAddress(const std::shared_ptr<NekoGui::ProxyEntity> &profile, const QString &address) {
-        if (profile == nullptr || profile->bean == nullptr) return nullptr;
-        auto clone = NekoGui::ProfileManager::NewProxyEntity(profile->type);
-        clone->FromJson(profile->ToJson({"id", "yc", "report", "traffic"}));
-        clone->id = -1;
-        clone->latency = 0;
-        clone->full_test_report = "";
-        if (!clone->bean->name.isEmpty()) clone->bean->name += " [IP]";
-        applyResolvedServerAddress(clone, address);
-        return clone;
-    }
-
-    QString formatResolveResults(const QList<ServerResolveResult> &results) {
-        QStringList lines;
-        for (const auto &result: results) {
-            const auto name = result.profile != nullptr && result.profile->bean != nullptr
-                                  ? result.profile->bean->DisplayTypeAndName()
-                                  : QStringLiteral("<unknown>");
-            if (result.ok()) {
-                lines << QStringLiteral("[OK] #%1 %2\n  %3 -> %4\n  resolver: %5\n  outbound: %6\n  method: %7\n  elapsed: %8 ms\n  all: %9")
-                             .arg(result.profile->id)
-                             .arg(name)
-                             .arg(result.originalAddress,
-                                  result.resolvedAddress,
-                                  result.resolverName,
-                                  result.outboundName,
-                                  result.method,
-                                  QString::number(result.elapsedMs),
-                                  result.allAddresses.join(", "));
-            } else {
-                lines << QStringLiteral("[%1] %2\n  %3\n  resolver: %4\n  outbound: %5\n  elapsed: %6 ms\n  reason: %7")
-                             .arg(result.skipped ? "SKIP" : "FAIL",
-                                  name,
-                                  result.originalAddress,
-                                  result.resolverName,
-                                  result.outboundName,
-                                  QString::number(result.elapsedMs),
-                                  result.error);
-            }
-        }
-        return lines.join("\n\n");
     }
 } // namespace
 
@@ -615,19 +134,33 @@ void UI_InitMainWindow() {
     mainwindow = new MainWindow;
 }
 
-MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWindow) {
+MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), ui(new Ui::MainWindow) {
     mainwindow = this;
-    MW_dialog_message = [=](const QString &a, const QString &b) {
+    MW_dialog_message = [=](const QString& a, const QString& b) {
         runOnUiThread([=] { dialog_message_impl(a, b); });
     };
 
     // Load Manager
     NekoGui::profileManager->LoadManager();
     pruneAuxiliaryProfilePorts();
+    const auto recoveryNotices = NekoGui_ConfigRecovery::TakeRecoveryNotices();
 
     // Setup misc UI
     themeManager->ApplyTheme(NekoGui::dataStore->theme);
     ui->setupUi(this);
+    if (!recoveryNotices.isEmpty()) {
+        QTimer::singleShot(0, this, [recoveryNotices] {
+            QMessageBox::warning(
+                GetMainWindow(),
+                QObject::tr("Configuration recovery required"),
+                QObject::tr(
+                    "%1 configuration issue(s) were detected. Original files were not modified. "
+                    "Verified snapshots and audit metadata were written under:\n%2\n\n"
+                    "No automatic repair was attempted.")
+                    .arg(recoveryNotices.size())
+                    .arg(NekoGui_ConfigRecovery::RecoveryRootPath()));
+        });
+    }
     //
     connect(ui->menu_start, &QAction::triggered, this, [=]() { neko_start(); });
     connect(ui->menu_stop, &QAction::triggered, this, [=]() { neko_stop(); });
@@ -664,9 +197,11 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWi
     ui->toolButton_preferences->setMenu(ui->menu_preferences);
     ui->toolButton_server->setMenu(ui->menu_server);
     ui->menubar->setVisible(false);
-    connect(ui->toolButton_document, &QToolButton::clicked, this, [=] { QDesktopServices::openUrl(QUrl("https://matsuridayo.github.io/")); });
-    connect(ui->toolButton_ads, &QToolButton::clicked, this, [=] { QDesktopServices::openUrl(QUrl("https://neko-box.pages.dev/喵")); });
-    connect(ui->toolButton_update, &QToolButton::clicked, this, [=] { runOnNewThread([=] { CheckUpdate(); }); });
+    // Private Windows fork: the inherited public documentation, advertising
+    // and updater endpoints do not belong to this product.
+    ui->toolButton_document->hide();
+    ui->toolButton_ads->hide();
+    ui->toolButton_update->hide();
 
     // Setup log UI
     ui->splitter->restoreState(DecodeB64IfValid(NekoGui::dataStore->splitter_state));
@@ -692,13 +227,13 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWi
         auto bar = ui->masterLogBrowser->verticalScrollBar();
         bar->setValue(bar->maximum());
     });
-    MW_show_log = [=](const QString &log) {
+    MW_show_log = [=](const QString& log) {
         runOnUiThread([=] { show_log_impl(log); });
     };
-    MW_show_log_ext = [=](const QString &tag, const QString &log) {
+    MW_show_log_ext = [=](const QString& tag, const QString& log) {
         runOnUiThread([=] { show_log_impl("[" + tag + "] " + log); });
     };
-    MW_show_log_ext_vt100 = [=](const QString &log) {
+    MW_show_log_ext_vt100 = [=](const QString& log) {
         runOnUiThread([=] { show_log_impl(cleanVT100String(log)); });
     };
 
@@ -709,7 +244,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWi
         group->Save();
     };
     ui->proxyListTable->refresh_data = [=](int id) { refresh_proxy_list_impl_refresh_data(id); };
-    if (auto button = ui->proxyListTable->findChild<QAbstractButton *>(QString(), Qt::FindDirectChildrenOnly)) {
+    if (auto button = ui->proxyListTable->findChild<QAbstractButton*>(QString(), Qt::FindDirectChildrenOnly)) {
         // Corner Button
         connect(button, &QAbstractButton::clicked, this, [=] { refresh_proxy_list_impl(-1, {GroupSortMethod::ById}); });
     }
@@ -771,13 +306,13 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWi
             refresh_status();
         }
     });
-    connect(ui->search, &QLineEdit::textChanged, this, [=](const QString &text) {
+    connect(ui->search, &QLineEdit::textChanged, this, [=](const QString& text) {
         if (text.isEmpty()) {
             for (int i = 0; i < ui->proxyListTable->rowCount(); i++) {
                 ui->proxyListTable->setRowHidden(i, false);
             }
         } else {
-            QList<QTableWidgetItem *> findItem = ui->proxyListTable->findItems(text, Qt::MatchContains);
+            QList<QTableWidgetItem*> findItem = ui->proxyListTable->findItems(text, Qt::MatchContains);
             for (int i = 0; i < ui->proxyListTable->rowCount(); i++) {
                 ui->proxyListTable->setRowHidden(i, true);
             }
@@ -820,12 +355,12 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWi
         ui->actionStart_with_system->setChecked(AutoRun_IsEnabled());
         ui->actionAllow_LAN->setChecked(QStringList{"::", "0.0.0.0"}.contains(NekoGui::dataStore->inbound_address));
         // active server
-        for (const auto &old: ui->menuActive_Server->actions()) {
+        for (const auto& old: ui->menuActive_Server->actions()) {
             ui->menuActive_Server->removeAction(old);
             old->deleteLater();
         }
         int active_server_item_count = 0;
-        for (const auto &pf: NekoGui::profileManager->CurrentGroup()->ProfilesWithOrder()) {
+        for (const auto& pf: NekoGui::profileManager->CurrentGroup()->ProfilesWithOrder()) {
             auto a = new QAction(pf->bean->DisplayTypeAndName(), this);
             a->setProperty("id", pf->id);
             a->setCheckable(true);
@@ -834,18 +369,18 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWi
             if (++active_server_item_count == 100) break;
         }
         // active routing
-        for (const auto &old: ui->menuActive_Routing->actions()) {
+        for (const auto& old: ui->menuActive_Routing->actions()) {
             ui->menuActive_Routing->removeAction(old);
             old->deleteLater();
         }
-        for (const auto &name: NekoGui::Routing::List()) {
+        for (const auto& name: NekoGui::Routing::List()) {
             auto a = new QAction(name, this);
             a->setCheckable(true);
             a->setChecked(name == NekoGui::dataStore->active_routing);
             ui->menuActive_Routing->addAction(a);
         }
     });
-    connect(ui->menuActive_Server, &QMenu::triggered, this, [=](QAction *a) {
+    connect(ui->menuActive_Server, &QMenu::triggered, this, [=](QAction* a) {
         bool ok;
         auto id = a->property("id").toInt(&ok);
         if (!ok) return;
@@ -855,7 +390,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWi
             neko_start(id, CoreStartReason::ProfileReload);
         }
     });
-    connect(ui->menuActive_Routing, &QMenu::triggered, this, [=](QAction *a) {
+    connect(ui->menuActive_Routing, &QMenu::triggered, this, [=](QAction* a) {
         auto fn = a->text();
         if (!fn.isEmpty()) {
             NekoGui::Routing r;
@@ -863,7 +398,13 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWi
             r.fn = ROUTES_PREFIX + fn;
             if (r.Load()) {
                 if (QMessageBox::question(GetMessageBoxParent(), software_name, tr("Load routing and apply: %1").arg(fn) + "\n" + r.DisplayRouting()) == QMessageBox::Yes) {
-                    NekoGui::Routing::SetToActive(fn);
+                    if (!NekoGui::Routing::SetToActive(fn)) {
+                        MessageBoxWarning(
+                            software_name,
+                            tr("Routing activation was not committed. The running profile was not reloaded."));
+                        refresh_status();
+                        return;
+                    }
                     if (NekoGui::dataStore->started_id >= 0) {
                         neko_start(NekoGui::dataStore->started_id, CoreStartReason::ProfileReload);
                     } else {
@@ -881,6 +422,11 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWi
         AutoRun_SetEnabled(checked);
     });
     connect(ui->actionAllow_LAN, &QAction::triggered, this, [=](bool checked) {
+        if (NekoGui::dataStore->core_transition_depth.load() > 0) {
+            MessageBoxWarning(software_name, tr("Wait for the current core transition to finish before changing the listen address."));
+            ui->actionAllow_LAN->setChecked(QStringList{"::", "0.0.0.0"}.contains(NekoGui::dataStore->inbound_address));
+            return;
+        }
         NekoGui::dataStore->inbound_address = checked ? "::" : "127.0.0.1";
         MW_dialog_message("", "UpdateDataStore");
     });
@@ -945,14 +491,9 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWi
         ui->menu_export_config->setVisible(name == software_core_name);
         ui->menu_export_config->setText(tr("Export %1 config").arg(name));
         ui->menu_copy_links->setEnabled(!selected.isEmpty());
+        ui->menu_copy_links_without_remarks->setEnabled(!selected.isEmpty());
+        ui->menu_copy_ip_port_user_pass->setEnabled(!selected.isEmpty());
         ui->menu_copy_links_nkr->setEnabled(!selected.isEmpty());
-
-        auto currentGroup = NekoGui::profileManager->CurrentGroup();
-        const auto groupCount = currentGroup == nullptr ? 0 : currentGroup->ProfilesWithOrder().count();
-        ui->menu_copy_links_multimapper->setEnabled(!selected.isEmpty() || groupCount > 0);
-        ui->menu_copy_links_multimapper->setText(selected.isEmpty()
-                                                    ? tr("Copy current group to MultiMapper")
-                                                    : tr("Copy selected to MultiMapper"));
     });
     connect(ui->menu_server, &QMenu::aboutToShow, this, [=] {
         pruneAuxiliaryProfilePorts();
@@ -961,14 +502,19 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWi
         const auto hasAux = oneSelected && NekoGui::dataStore->aux_profile_ports.contains(selected.first()->id);
         const auto selectedIsMain = oneSelected && selected.first()->id == NekoGui::dataStore->started_id;
         const auto tunBlocksReload = internalTunRunning();
-        ui->menu_start_auxiliary->setEnabled(oneSelected && NekoGui::dataStore->started_id >= 0 && !hasAux && !selectedIsMain && !tunBlocksReload);
-        ui->menu_start_auxiliary->setToolTip(tunBlocksReload
-                                                 ? tr("Internal Tun is running; disable Tun explicitly before changing auxiliary ports.")
-                                                 : QString{});
-        ui->menu_stop_auxiliary->setEnabled(hasAux && !tunBlocksReload);
-        ui->menu_stop_auxiliary->setToolTip(tunBlocksReload && hasAux
-                                                ? tr("Internal Tun is running; disable Tun explicitly before changing auxiliary ports.")
-                                                : QString{});
+        const auto transitionBlocksReload = NekoGui::dataStore->core_transition_depth.load() > 0;
+        const auto reloadBlocked = tunBlocksReload || transitionBlocksReload;
+        ui->menu_start_auxiliary->setEnabled(
+            oneSelected && NekoGui::dataStore->started_id >= 0 && !hasAux &&
+            !selectedIsMain && !reloadBlocked);
+        const auto reloadBlockTip = transitionBlocksReload
+                                        ? tr("A core transition is in progress; wait before changing auxiliary ports.")
+                                    : tunBlocksReload
+                                        ? tr("Blocked to prevent direct fallback: persistent Windows Tun transition protection is not implemented.")
+                                        : QString{};
+        ui->menu_start_auxiliary->setToolTip(reloadBlockTip);
+        ui->menu_stop_auxiliary->setEnabled(hasAux && !reloadBlocked);
+        ui->menu_stop_auxiliary->setToolTip(hasAux ? reloadBlockTip : QString{});
         ui->menu_copy_auxiliary_proxy->setEnabled(hasAux);
     });
     refresh_status();
@@ -994,26 +540,19 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWi
             // Remember last started
             const auto restartProfileId = NekoGui::dataStore->flag_restart_profile_id;
             if (restartProfileId >= 0) {
-                core_process->start_profile_when_core_is_up = restartProfileId;
+                (void) core_process->QueueProfileStartWhenCoreIsUp(restartProfileId);
             } else if (NekoGui::dataStore->remember_enable && NekoGui::dataStore->remember_id >= 0) {
-                core_process->start_profile_when_core_is_up = NekoGui::dataStore->remember_id;
+                (void) core_process->QueueProfileStartWhenCoreIsUp(NekoGui::dataStore->remember_id);
             }
             // Setup
-            core_process->Start();
             setup_grpc();
+            core_process->Start();
         },
         DS_cores);
 
-    // Restore proxy modes. Restart flags preserve the current session even when
-    // "remember last proxy" is disabled.
-    if (NekoGui::dataStore->remember_enable || NekoGui::dataStore->flag_restart_tun_on || NekoGui::dataStore->flag_restart_system_proxy_on) {
-        if (NekoGui::dataStore->remember_spmode.contains("system_proxy") || NekoGui::dataStore->flag_restart_system_proxy_on) {
-            neko_set_spmode_system_proxy(true, false, ProxyModeChangeReason::StartupRestore);
-        }
-        if (NekoGui::dataStore->remember_spmode.contains("vpn") || NekoGui::dataStore->flag_restart_tun_on) {
-            neko_set_spmode_vpn(true, false, ProxyModeChangeReason::StartupRestore);
-        }
-    }
+    // Never restore OS proxy/TUN modes as a startup side effect. A user who
+    // needs internal TUN must launch the application elevated and enable it
+    // explicitly in that process.
 
     connect(qApp, &QGuiApplication::commitDataRequest, this, &MainWindow::on_commitDataRequest);
 
@@ -1036,7 +575,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWi
     if (!NekoGui::dataStore->flag_tray) show();
 }
 
-void MainWindow::closeEvent(QCloseEvent *event) {
+void MainWindow::closeEvent(QCloseEvent* event) {
     if (tray->isVisible()) {
         hide();          // 隐藏窗口
         event->ignore(); // 忽略事件
@@ -1114,7 +653,7 @@ void MainWindow::show_group(int gid) {
 
 // callback
 
-void MainWindow::dialog_message_impl(const QString &sender, const QString &info) {
+void MainWindow::dialog_message_impl(const QString& sender, const QString& info) {
     // info
     if (info.contains("UpdateIcon")) {
         icon_status = -1;
@@ -1181,10 +720,124 @@ void MainWindow::dialog_message_impl(const QString &sender, const QString &info)
     } else if (sender == "CoreProcess") {
         if (info == "Crashed") {
             neko_stop();
-        } else if (info == "CoreCrashed") {
-            neko_stop(true, false, CoreStopReason::CoreCrashCleanup);
-        } else if (info.startsWith("CoreStarted")) {
-            neko_start(info.split(",")[1].toInt(), CoreStartReason::CoreCrashRecovery);
+        } else if (info.startsWith("CoreCrashed,")) {
+            const auto fields = info.split(',');
+            bool generationOK = false;
+            const auto daemonGeneration = fields.size() == 2
+                                              ? fields[1].toULongLong(&generationOK)
+                                              : 0;
+            if (!generationOK || daemonGeneration == 0) {
+                show_log_impl(tr("Ignored a malformed core-crash generation event."));
+            } else {
+                queue_core_crash_cleanup(daemonGeneration);
+            }
+        } else if (info.startsWith("CoreListening,")) {
+            const auto fields = info.split(',');
+            bool daemonGenerationOK = false;
+            bool handshakeAttemptOK = false;
+            const auto daemonGeneration = fields.size() == 4
+                                              ? fields[1].toULongLong(&daemonGenerationOK)
+                                              : 0;
+            const auto daemonInstanceId = fields.size() == 4 ? fields[2].trimmed() : QString{};
+            const auto handshakeAttempt = fields.size() == 4
+                                              ? fields[3].toInt(&handshakeAttemptOK)
+                                              : -1;
+            if (!daemonGenerationOK || daemonGeneration == 0 || daemonInstanceId.isEmpty() ||
+                !handshakeAttemptOK || handshakeAttempt < 0 || handshakeAttempt > 10) {
+                show_log_impl(tr("Ignored a malformed core-listening event."));
+            } else {
+                const auto handshakeKey = QStringLiteral("%1:%2")
+                                              .arg(daemonGeneration)
+                                              .arg(daemonInstanceId);
+                const auto [attemptIt, inserted] = pending_core_handshake_attempts.emplace(
+                    handshakeKey,
+                    handshakeAttempt);
+                if (!inserted) {
+                    if (handshakeAttempt <= attemptIt->second) {
+                        // QProcess::started, stdout/stderr markers and an
+                        // explicit EnsureStarted may all prompt the same
+                        // instance. Keep one bounded retry chain.
+                        return;
+                    }
+                    if (handshakeAttempt != attemptIt->second + 1) {
+                        show_log_impl(tr("Ignored an out-of-order core RPC handshake retry."));
+                        return;
+                    }
+                    attemptIt->second = handshakeAttempt;
+                }
+                runOnNewThread([=] {
+#ifndef NKR_NO_GRPC
+                    bool rpcOK = false;
+                    QString detail;
+                    const auto verified = NekoGui_rpc::defaultClient != nullptr &&
+                                          NekoGui_rpc::defaultClient->VerifyDaemon(
+                                              &rpcOK,
+                                              daemonInstanceId,
+                                              &detail);
+                    runOnUiThread([=] {
+                        if (!verified || !rpcOK) {
+                            const auto current = core_process->CurrentDaemonInstance();
+                            if (current.generation != daemonGeneration ||
+                                current.instanceId != daemonInstanceId.toStdString() ||
+                                current.ready) {
+                                pending_core_handshake_attempts.erase(handshakeKey);
+                                show_log_impl(tr("Ignored a stale core RPC handshake failure."));
+                                return;
+                            }
+                            if (handshakeAttempt < 10) {
+                                const auto nextAttempt = handshakeAttempt + 1;
+                                const auto retryDelayMs = 100 * nextAttempt;
+                                setTimeout(
+                                    [=] {
+                                        const auto retryInstance = core_process->CurrentDaemonInstance();
+                                        if (retryInstance.generation != daemonGeneration ||
+                                            retryInstance.instanceId != daemonInstanceId.toStdString() ||
+                                            retryInstance.ready) {
+                                            pending_core_handshake_attempts.erase(handshakeKey);
+                                            return;
+                                        }
+                                        MW_dialog_message(
+                                            "CoreProcess",
+                                            QStringLiteral("CoreListening,%1,%2,%3")
+                                                .arg(daemonGeneration)
+                                                .arg(daemonInstanceId)
+                                                .arg(nextAttempt));
+                                    },
+                                    this,
+                                    retryDelayMs);
+                                return;
+                            }
+                            pending_core_handshake_attempts.erase(handshakeKey);
+                            show_log_impl(tr(
+                                "Core RPC handshake failed after bounded retries; this daemon remains unavailable and no profile was started: %1")
+                                              .arg(detail));
+                            return;
+                        }
+                        const auto confirmation = core_process->ConfirmDaemonReady(
+                            daemonGeneration,
+                            daemonInstanceId);
+                        if (!confirmation.accepted) {
+                            pending_core_handshake_attempts.erase(handshakeKey);
+                            show_log_impl(tr("Ignored a stale core RPC handshake response."));
+                            return;
+                        }
+                        pending_core_handshake_attempts.erase(handshakeKey);
+                        NekoGui::dataStore->core_running = true;
+                        show_log_impl(tr("Core RPC identity handshake accepted for daemon generation %1.")
+                                          .arg(daemonGeneration));
+                        if (confirmation.profileStart.valid) {
+                            queue_daemon_profile_start(confirmation.profileStart);
+                        }
+                    });
+#else
+                    Q_UNUSED(daemonGeneration)
+                    Q_UNUSED(daemonInstanceId)
+                    runOnUiThread([=] {
+                        pending_core_handshake_attempts.erase(handshakeKey);
+                    });
+#endif
+                });
+            }
         }
     }
 }
@@ -1247,19 +900,32 @@ void MainWindow::on_commitDataRequest() {
 }
 
 void MainWindow::on_menu_exit_triggered() {
-    if (internalTunRunning() && exit_reason != 3) {
-        MessageBoxWarning(software_name, tr("Internal Tun is running. Exiting, restarting, or updating would stop sing-box and may restore direct traffic. Disable Tun explicitly first."));
+    if (NekoGui::dataStore->core_transition_depth.load() > 0) {
+        MessageBoxWarning(software_name, tr("Wait for the current core transition to finish before exiting or restarting."));
         return;
     }
-    if (tunModeChangePendingWhileRunning() && exit_reason != 3) {
-        MessageBoxWarning(software_name, tr("Tun implementation was changed while Tun is running. Disable Tun explicitly before restarting or updating."));
+    if (internalTunRunning()) {
+        MessageBoxWarning(
+            software_name,
+            tr("Exit/restart blocked to prevent direct fallback: the internal Tun is owned by the current sing-box "
+               "instance, and this build has no independent persistent Windows kill switch that can remain after it "
+               "stops. Do not disable Tun merely to exit. Use the explicit Tun-off control only when you intentionally "
+               "authorize restoring the default network."));
+        return;
+    }
+    if (tunModeChangePendingWhileRunning()) {
+        MessageBoxWarning(
+            software_name,
+            tr("Exit/restart blocked to prevent direct fallback: the requested Tun implementation differs from the "
+               "active worker, and no independent persistent Windows kill switch protects that transition. Do not "
+               "disable Tun merely to continue."));
         return;
     }
 
     if (mu_exit.tryLock()) {
+        setProperty(ExitContinuationProperty, false);
+        setEnabled(false);
         NekoGui::dataStore->prepare_exit = true;
-        exit_had_system_proxy = NekoGui::dataStore->spmode_system_proxy;
-        exit_had_vpn = NekoGui::dataStore->spmode_vpn;
         exit_had_profile_id = NekoGui::dataStore->started_id;
         // Do not clear Windows system proxy as a side effect of restart/exit.
         // Keeping it pointed at the local port is fail-closed and avoids
@@ -1269,18 +935,48 @@ void MainWindow::on_menu_exit_triggered() {
         on_commitDataRequest();
         //
         NekoGui::dataStore->save_control_no_save = true; // don't change datastore after this line
-        neko_stop(false, true, CoreStopReason::AppExit);
-        //
-        hide();
+        const auto stopSucceeded = std::make_shared<std::atomic_bool>(false);
+        neko_stop(false, true, CoreStopReason::AppExit, false, stopSucceeded);
         runOnNewThread([=] {
             sem_stopped.acquire();
-            stop_core_daemon();
+            const auto cancelExit = [=](const QString& warning) {
+                runOnUiThread([=] {
+                    // Restore only application control state. Never change
+                    // system proxy/Tun or kill/replace an uncertain daemon.
+                    NekoGui::dataStore->prepare_exit = false;
+                    NekoGui::dataStore->save_control_no_save = false;
+                    RegisterHotkey(false);
+                    mu_exit.unlock();
+                    setEnabled(true);
+                    refresh_status();
+                    ActivateWindow(this);
+                    MessageBoxWarning(software_name, warning);
+                    runOnUiThread([=] { core_process->EnsureStarted(); }, DS_cores);
+                });
+            };
+            if (!stopSucceeded->load()) {
+                cancelExit(tr("Exit was cancelled because the running core did not confirm Stop. The application and observed network state were kept; resolve the indeterminate state with an explicit permitted Stop before trying again."));
+                return;
+            }
+            QString daemonExitDetail;
+            if (!stop_core_daemon(&daemonExitDetail)) {
+                cancelExit(tr("Exit was cancelled after the profile stopped because the empty control daemon did not complete the exact Exit ACK + generation/UUID/PID NormalExit handshake. The GUI was kept open; no process was killed and no system proxy or Tun mode was changed. Detail: %1")
+                               .arg(daemonExitDetail));
+                return;
+            }
             runOnUiThread([=] {
+                setProperty(ExitContinuationProperty, true);
                 on_menu_exit_triggered(); // continue exit progress
             });
         });
         return;
     }
+    // mu_exit is also the fence held by the asynchronous Stop/Exit chain.
+    // Only that chain may authorize the second call that commits GUI exit;
+    // repeated user/tray/close requests must not bypass an in-flight ACK or
+    // exact-process-finished wait.
+    if (!property(ExitContinuationProperty).toBool()) return;
+    setProperty(ExitContinuationProperty, false);
     //
     MF_release_runguard();
     auto buildRestartArguments = [=]() {
@@ -1303,38 +999,27 @@ void MainWindow::on_menu_exit_triggered() {
         if (exit_had_profile_id >= 0) {
             arguments << "-flag_restart_profile_id" << Int2String(exit_had_profile_id);
         }
-        if (exit_had_system_proxy) {
-            arguments << "-flag_restart_system_proxy_on";
-        }
-        if (exit_had_vpn || exit_reason == 3) {
-            arguments << "-flag_restart_tun_on";
-        }
         return arguments;
     };
 
     if (exit_reason == 1) {
-        QDir::setCurrent(QApplication::applicationDirPath());
         auto arguments = buildRestartArguments();
         arguments.prepend("--");
-        QProcess::startDetached("./updater", arguments);
-    } else if (exit_reason == 2 || exit_reason == 3) {
-        QDir::setCurrent(QApplication::applicationDirPath());
-
+        const auto applicationDir = QApplication::applicationDirPath();
+        QProcess::startDetached(
+            QDir(applicationDir).absoluteFilePath(QStringLiteral("updater")),
+            arguments,
+            applicationDir);
+    } else if (exit_reason == 2) {
         auto arguments = buildRestartArguments();
         auto isLauncher = qEnvironmentVariable("NKR_FROM_LAUNCHER") == "1";
         if (isLauncher) arguments.prepend("--");
-        auto program = isLauncher ? "./launcher" : QApplication::applicationFilePath();
+        const auto applicationDir = QApplication::applicationDirPath();
+        const auto program = isLauncher
+                                 ? QDir(applicationDir).absoluteFilePath(QStringLiteral("launcher"))
+                                 : QApplication::applicationFilePath();
 
-        if (exit_reason == 3) {
-            // Tun restart as admin
-#ifdef Q_OS_WIN
-            WinCommander::runProcessElevated(program, arguments, "", WinCommander::SW_NORMAL, false);
-#else
-            QProcess::startDetached(program, arguments);
-#endif
-        } else {
-            QProcess::startDetached(program, arguments);
-        }
+        QProcess::startDetached(program, arguments, applicationDir);
     }
     tray->hide();
     QCoreApplication::quit();
@@ -1345,6 +1030,22 @@ void MainWindow::on_menu_exit_triggered() {
     return;
 
 void MainWindow::neko_set_spmode_system_proxy(bool enable, bool save, ProxyModeChangeReason reason) {
+    if (NekoGui::dataStore->core_transition_depth.load() > 0) {
+        MessageBoxWarning(software_name, tr("Wait for the current core transition to finish before changing system proxy mode."));
+        refresh_status();
+        return;
+    }
+#ifdef Q_OS_WIN
+    if (enable != NekoGui::dataStore->spmode_system_proxy) {
+        Q_UNUSED(save);
+        Q_UNUSED(reason);
+        MessageBoxWarning(
+            software_name,
+            tr("Windows system-proxy changes are temporarily disabled because the legacy implementation cannot verify ownership, preserve the previous proxy/PAC state, or confirm the applied result. Change it explicitly in Windows settings until the owned broker is implemented."));
+        refresh_status();
+        return;
+    }
+#endif
     if (enable != NekoGui::dataStore->spmode_system_proxy) {
         if (enable) {
             auto socks_port = NekoGui::dataStore->inbound_socks_port;
@@ -1362,9 +1063,6 @@ void MainWindow::neko_set_spmode_system_proxy(bool enable, bool save, ProxyModeC
 
     if (save) {
         NekoGui::dataStore->remember_spmode.removeAll("system_proxy");
-        if (enable && NekoGui::dataStore->remember_enable) {
-            NekoGui::dataStore->remember_spmode.append("system_proxy");
-        }
         NekoGui::dataStore->Save();
     }
 
@@ -1373,10 +1071,22 @@ void MainWindow::neko_set_spmode_system_proxy(bool enable, bool save, ProxyModeC
 }
 
 void MainWindow::neko_set_spmode_vpn(bool enable, bool save, ProxyModeChangeReason reason) {
+    if (NekoGui::dataStore->core_transition_depth.load() > 0) {
+        MessageBoxWarning(software_name, tr("Wait for the current core transition to finish before changing Tun mode."));
+        refresh_status();
+        return;
+    }
     const auto wasEnabled = NekoGui::dataStore->spmode_vpn;
     const auto activeInternalTun = isInternalTunActive();
     const auto shouldReloadInternalTun = enable != wasEnabled &&
                                          ((enable && NekoGui::dataStore->vpn_internal_tun) || (!enable && activeInternalTun));
+
+    if (enable && !wasEnabled && hasActiveIsolatedTest()) {
+        MessageBoxWarning(
+            software_name,
+            tr("Tun cannot be enabled while an isolated URL/Full Test is running. Wait for it to finish or stop the test, then enable Tun explicitly again."));
+        return;
+    }
 
     if (enable != wasEnabled) {
         if (enable) {
@@ -1390,8 +1100,9 @@ void MainWindow::neko_set_spmode_vpn(bool enable, bool save, ProxyModeChangeReas
                     }
                     auto ret = Linux_Pkexec_SetCapString(NekoGui::FindNekoBoxCoreRealPath(), "cap_net_admin=ep");
                     if (ret == 0) {
-                        this->exit_reason = 3;
-                        on_menu_exit_triggered();
+                        MessageBoxWarning(
+                            software_name,
+                            tr("Tun privileges were updated. Enable Tun explicitly again; this process will not restart or enable it automatically."));
                     } else {
                         MessageBoxWarning(software_name, "Setcap for Tun mode failed.\n\n1. You may canceled the dialog.\n2. You may be using an incompatible environment like AppImage.");
                         if (QProcessEnvironment::systemEnvironment().contains("APPIMAGE")) {
@@ -1400,11 +1111,9 @@ void MainWindow::neko_set_spmode_vpn(bool enable, bool save, ProxyModeChangeReas
                     }
 #endif
 #ifdef Q_OS_WIN
-                    auto n = QMessageBox::warning(GetMessageBoxParent(), software_name, tr("Please run NekoBox as admin"), QMessageBox::Yes | QMessageBox::No);
-                    if (n == QMessageBox::Yes) {
-                        this->exit_reason = 3;
-                        on_menu_exit_triggered();
-                    }
+                    MessageBoxWarning(
+                        software_name,
+                        tr("Internal Tun requires administrator privileges. Restart NekoBox as administrator yourself, then enable Tun explicitly; this process will not restart or enable Tun automatically."));
 #endif
                     neko_set_spmode_FAILED
                 }
@@ -1437,9 +1146,6 @@ void MainWindow::neko_set_spmode_vpn(bool enable, bool save, ProxyModeChangeReas
 
     if (save) {
         NekoGui::dataStore->remember_spmode.removeAll("vpn");
-        if (enable && NekoGui::dataStore->remember_enable) {
-            NekoGui::dataStore->remember_spmode.append("vpn");
-        }
         NekoGui::dataStore->Save();
     }
 
@@ -1451,7 +1157,7 @@ void MainWindow::neko_set_spmode_vpn(bool enable, bool save, ProxyModeChangeReas
     }
 }
 
-void MainWindow::refresh_status(const QString &traffic_update) {
+void MainWindow::refresh_status(const QString& traffic_update) {
     pruneAuxiliaryProfilePorts();
     auto refresh_speed_label = [=] {
         if (traffic_update_cache == "") {
@@ -1476,19 +1182,42 @@ void MainWindow::refresh_status(const QString &traffic_update) {
 
     // From UI
     QString group_name;
+    QString running_tooltip;
     if (running != nullptr) {
         auto group = NekoGui::profileManager->GetGroup(running->gid);
-        if (group != nullptr) group_name = group->name;
+        if (group != nullptr) {
+            group_name = group->name;
+            if (group->front_proxy_id >= 0) {
+                auto frontProxy = NekoGui::profileManager->GetProfile(group->front_proxy_id);
+                running_tooltip = tr("Group front proxy active: %1")
+                                      .arg(frontProxy == nullptr || frontProxy->bean == nullptr
+                                               ? QStringLiteral("#%1").arg(group->front_proxy_id)
+                                               : frontProxy->bean->DisplayTypeAndName());
+            }
+        }
+    }
+    if (runtime_state_indeterminate) {
+        const auto warning = tr("Runtime state is indeterminate. Automatic Tun cleanup and default-network restoration "
+                                "are forbidden. Keep the application running and wait for another permitted Stop to "
+                                "confirm completion; use the explicit Tun-off control only if you intentionally authorize "
+                                "restoring the default network.\n%1")
+                                 .arg(runtime_state_indeterminate_reason);
+        running_tooltip = running_tooltip.isEmpty()
+                              ? warning
+                              : warning + QStringLiteral("\n") + running_tooltip;
     }
 
     if (last_test_time.addSecs(2) < QTime::currentTime()) {
         auto txt = running == nullptr ? tr("Not Running")
                                       : QStringLiteral("[%1] %2").arg(group_name, running->bean->DisplayName()).left(30);
+        if (runtime_state_indeterminate) txt = tr("State uncertain: %1").arg(txt);
         ui->label_running->setText(txt);
     }
     //
     auto display_socks = DisplayAddress(NekoGui::dataStore->inbound_address, NekoGui::dataStore->inbound_socks_port);
-    auto inbound_txt = QStringLiteral("Mixed: %1").arg(display_socks);
+    auto inbound_txt = running == nullptr
+                           ? QStringLiteral("Mixed: %1 (%2)").arg(tr("Not Running"), display_socks)
+                           : QStringLiteral("Mixed: %1").arg(display_socks);
     QStringList auxTips;
     for (auto it = NekoGui::dataStore->aux_profile_ports.constBegin(); it != NekoGui::dataStore->aux_profile_ports.constEnd(); ++it) {
         auto profile = NekoGui::profileManager->GetProfile(it.key());
@@ -1500,13 +1229,40 @@ void MainWindow::refresh_status(const QString &traffic_update) {
     ui->label_inbound->setText(inbound_txt);
     ui->label_inbound->setToolTip(auxTips.join("\n"));
     //
-    ui->checkBox_VPN->setChecked(NekoGui::dataStore->spmode_vpn);
+    const auto tunRequested = NekoGui::dataStore->spmode_vpn;
+    // This is only a worker-confirmed observation.  It must not be presented
+    // as OS truth; the persistent Runtime/WFP design is still required for
+    // that.  It is nevertheless strictly better than treating the requested
+    // mode as though the asynchronous core reload had already succeeded.
+    // Do not hide an already-running implementation merely because the user
+    // changed which implementation should be used next.
+    const auto tunWorkerActive = running_internal_tun || vpn_pid != 0;
+    ui->checkBox_VPN->setChecked(tunRequested);
+    if (runtime_state_indeterminate && tunWorkerActive) {
+        ui->checkBox_VPN->setText(tr("Tun Mode (STATE INDETERMINATE)"));
+        ui->checkBox_VPN->setToolTip(
+            tr("The exact daemon received a Start whose lifecycle outcome or Windows resource state could not be "
+               "confirmed. Automatic Tun cleanup is forbidden. Keep the application running until a permitted Stop "
+               "confirms completion; use Tun-off only if you intentionally authorize restoring the default network."));
+    } else if (tunWorkerActive && tunRequested) {
+        ui->checkBox_VPN->setText(tr("Tun Mode (worker active)"));
+        ui->checkBox_VPN->setToolTip(tr("The current worker confirmed that its managed Tun configuration started. OS-level continuity is not yet observable."));
+    } else if (tunWorkerActive) {
+        ui->checkBox_VPN->setText(tr("Tun Mode (ACTIVE; stop incomplete)"));
+        ui->checkBox_VPN->setToolTip(tr("The requested mode is off, but the current worker still reports Tun active. Do not assume traffic is unprotected or the transition completed."));
+    } else if (tunRequested) {
+        ui->checkBox_VPN->setText(tr("Tun Mode (requested; inactive)"));
+        ui->checkBox_VPN->setToolTip(tr("Tun was explicitly requested, but no current worker has confirmed it active. Starting or reloading may have failed, or no profile is running."));
+    } else {
+        ui->checkBox_VPN->setText(tr("Tun Mode"));
+        ui->checkBox_VPN->setToolTip(tr("Tun is not requested and the current worker does not report it active."));
+    }
     ui->checkBox_SystemProxy->setChecked(NekoGui::dataStore->spmode_system_proxy);
     if (select_mode) {
         ui->label_running->setText(tr("Select") + " *");
         ui->label_running->setToolTip(tr("Select mode, double-click or press Enter to select a profile, press ESC to exit."));
     } else {
-        ui->label_running->setToolTip({});
+        ui->label_running->setToolTip(running_tooltip);
     }
 
     auto make_title = [=](bool isTray) {
@@ -1514,22 +1270,30 @@ void MainWindow::refresh_status(const QString &traffic_update) {
         if (!isTray && NekoGui::IsAdmin()) tt << "[Admin]";
         if (select_mode) tt << "[" + tr("Select") + "]";
         if (!title_error.isEmpty()) tt << "[" + title_error + "]";
-        if (NekoGui::dataStore->spmode_vpn && !NekoGui::dataStore->spmode_system_proxy) tt << "[Tun]";
-        if (!NekoGui::dataStore->spmode_vpn && NekoGui::dataStore->spmode_system_proxy) tt << "[" + tr("System Proxy") + "]";
-        if (NekoGui::dataStore->spmode_vpn && NekoGui::dataStore->spmode_system_proxy) tt << "[Tun+" + tr("System Proxy") + "]";
+        if (runtime_state_indeterminate) tt << "[" + tr("Runtime Indeterminate") + "]";
+        if (tunWorkerActive && tunRequested) tt << "[Tun Worker Active]";
+        if (tunWorkerActive && !tunRequested) tt << "[Tun ACTIVE / Stop Incomplete]";
+        if (!tunWorkerActive && tunRequested) tt << "[Tun Requested / Inactive]";
+        if (NekoGui::dataStore->spmode_system_proxy) tt << "[" + tr("System Proxy") + "]";
         tt << software_name;
         if (!isTray) tt << "(" + QString(NKR_VERSION) + ")";
         if (!NekoGui::dataStore->active_routing.isEmpty() && NekoGui::dataStore->active_routing != "Default") {
             tt << "[" + NekoGui::dataStore->active_routing + "]";
         }
         if (running != nullptr) tt << running->bean->DisplayTypeAndName() + "@" + group_name;
+        if (running_generation > 0) {
+            tt << tr("Runtime generation: %1").arg(running_generation);
+        }
+        if (!running_config_sha256.isEmpty()) {
+            tt << tr("Config SHA-256: %1").arg(QString::fromLatin1(running_config_sha256));
+        }
         return tt.join(isTray ? "\n" : " ");
     };
 
     auto icon_status_new = Icon::NONE;
 
     if (running != nullptr) {
-        if (NekoGui::dataStore->spmode_vpn) {
+        if (tunWorkerActive) {
             icon_status_new = Icon::VPN;
         } else if (NekoGui::dataStore->spmode_system_proxy) {
             icon_status_new = Icon::SYSTEM_PROXY;
@@ -1563,7 +1327,7 @@ void MainWindow::refresh_groups() {
     }
 
     int index = 0;
-    for (const auto &gid: NekoGui::profileManager->groupsTabOrder) {
+    for (const auto& gid: NekoGui::profileManager->groupsTabOrder) {
         auto group = NekoGui::profileManager->GetGroup(gid);
         if (index == 0) {
             ui->tabWidget->setTabText(0, group->name);
@@ -1592,11 +1356,11 @@ void MainWindow::refresh_groups() {
     NekoGui::dataStore->refreshing_group_list = false;
 }
 
-void MainWindow::refresh_proxy_list(const int &id) {
+void MainWindow::refresh_proxy_list(const int& id) {
     refresh_proxy_list_impl(id, {});
 }
 
-void MainWindow::refresh_proxy_list_impl(const int &id, GroupSortAction groupSortAction) {
+void MainWindow::refresh_proxy_list_impl(const int& id, GroupSortAction groupSortAction) {
     // id < 0 重绘
     if (id < 0) {
         // 清空数据
@@ -1604,7 +1368,7 @@ void MainWindow::refresh_proxy_list_impl(const int &id, GroupSortAction groupSor
         ui->proxyListTable->setRowCount(0);
         // 添加行
         int row = -1;
-        for (const auto &[id, profile]: NekoGui::profileManager->profiles) {
+        for (const auto& [id, profile]: NekoGui::profileManager->profiles) {
             if (NekoGui::dataStore->current_group != profile->gid) continue;
             row++;
             ui->proxyListTable->insertRow(row);
@@ -1684,7 +1448,7 @@ void MainWindow::refresh_proxy_list_impl(const int &id, GroupSortAction groupSor
     refresh_proxy_list_impl_refresh_data(id);
 }
 
-void MainWindow::refresh_proxy_list_impl_refresh_data(const int &id) {
+void MainWindow::refresh_proxy_list_impl_refresh_data(const int& id) {
     // 绘制或更新item(s)
     for (int row = 0; row < ui->proxyListTable->rowCount(); row++) {
         auto profileId = ui->proxyListTable->row2Id[row];
@@ -1743,7 +1507,7 @@ void MainWindow::refresh_proxy_list_impl_refresh_data(const int &id) {
 
 // table菜单相关
 
-void MainWindow::on_proxyListTable_itemDoubleClicked(QTableWidgetItem *item) {
+void MainWindow::on_proxyListTable_itemDoubleClicked(QTableWidgetItem* item) {
     auto id = item->data(114514).toInt();
     if (select_mode) {
         emit profile_selected(id);
@@ -1773,7 +1537,7 @@ void MainWindow::on_menu_clone_triggered() {
     if (btn != QMessageBox::Yes) return;
 
     QStringList sls;
-    for (const auto &ent: ents) {
+    for (const auto& ent: ents) {
         sls << ent->bean->ToNekorayShareLink(ent->type);
     }
 
@@ -1798,8 +1562,17 @@ void MainWindow::on_menu_move_triggered() {
                                    items, 0, false, &ok);
     if (!ok) return;
     auto gid = SubStrBefore(a, " ").toInt();
-    for (const auto &ent: ents) {
-        NekoGui::profileManager->MoveProfile(ent, gid);
+    bool moveFailed = false;
+    for (const auto& ent: ents) {
+        QString error;
+        if (!NekoGui::profileManager->MoveProfile(ent, gid, &error)) {
+            moveFailed = true;
+        }
+    }
+    if (moveFailed) {
+        MessageBoxWarning(
+            software_name,
+            tr("One or more profiles could not be moved; their original group data was preserved."));
     }
     refresh_proxy_list();
 }
@@ -1809,16 +1582,29 @@ void MainWindow::on_menu_delete_triggered() {
     if (ents.count() == 0) return;
     const auto removesAuxiliary = profilesContainAuxiliaryPort(ents);
     if (removesAuxiliary && internalTunRunning()) {
-        MessageBoxWarning(software_name,
-                          tr("Internal Tun is running. Deleting an auxiliary profile would reload sing-box and may restore direct traffic. Disable Tun explicitly first."));
+        MessageBoxWarning(
+            software_name,
+            tr("Deletion blocked to prevent direct fallback: it would reload the sing-box-owned internal Tun without "
+               "an independent persistent Windows kill switch. Do not disable Tun as a workaround."));
         return;
     }
     if (QMessageBox::question(this, tr("Confirmation"), QString(tr("Remove %1 item(s) ?")).arg(ents.count())) ==
         QMessageBox::StandardButton::Yes) {
-        for (const auto &ent: ents) {
-            NekoGui::profileManager->DeleteProfile(ent->id);
+        bool removedAuxiliary = false;
+        bool deleteFailed = false;
+        for (const auto& ent: ents) {
+            const auto wasAuxiliary = NekoGui::dataStore->aux_profile_ports.contains(ent->id);
+            if (NekoGui::profileManager->DeleteProfile(
+                    ent->id, QStringLiteral("Explicit profile deletion confirmed in GUI."))) {
+                removedAuxiliary |= wasAuxiliary;
+            } else {
+                deleteFailed = true;
+            }
         }
-        if (removesAuxiliary && NekoGui::dataStore->started_id >= 0) {
+        if (deleteFailed) {
+            MessageBoxWarning(software_name, tr("One or more profiles could not be deleted; their data was preserved."));
+        }
+        if (removedAuxiliary && NekoGui::dataStore->started_id >= 0) {
             neko_start(NekoGui::dataStore->started_id, CoreStartReason::ProfileReload);
         }
         refresh_proxy_list();
@@ -1826,6 +1612,10 @@ void MainWindow::on_menu_delete_triggered() {
 }
 
 void MainWindow::on_menu_start_auxiliary_triggered() {
+    if (NekoGui::dataStore->core_transition_depth.load() > 0) {
+        MessageBoxWarning(software_name, tr("Wait for the current core transition to finish."));
+        return;
+    }
     pruneAuxiliaryProfilePorts();
     auto ents = get_now_selected_list();
     if (ents.count() != 1) {
@@ -1843,8 +1633,10 @@ void MainWindow::on_menu_start_auxiliary_triggered() {
         return;
     }
     if (internalTunRunning()) {
-        MessageBoxWarning(software_name,
-                          tr("Internal Tun is running. Auxiliary port changes would reload sing-box and may restore direct traffic. Disable Tun explicitly first."));
+        MessageBoxWarning(
+            software_name,
+            tr("Auxiliary-port change blocked to prevent direct fallback: it would reload the sing-box-owned internal "
+               "Tun without an independent persistent Windows kill switch. Do not disable Tun as a workaround."));
         return;
     }
     if (NekoGui::dataStore->aux_profile_ports.contains(ent->id)) {
@@ -1861,6 +1653,7 @@ void MainWindow::on_menu_start_auxiliary_triggered() {
     }
 
     const auto oldAuxPorts = NekoGui::dataStore->aux_profile_ports;
+    const auto oldAuxEntries = NekoGui::dataStore->aux_profile_port_entries;
     NekoGui::dataStore->aux_profile_ports.insert(ent->id, port);
     auto mainProfile = NekoGui::profileManager->GetProfile(NekoGui::dataStore->started_id);
     auto checkResult = mainProfile == nullptr ? nullptr : BuildConfig(mainProfile, false, false);
@@ -1870,14 +1663,30 @@ void MainWindow::on_menu_start_auxiliary_triggered() {
         return;
     }
 
-    show_log_impl(tr("Starting auxiliary port %1 for %2").arg(port).arg(ent->bean->DisplayTypeAndName()));
     NekoGui::dataStore->Save();
+    if (!NekoGui::dataStore->last_save_succeeded) {
+        if (!NekoGui::dataStore->last_save_indeterminate) {
+            NekoGui::dataStore->aux_profile_ports = oldAuxPorts;
+            NekoGui::dataStore->aux_profile_port_entries = oldAuxEntries;
+        }
+        MessageBoxWarning(
+            software_name,
+            NekoGui::dataStore->last_save_indeterminate
+                ? tr("Auxiliary mapping save is indeterminate; runtime reload was blocked and explicit recovery is required.")
+                : tr("Auxiliary mapping was not changed because its config could not be saved."));
+        return;
+    }
+    show_log_impl(tr("Starting auxiliary port %1 for %2").arg(port).arg(ent->bean->DisplayTypeAndName()));
     neko_start(NekoGui::dataStore->started_id, CoreStartReason::ProfileReload);
     refresh_status();
     refresh_proxy_list(ent->id);
 }
 
 void MainWindow::on_menu_stop_auxiliary_triggered() {
+    if (NekoGui::dataStore->core_transition_depth.load() > 0) {
+        MessageBoxWarning(software_name, tr("Wait for the current core transition to finish."));
+        return;
+    }
     pruneAuxiliaryProfilePorts();
     auto ents = get_now_selected_list();
     if (ents.count() != 1) return;
@@ -1885,13 +1694,39 @@ void MainWindow::on_menu_stop_auxiliary_triggered() {
     auto ent = ents.first();
     if (!NekoGui::dataStore->aux_profile_ports.contains(ent->id)) return;
     if (internalTunRunning()) {
-        MessageBoxWarning(software_name,
-                          tr("Internal Tun is running. Auxiliary port changes would reload sing-box and may restore direct traffic. Disable Tun explicitly first."));
+        MessageBoxWarning(
+            software_name,
+            tr("Auxiliary-port change blocked to prevent direct fallback: it would reload the sing-box-owned internal "
+               "Tun without an independent persistent Windows kill switch. Do not disable Tun as a workaround."));
         return;
     }
+    const auto oldAuxPorts = NekoGui::dataStore->aux_profile_ports;
+    const auto oldAuxEntries = NekoGui::dataStore->aux_profile_port_entries;
     const auto port = NekoGui::dataStore->aux_profile_ports.take(ent->id);
-    show_log_impl(tr("Stopping auxiliary port %1 for %2").arg(port).arg(ent->bean->DisplayTypeAndName()));
+    if (NekoGui::dataStore->started_id >= 0) {
+        auto mainProfile = NekoGui::profileManager->GetProfile(NekoGui::dataStore->started_id);
+        auto checkResult = mainProfile == nullptr ? nullptr : BuildConfig(mainProfile, false, false);
+        if (mainProfile == nullptr || checkResult == nullptr || !checkResult->error.isEmpty()) {
+            NekoGui::dataStore->aux_profile_ports = oldAuxPorts;
+            NekoGui::dataStore->aux_profile_port_entries = oldAuxEntries;
+            MessageBoxWarning("BuildConfig return error", checkResult == nullptr ? tr("Unknown main profile.") : checkResult->error);
+            return;
+        }
+    }
     NekoGui::dataStore->Save();
+    if (!NekoGui::dataStore->last_save_succeeded) {
+        if (!NekoGui::dataStore->last_save_indeterminate) {
+            NekoGui::dataStore->aux_profile_ports = oldAuxPorts;
+            NekoGui::dataStore->aux_profile_port_entries = oldAuxEntries;
+        }
+        MessageBoxWarning(
+            software_name,
+            NekoGui::dataStore->last_save_indeterminate
+                ? tr("Auxiliary mapping save is indeterminate; runtime reload was blocked and explicit recovery is required.")
+                : tr("Auxiliary mapping was not changed because its config could not be saved."));
+        return;
+    }
+    show_log_impl(tr("Stopping auxiliary port %1 for %2").arg(port).arg(ent->bean->DisplayTypeAndName()));
     if (NekoGui::dataStore->started_id >= 0) {
         neko_start(NekoGui::dataStore->started_id, CoreStartReason::ProfileReload);
     }
@@ -1917,7 +1752,7 @@ void MainWindow::on_menu_copy_auxiliary_proxy_triggered() {
 void MainWindow::on_menu_reset_traffic_triggered() {
     auto ents = get_now_selected_list();
     if (ents.count() == 0) return;
-    for (const auto &ent: ents) {
+    for (const auto& ent: ents) {
         ent->traffic_data->Reset();
         ent->Save();
         refresh_proxy_list(ent->id);
@@ -1931,6 +1766,10 @@ void MainWindow::on_menu_profile_debug_info_triggered() {
     if (btn == 1) {
         QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(QStringLiteral("profiles/%1.json").arg(ents.first()->id)).absoluteFilePath()));
     } else if (btn == 2) {
+        if (NekoGui::dataStore->core_transition_depth.load() > 0) {
+            MessageBoxWarning(software_name, tr("Configuration cannot be reloaded while a core transition is in progress."));
+            return;
+        }
         NekoGui::dataStore->Load();
         NekoGui::profileManager->LoadManager();
         pruneAuxiliaryProfilePorts();
@@ -1945,7 +1784,7 @@ void MainWindow::on_menu_copy_links_triggered() {
     }
     auto ents = get_now_selected_list();
     QStringList links;
-    for (const auto &ent: ents) {
+    for (const auto& ent: ents) {
         links += ent->bean->ToShareLink();
     }
     if (links.length() == 0) return;
@@ -1953,22 +1792,81 @@ void MainWindow::on_menu_copy_links_triggered() {
     show_log_impl(tr("Copied %1 item(s)").arg(links.length()));
 }
 
+void MainWindow::on_menu_copy_links_without_remarks_triggered() {
+    const auto ents = get_now_selected_list();
+    QStringList links;
+    QStringList failures;
+    for (const auto& ent: ents) {
+        const auto result = NekoGui_fmt::ShareLinkWithoutRemark(ent->bean->ToShareLink());
+        if (!result.ok()) {
+            failures += QStringLiteral("%1: %2")
+                            .arg(ent->bean->DisplayName(),
+                                 NekoGui_fmt::ShareFormatErrorDescription(result.error));
+            continue;
+        }
+        links += result.text;
+    }
+    if (!failures.isEmpty()) {
+        MessageBoxWarning(
+            tr("Copy failed"),
+            tr("Nothing was copied because these profiles cannot use the selected format:\n%1")
+                .arg(failures.join('\n')));
+        return;
+    }
+    if (links.isEmpty()) return;
+    QApplication::clipboard()->setText(links.join('\n'));
+    show_log_impl(tr("Copied %1 item(s)").arg(links.length()));
+}
+
+void MainWindow::on_menu_copy_ip_port_user_pass_triggered() {
+    const auto ents = get_now_selected_list();
+    QStringList lines;
+    QStringList failures;
+    for (const auto& ent: ents) {
+        const auto* bean = dynamic_cast<NekoGui_fmt::SocksHttpBean*>(ent->bean.get());
+        auto kind = NekoGui_fmt::CredentialProxyKind::Unsupported;
+        if (bean != nullptr && bean->socks_http_type == NekoGui_fmt::SocksHttpBean::type_Socks5) {
+            kind = NekoGui_fmt::CredentialProxyKind::Socks5;
+        } else if (bean != nullptr &&
+                   bean->socks_http_type == NekoGui_fmt::SocksHttpBean::type_HTTP) {
+            kind = NekoGui_fmt::CredentialProxyKind::Http;
+        }
+        const auto result = NekoGui_fmt::IpPortUserPass(
+            kind,
+            ent->bean->serverAddress,
+            ent->bean->serverPort,
+            bean == nullptr ? QString{} : bean->username,
+            bean == nullptr ? QString{} : bean->password,
+            bean != nullptr && bean->stream != nullptr && bean->stream->security == "tls");
+        if (!result.ok()) {
+            failures += QStringLiteral("%1: %2")
+                            .arg(ent->bean->DisplayName(),
+                                 NekoGui_fmt::ShareFormatErrorDescription(result.error));
+            continue;
+        }
+        lines += result.text;
+    }
+    if (!failures.isEmpty()) {
+        MessageBoxWarning(
+            tr("Copy failed"),
+            tr("Nothing was copied because these profiles cannot use the selected format:\n%1")
+                .arg(failures.join('\n')));
+        return;
+    }
+    if (lines.isEmpty()) return;
+    QApplication::clipboard()->setText(lines.join('\n'));
+    show_log_impl(tr("Copied %1 item(s)").arg(lines.length()));
+}
+
 void MainWindow::on_menu_copy_links_nkr_triggered() {
     auto ents = get_now_selected_list();
     QStringList links;
-    for (const auto &ent: ents) {
+    for (const auto& ent: ents) {
         links += ent->bean->ToNekorayShareLink(ent->type);
     }
     if (links.length() == 0) return;
     QApplication::clipboard()->setText(links.join("\n"));
     show_log_impl(tr("Copied %1 item(s)").arg(links.length()));
-}
-
-void MainWindow::on_menu_copy_links_multimapper_triggered() {
-    auto ents = get_selected_or_group();
-    if (ents.isEmpty()) return;
-    QApplication::clipboard()->setText(NekoGui_sub::BuildMultiMapperExport(ents));
-    show_log_impl(tr("Copied %1 item(s)").arg(ents.length()));
 }
 
 void MainWindow::on_menu_export_config_triggered() {
@@ -1978,6 +1876,12 @@ void MainWindow::on_menu_export_config_triggered() {
     if (ent->bean->DisplayCoreType() != software_core_name) return;
 
     auto result = BuildConfig(ent, false, true);
+    if (result == nullptr || !result->error.isEmpty()) {
+        MessageBoxWarning(
+            "BuildConfig return error",
+            result == nullptr ? tr("Unknown config export error.") : result->error);
+        return;
+    }
     QString config_core = QJsonObject2QString(result->coreConfig, false);
     QApplication::clipboard()->setText(config_core);
 
@@ -1989,11 +1893,23 @@ void MainWindow::on_menu_export_config_triggered() {
     msg.setDefaultButton(QMessageBox::Ok);
     auto ret = msg.exec();
     if (ret == 2) {
-        result = BuildConfig(ent, false, false);
+        result = BuildConfig(ent, false, true);
+        if (result == nullptr || !result->error.isEmpty()) {
+            MessageBoxWarning(
+                "BuildConfig return error",
+                result == nullptr ? tr("Unknown config export error.") : result->error);
+            return;
+        }
         config_core = QJsonObject2QString(result->coreConfig, false);
         QApplication::clipboard()->setText(config_core);
     } else if (ret == 3) {
         result = BuildConfig(ent, true, false);
+        if (result == nullptr || !result->error.isEmpty()) {
+            MessageBoxWarning(
+                "BuildConfig return error",
+                result == nullptr ? tr("Unknown config export error.") : result->error);
+            return;
+        }
         config_core = QJsonObject2QString(result->coreConfig, false);
         QApplication::clipboard()->setText(config_core);
     }
@@ -2005,16 +1921,16 @@ void MainWindow::display_qr_link(bool nkrFormat) {
 
     class W : public QDialog {
     public:
-        QLabel *l = nullptr;
-        QCheckBox *cb = nullptr;
+        QLabel* l = nullptr;
+        QCheckBox* cb = nullptr;
         //
-        QPlainTextEdit *l2 = nullptr;
+        QPlainTextEdit* l2 = nullptr;
         QImage im;
         //
         QString link;
         QString link_nk;
 
-        void show_qr(const QSize &size) const {
+        void show_qr(const QSize& size) const {
             auto side = size.height() - 20 - l2->size().height() - cb->size().height();
             l->setPixmap(QPixmap::fromImage(im.scaled(side, side, Qt::KeepAspectRatio, Qt::FastTransformation),
                                             Qt::MonoOnly));
@@ -2038,12 +1954,12 @@ void MainWindow::display_qr_link(bool nkrFormat) {
                         if (qr.getModule(x, y))
                             im.setPixel(x + qr_padding, y + qr_padding, black);
                 show_qr(size());
-            } catch (const std::exception &ex) {
+            } catch (const std::exception& ex) {
                 QMessageBox::warning(nullptr, "error", ex.what());
             }
         }
 
-        W(const QString &link_, const QString &link_nk_) {
+        W(const QString& link_, const QString& link_nk_) {
             link = link_;
             link_nk = link_nk_;
             //
@@ -2070,7 +1986,7 @@ void MainWindow::display_qr_link(bool nkrFormat) {
             refresh(false);
         }
 
-        void resizeEvent(QResizeEvent *resizeEvent) override {
+        void resizeEvent(QResizeEvent* resizeEvent) override {
             show_qr(resizeEvent->size());
         }
     };
@@ -2102,7 +2018,7 @@ void MainWindow::on_menu_scan_qr_triggered() {
                      .setBinarizer(Binarizer::FixedThreshold);
 
     auto result = ReadBarcode(qpx.toImage(), hints);
-    const auto &text = result.text();
+    const auto& text = result.text();
     if (text.isEmpty()) {
         MessageBoxInfo(software_name, tr("QR Code not found"));
     } else {
@@ -2113,7 +2029,7 @@ void MainWindow::on_menu_scan_qr_triggered() {
 }
 
 void MainWindow::on_menu_clear_test_result_triggered() {
-    for (const auto &profile: get_selected_or_group()) {
+    for (const auto& profile: get_selected_or_group()) {
         profile->latency = 0;
         profile->full_test_report = "";
         profile->Save();
@@ -2138,7 +2054,7 @@ void MainWindow::on_menu_delete_repeat_triggered() {
 
     int remove_display_count = 0;
     QString remove_display;
-    for (const auto &ent: out_del) {
+    for (const auto& ent: out_del) {
         remove_display += ent->bean->DisplayTypeAndName() + "\n";
         if (++remove_display_count == 20) {
             remove_display += "...";
@@ -2148,16 +2064,29 @@ void MainWindow::on_menu_delete_repeat_triggered() {
 
     const auto removesAuxiliary = profilesContainAuxiliaryPort(out_del);
     if (removesAuxiliary && internalTunRunning()) {
-        MessageBoxWarning(software_name,
-                          tr("Internal Tun is running. Deleting an auxiliary profile would reload sing-box and may restore direct traffic. Disable Tun explicitly first."));
+        MessageBoxWarning(
+            software_name,
+            tr("Deletion blocked to prevent direct fallback: it would reload the sing-box-owned internal Tun without "
+               "an independent persistent Windows kill switch. Do not disable Tun as a workaround."));
         return;
     }
     if (out_del.length() > 0 &&
         QMessageBox::question(this, tr("Confirmation"), tr("Remove %1 item(s) ?").arg(out_del.length()) + "\n" + remove_display) == QMessageBox::StandardButton::Yes) {
-        for (const auto &ent: out_del) {
-            NekoGui::profileManager->DeleteProfile(ent->id);
+        bool removedAuxiliary = false;
+        bool deleteFailed = false;
+        for (const auto& ent: out_del) {
+            const auto wasAuxiliary = NekoGui::dataStore->aux_profile_ports.contains(ent->id);
+            if (NekoGui::profileManager->DeleteProfile(
+                    ent->id, QStringLiteral("Explicit duplicate-profile deletion confirmed in GUI."))) {
+                removedAuxiliary |= wasAuxiliary;
+            } else {
+                deleteFailed = true;
+            }
         }
-        if (removesAuxiliary && NekoGui::dataStore->started_id >= 0) {
+        if (deleteFailed) {
+            MessageBoxWarning(software_name, tr("One or more profiles could not be deleted; their data was preserved."));
+        }
+        if (removedAuxiliary && NekoGui::dataStore->started_id >= 0) {
             neko_start(NekoGui::dataStore->started_id, CoreStartReason::ProfileReload);
         }
         refresh_proxy_list();
@@ -2165,7 +2094,6 @@ void MainWindow::on_menu_delete_repeat_triggered() {
 }
 
 bool mw_sub_updating = false;
-bool mw_domain_resolving = false;
 
 void MainWindow::on_menu_update_subscription_triggered() {
     auto group = NekoGui::profileManager->CurrentGroup();
@@ -2178,14 +2106,14 @@ void MainWindow::on_menu_update_subscription_triggered() {
 void MainWindow::on_menu_remove_unavailable_triggered() {
     QList<std::shared_ptr<NekoGui::ProxyEntity>> out_del;
 
-    for (const auto &[_, profile]: NekoGui::profileManager->profiles) {
+    for (const auto& [_, profile]: NekoGui::profileManager->profiles) {
         if (NekoGui::dataStore->current_group != profile->gid) continue;
         if (profile->latency < 0) out_del += profile;
     }
 
     int remove_display_count = 0;
     QString remove_display;
-    for (const auto &ent: out_del) {
+    for (const auto& ent: out_del) {
         remove_display += ent->bean->DisplayTypeAndName() + "\n";
         if (++remove_display_count == 20) {
             remove_display += "...";
@@ -2195,16 +2123,29 @@ void MainWindow::on_menu_remove_unavailable_triggered() {
 
     const auto removesAuxiliary = profilesContainAuxiliaryPort(out_del);
     if (removesAuxiliary && internalTunRunning()) {
-        MessageBoxWarning(software_name,
-                          tr("Internal Tun is running. Deleting an auxiliary profile would reload sing-box and may restore direct traffic. Disable Tun explicitly first."));
+        MessageBoxWarning(
+            software_name,
+            tr("Deletion blocked to prevent direct fallback: it would reload the sing-box-owned internal Tun without "
+               "an independent persistent Windows kill switch. Do not disable Tun as a workaround."));
         return;
     }
     if (out_del.length() > 0 &&
         QMessageBox::question(this, tr("Confirmation"), tr("Remove %1 item(s) ?").arg(out_del.length()) + "\n" + remove_display) == QMessageBox::StandardButton::Yes) {
-        for (const auto &ent: out_del) {
-            NekoGui::profileManager->DeleteProfile(ent->id);
+        bool removedAuxiliary = false;
+        bool deleteFailed = false;
+        for (const auto& ent: out_del) {
+            const auto wasAuxiliary = NekoGui::dataStore->aux_profile_ports.contains(ent->id);
+            if (NekoGui::profileManager->DeleteProfile(
+                    ent->id, QStringLiteral("Explicit unavailable-profile deletion confirmed in GUI."))) {
+                removedAuxiliary |= wasAuxiliary;
+            } else {
+                deleteFailed = true;
+            }
         }
-        if (removesAuxiliary && NekoGui::dataStore->started_id >= 0) {
+        if (deleteFailed) {
+            MessageBoxWarning(software_name, tr("One or more profiles could not be deleted; their data was preserved."));
+        }
+        if (removedAuxiliary && NekoGui::dataStore->started_id >= 0) {
             neko_start(NekoGui::dataStore->started_id, CoreStartReason::ProfileReload);
         }
         refresh_proxy_list();
@@ -2212,253 +2153,12 @@ void MainWindow::on_menu_remove_unavailable_triggered() {
 }
 
 void MainWindow::on_menu_resolve_domain_triggered() {
-    auto profiles = get_selected_or_group();
-    if (profiles.isEmpty()) return;
-
-    QStringList serviceChoices{
-        tr("Compare common resolvers"),
-        tr("Subscription DoH"),
-        tr("Profile DoH override"),
-        tr("Routing Remote DNS DoH"),
-        tr("Routing Direct DNS DoH"),
-        tr("Public DoH"),
-        tr("Custom DoH"),
-        tr("System resolver"),
-    };
-    bool ok = false;
-    auto serviceChoice = QInputDialog::getItem(this,
-                                               tr("Resolve domain"),
-                                               tr("Resolver"),
-                                               serviceChoices,
-                                               1,
-                                               false,
-                                               &ok);
-    if (!ok) return;
-
-    auto chooseOutboundPath = [&](ResolveOptions &options) {
-        pruneAuxiliaryProfilePorts();
-        if (options.serverMode == ResolveServerMode::System) {
-            options.outboundMode = ResolveOutboundMode::Direct;
-            options.outboundName = tr("System resolver");
-            return true;
-        }
-
-        struct OutboundChoice {
-            QString label;
-            ResolveOutboundMode mode = ResolveOutboundMode::Direct;
-            int port = 0;
-        };
-
-        QList<OutboundChoice> outboundOptions{
-            {tr("No NekoRay proxy"), ResolveOutboundMode::Direct, 0},
-        };
-        if (NekoGui::dataStore->started_id >= 0) {
-            auto running = NekoGui::profileManager->GetProfile(NekoGui::dataStore->started_id);
-            outboundOptions << OutboundChoice{
-                tr("Main profile: %1 @ 127.0.0.1:%2")
-                    .arg(running == nullptr ? QStringLiteral("#%1").arg(NekoGui::dataStore->started_id) : running->bean->DisplayTypeAndName())
-                    .arg(NekoGui::dataStore->inbound_socks_port),
-                ResolveOutboundMode::MainProxy,
-                NekoGui::dataStore->inbound_socks_port,
-            };
-        }
-        for (auto it = NekoGui::dataStore->aux_profile_ports.constBegin(); it != NekoGui::dataStore->aux_profile_ports.constEnd(); ++it) {
-            auto profile = NekoGui::profileManager->GetProfile(it.key());
-            outboundOptions << OutboundChoice{
-                tr("Aux profile: %1 @ 127.0.0.1:%2")
-                    .arg(profile == nullptr ? QStringLiteral("#%1").arg(it.key()) : profile->bean->DisplayTypeAndName())
-                    .arg(it.value()),
-                ResolveOutboundMode::AuxProxy,
-                it.value(),
-            };
-        }
-
-        QStringList outboundChoices;
-        for (const auto &option: outboundOptions) {
-            outboundChoices << option.label;
-        }
-        auto outboundChoice = QInputDialog::getItem(this,
-                                                    tr("Resolve domain"),
-                                                    tr("Outbound path"),
-                                                    outboundChoices,
-                                                    0,
-                                                    false,
-                                                    &ok);
-        if (!ok) return false;
-        const auto index = outboundChoices.indexOf(outboundChoice);
-        const auto selected = outboundOptions.value(index < 0 ? 0 : index);
-        options.outboundMode = selected.mode;
-        options.outboundPort = selected.port;
-        options.outboundName = selected.label;
-        return true;
-    };
-
-    QList<ResolveOptions> resolveTasks;
-    const auto compareMode = serviceChoice == serviceChoices[0];
-    if (compareMode) {
-        ResolveOptions outboundTemplate;
-        outboundTemplate.serverMode = ResolveServerMode::PublicDoh;
-        if (!chooseOutboundPath(outboundTemplate)) return;
-
-        for (const auto mode: {
-                 ResolveServerMode::SubscriptionDoh,
-                 ResolveServerMode::ProviderDoh,
-                 ResolveServerMode::RemoteDoh,
-                 ResolveServerMode::DirectDoh,
-                 ResolveServerMode::PublicDoh,
-                 ResolveServerMode::System,
-             }) {
-            ResolveOptions task;
-            task.serverMode = mode;
-            task.resolverName = resolveServerModeName(mode);
-            if (mode == ResolveServerMode::System) {
-                task.outboundMode = ResolveOutboundMode::Direct;
-                task.outboundName = tr("System resolver");
-            } else {
-                task.outboundMode = outboundTemplate.outboundMode;
-                task.outboundPort = outboundTemplate.outboundPort;
-                task.outboundName = outboundTemplate.outboundName;
-            }
-            resolveTasks << task;
-        }
-    } else {
-        ResolveOptions options;
-        if (serviceChoice == serviceChoices[1]) options.serverMode = ResolveServerMode::SubscriptionDoh;
-        if (serviceChoice == serviceChoices[2]) options.serverMode = ResolveServerMode::ProviderDoh;
-        if (serviceChoice == serviceChoices[3]) options.serverMode = ResolveServerMode::RemoteDoh;
-        if (serviceChoice == serviceChoices[4]) options.serverMode = ResolveServerMode::DirectDoh;
-        if (serviceChoice == serviceChoices[5]) options.serverMode = ResolveServerMode::PublicDoh;
-        if (serviceChoice == serviceChoices[6]) options.serverMode = ResolveServerMode::CustomDoh;
-        if (serviceChoice == serviceChoices[7]) options.serverMode = ResolveServerMode::System;
-        options.resolverName = resolveServerModeName(options.serverMode);
-
-        if (options.serverMode == ResolveServerMode::CustomDoh) {
-            auto text = QInputDialog::getMultiLineText(this,
-                                                       tr("Resolve domain"),
-                                                       tr("HTTPS DoH upstreams, one per line"),
-                                                       "",
-                                                       &ok);
-            if (!ok) return;
-            options.customDohUpstreams = splitResolverLines(text);
-        }
-
-        if (!chooseOutboundPath(options)) return;
-        resolveTasks << options;
-    }
-
-    if (mw_sub_updating || mw_domain_resolving) {
-        MessageBoxWarning(tr("Resolve domain"), tr("A subscription update or domain resolve task is still running."));
-        return;
-    }
-
-    const auto totalTaskCount = resolveTasks.count() * profiles.count();
-    auto cancelToken = std::make_shared<std::atomic_bool>(false);
-    for (auto &task: resolveTasks) {
-        task.cancelToken = cancelToken;
-    }
-
-    auto showResolveResults = [=](QList<ServerResolveResult> results) {
-        int resolvedCount = 0;
-        for (const auto &result: results) {
-            if (result.ok()) resolvedCount++;
-        }
-
-        QMessageBox msg(this);
-        msg.setIcon(resolvedCount > 0 ? QMessageBox::Information : QMessageBox::Warning);
-        msg.setWindowTitle(tr("Resolve domain"));
-        msg.setText(compareMode
-                        ? tr("Resolved %1 of %2 resolver task(s).").arg(resolvedCount).arg(results.count())
-                        : tr("Resolved %1 of %2 profile(s).").arg(resolvedCount).arg(results.count()));
-        msg.setDetailedText(formatResolveResults(results));
-        QPushButton *replaceButton = nullptr;
-        QPushButton *copyNewButton = nullptr;
-        if (!compareMode) {
-            replaceButton = msg.addButton(tr("Replace"), QMessageBox::AcceptRole);
-            copyNewButton = msg.addButton(tr("Copy as new"), QMessageBox::ActionRole);
-            replaceButton->setEnabled(resolvedCount > 0);
-            copyNewButton->setEnabled(resolvedCount > 0);
-        }
-        auto copyTextButton = msg.addButton(tr("Copy results"), QMessageBox::ActionRole);
-        msg.addButton(compareMode ? QMessageBox::Ok : QMessageBox::Cancel);
-        msg.exec();
-
-        const auto clicked = msg.clickedButton();
-        if (clicked == copyTextButton) {
-            QApplication::clipboard()->setText(formatResolveResults(results));
-            return;
-        }
-        if (compareMode) return;
-        if (clicked != replaceButton && clicked != copyNewButton) {
-            return;
-        }
-
-        int changedCount = 0;
-        for (const auto &result: results) {
-            if (!result.ok()) continue;
-            if (clicked == replaceButton) {
-                applyResolvedServerAddress(result.profile, result.resolvedAddress);
-                result.profile->Save();
-                changedCount++;
-            } else if (clicked == copyNewButton) {
-                auto clone = cloneProfileForResolvedAddress(result.profile, result.resolvedAddress);
-                if (clone != nullptr && NekoGui::profileManager->AddProfile(clone, result.profile->gid)) changedCount++;
-            }
-        }
-
-        refresh_proxy_list();
-        show_log_impl(clicked == replaceButton
-                          ? tr("Resolved and replaced %1 profile(s).").arg(changedCount)
-                          : tr("Resolved and copied %1 profile(s).").arg(changedCount));
-    };
-
-    mw_domain_resolving = true;
-    auto progress = new QProgressDialog(tr("Resolving domains..."), tr("Cancel"), 0, totalTaskCount, this);
-    QPointer<QProgressDialog> progressGuard(progress);
-    progress->setWindowTitle(tr("Resolve domain"));
-    progress->setWindowModality(Qt::WindowModal);
-    progress->setMinimumDuration(0);
-    progress->setAutoClose(false);
-    progress->setAutoReset(false);
-    connect(progress, &QProgressDialog::canceled, this, [=] {
-        cancelToken->store(true);
-        if (progressGuard != nullptr) progressGuard->setLabelText(tr("Canceling..."));
-    });
-    progress->show();
-    show_log_impl(tr("Resolving %1 domain task(s) in background.").arg(totalTaskCount));
-
-    runOnNewThread([=] {
-        QList<ServerResolveResult> results;
-        int completed = 0;
-        for (const auto &task: resolveTasks) {
-            if (cancelToken->load()) break;
-            for (const auto &profile: profiles) {
-                if (cancelToken->load()) break;
-                results << resolveProfileServer(profile, task);
-                completed++;
-                runOnUiThread([=] {
-                    if (progressGuard != nullptr) progressGuard->setValue(completed);
-                }, this);
-            }
-        }
-
-        runOnUiThread([=] {
-            mw_domain_resolving = false;
-            if (progressGuard != nullptr) {
-                progressGuard->setValue(completed);
-                progressGuard->close();
-                progressGuard->deleteLater();
-            }
-            if (NekoGui::dataStore->prepare_exit) return;
-            if (cancelToken->load()) {
-                show_log_impl(tr("Domain resolve canceled after %1 of %2 task(s).").arg(completed).arg(totalTaskCount));
-                if (results.isEmpty()) return;
-            }
-            showResolveResults(results);
-        }, this);
-    });
+    MessageBoxWarning(
+        software_name,
+        tr("Resolve domain is disabled. The legacy action used the Windows system resolver and permanently replaced the node domain with an IP, which can bypass or destroy the subscription's proxy-server-nameserver policy."));
 }
 
-void MainWindow::on_proxyListTable_customContextMenuRequested(const QPoint &pos) {
+void MainWindow::on_proxyListTable_customContextMenuRequested(const QPoint& pos) {
     ui->menu_server->popup(ui->proxyListTable->viewport()->mapToGlobal(pos)); // 弹出菜单
 }
 
@@ -2485,7 +2185,7 @@ QList<std::shared_ptr<NekoGui::ProxyEntity>> MainWindow::get_selected_or_group()
     return profiles;
 }
 
-void MainWindow::keyPressEvent(QKeyEvent *event) {
+void MainWindow::keyPressEvent(QKeyEvent* event) {
     switch (event->key()) {
         case Qt::Key_Escape:
             // take over by shortcut_esc
@@ -2500,7 +2200,7 @@ void MainWindow::keyPressEvent(QKeyEvent *event) {
 
 // Log
 
-inline void FastAppendTextDocument(const QString &message, QTextDocument *doc) {
+inline void FastAppendTextDocument(const QString& message, QTextDocument* doc) {
     QTextCursor cursor(doc);
     cursor.movePosition(QTextCursor::End);
     cursor.beginEditBlock();
@@ -2509,15 +2209,15 @@ inline void FastAppendTextDocument(const QString &message, QTextDocument *doc) {
     cursor.endEditBlock();
 }
 
-void MainWindow::show_log_impl(const QString &log) {
+void MainWindow::show_log_impl(const QString& log) {
     auto lines = SplitLines(log.trimmed());
     if (lines.isEmpty()) return;
 
     QStringList newLines;
     auto log_ignore = NekoGui::dataStore->log_ignore;
-    for (const auto &line: lines) {
+    for (const auto& line: lines) {
         bool showThisLine = true;
-        for (const auto &str: log_ignore) {
+        for (const auto& str: log_ignore) {
             if (line.contains(str)) {
                 showThisLine = false;
                 break;
@@ -2549,8 +2249,8 @@ void MainWindow::show_log_impl(const QString &log) {
     NekoGui::dataStore->routing->a = (SplitLines(NekoGui::dataStore->routing->a) << (b)).join("\n"); \
     NekoGui::dataStore->routing->Save();
 
-void MainWindow::on_masterLogBrowser_customContextMenuRequested(const QPoint &pos) {
-    QMenu *menu = ui->masterLogBrowser->createStandardContextMenu();
+void MainWindow::on_masterLogBrowser_customContextMenuRequested(const QPoint& pos) {
+    QMenu* menu = ui->masterLogBrowser->createStandardContextMenu();
 
     auto sep = new QAction(this);
     sep->setSeparator(true);
@@ -2629,9 +2329,9 @@ void MainWindow::on_masterLogBrowser_customContextMenuRequested(const QPoint &po
 
 // eventFilter
 
-bool MainWindow::eventFilter(QObject *obj, QEvent *event) {
+bool MainWindow::eventFilter(QObject* obj, QEvent* event) {
     if (event->type() == QEvent::MouseButtonPress) {
-        auto mouseEvent = dynamic_cast<QMouseEvent *>(event);
+        auto mouseEvent = dynamic_cast<QMouseEvent*>(event);
         if (obj == ui->label_running && mouseEvent->button() == Qt::LeftButton && running != nullptr) {
             speedtest_current();
             return true;
@@ -2650,7 +2350,7 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event) {
 
 // profile selector
 
-void MainWindow::start_select_mode(QObject *context, const std::function<void(int)> &callback) {
+void MainWindow::start_select_mode(QObject* context, const std::function<void(int)>& callback) {
     select_mode = true;
     connectOnce(this, &MainWindow::profile_selected, context, callback);
     refresh_status();
@@ -2660,7 +2360,7 @@ void MainWindow::start_select_mode(QObject *context, const std::function<void(in
 
 inline QJsonArray last_arr; // format is nekoray_connections_json
 
-void MainWindow::refresh_connection_list(const QJsonArray &arr) {
+void MainWindow::refresh_connection_list(const QJsonArray& arr) {
     if (last_arr == arr) {
         return;
     }
@@ -2671,7 +2371,7 @@ void MainWindow::refresh_connection_list(const QJsonArray &arr) {
     ui->tableWidget_conn->setRowCount(0);
 
     int row = -1;
-    for (const auto &_item: arr) {
+    for (const auto& _item: arr) {
         auto item = _item.toObject();
         if (NekoGui::dataStore->ignoreConnTag.contains(item["Tag"].toString())) continue;
 
@@ -2740,11 +2440,11 @@ void MainWindow::RegisterHotkey(bool unregister) {
         NekoGui::dataStore->hotkey_system_proxy_menu,
     };
 
-    for (const auto &key: regstr) {
+    for (const auto& key: regstr) {
         if (key.isEmpty()) continue;
         if (regstr.count(key) > 1) return; // Conflict hotkey
     }
-    for (const auto &key: regstr) {
+    for (const auto& key: regstr) {
         QKeySequence k(key);
         if (k.isEmpty()) continue;
         auto hk = std::make_shared<QHotkey>(k, true);
@@ -2757,7 +2457,7 @@ void MainWindow::RegisterHotkey(bool unregister) {
     }
 }
 
-void MainWindow::HotkeyEvent(const QString &key) {
+void MainWindow::HotkeyEvent(const QString& key) {
     if (key.isEmpty()) return;
     runOnUiThread([=] {
         if (key == NekoGui::dataStore->hotkey_mainwindow) {
@@ -2776,7 +2476,7 @@ void MainWindow::HotkeyEvent(const QString &key) {
 
 void MainWindow::RegisterHotkey(bool unregister) {}
 
-void MainWindow::HotkeyEvent(const QString &key) {}
+void MainWindow::HotkeyEvent(const QString& key) {}
 
 #endif
 
@@ -2787,20 +2487,22 @@ bool MainWindow::StartVPNProcess() {
     if (vpn_pid != 0) {
         return true;
     }
+#ifdef Q_OS_WIN
+    // The legacy elevated launcher does not return a durable process handle or
+    // verified PID. Starting it would leave no safe way to distinguish this
+    // instance from another installation's nekobox_core.exe. Keep the data and
+    // UI setting for compatibility, but refuse this unsafe Windows path until
+    // the persistent runtime owns the worker explicitly.
+    MessageBoxWarning(
+        tr("Tun process"),
+        tr("Legacy external Tun is disabled on Windows because its process ownership cannot be verified. "
+           "Use the internal Tun option; no process was started."));
+    return false;
+#else
     //
     auto configPath = NekoGui::WriteVPNSingBoxConfig();
     auto scriptPath = NekoGui::WriteVPNLinuxScript(configPath);
     //
-#ifdef Q_OS_WIN
-    runOnNewThread([=] {
-        vpn_pid = 1; // TODO get pid?
-        WinCommander::runProcessElevated(QApplication::applicationDirPath() + "/nekobox_core.exe",
-                                         {"--disable-color", "run", "-c", configPath}, "",
-                                         NekoGui::dataStore->vpn_hide_console ? WinCommander::SW_HIDE : WinCommander::SW_SHOWMINIMIZED); // blocking
-        vpn_pid = 0;
-        runOnUiThread([=] { neko_set_spmode_vpn(false, false, ProxyModeChangeReason::VpnProcessExit); });
-    });
-#else
     //
     auto vpn_process = new QProcess;
     QProcess::connect(vpn_process, &QProcess::stateChanged, this, [=](QProcess::ProcessState state) {
@@ -2826,14 +2528,15 @@ bool MainWindow::StartVPNProcess() {
 
 bool MainWindow::StopVPNProcess(bool unconditional) {
     if (unconditional || vpn_pid != 0) {
-        bool ok;
-        core_process->processId();
 #ifdef Q_OS_WIN
-        auto ret = WinCommander::runProcessElevated("taskkill", {"/IM", "nekobox_core.exe",
-                                                                 "/FI",
-                                                                 "PID ne " + Int2String(core_process->processId())});
-        ok = ret == 0;
+        Q_UNUSED(unconditional);
+        MessageBoxWarning(
+            tr("Tun process"),
+            tr("Refusing the legacy Windows Tun cleanup because it cannot identify an owned process precisely. "
+               "No nekobox_core process was stopped."));
+        return false;
 #else
+        bool ok;
         QProcess p;
 #ifdef Q_OS_MACOS
         p.start("osascript", {"-e", QStringLiteral("do shell script \"%1\" with administrator privileges")
@@ -2847,11 +2550,11 @@ bool MainWindow::StopVPNProcess(bool unconditional) {
 #endif
         p.waitForFinished();
         ok = p.exitCode() == 0;
-#endif
         if (!unconditional) {
             ok ? vpn_pid = 0 : MessageBoxWarning(tr("Error"), tr("Failed to stop Tun process"));
         }
         return ok;
+#endif
     }
     return true;
 }

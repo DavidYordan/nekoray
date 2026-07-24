@@ -42,4 +42,5 @@ namespace NekoGui_fmt {
     QString AbstractBean::DisplayTypeAndName() {
         return QStringLiteral("[%1] %2").arg(DisplayType(), DisplayName());
     }
+
 } // namespace NekoGui_fmt

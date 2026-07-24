@@ -1,0 +1,36 @@
+{
+  "log": {
+    "level": "info",
+    "output": "must-not-be-created.log"
+  },
+  "inbounds": [
+    {
+      "type": "mixed",
+      "tag": "mixed-in",
+      "listen": "127.0.0.1",
+      "listen_port": 18081,
+      "set_system_proxy": true
+    },
+    {
+      "type": "mixed",
+      "tag": "must-not-start",
+      "listen": "0.0.0.0",
+      "listen_port": 18082
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "direct",
+      "tag": "proxy"
+    }
+  ],
+  "route": {
+    "auto_detect_interface": false,
+    "final": "proxy"
+  },
+  "experimental": {
+    "clash_api": {
+      "external_controller": "0.0.0.0:18083"
+    }
+  }
+}

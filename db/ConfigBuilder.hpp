@@ -2,21 +2,45 @@
 
 #include "ProxyEntity.hpp"
 
+#include <QMap>
+
 namespace NekoGui {
     struct ResolverBindingRequest {
         int outboundIndex = -1;
         QString outboundTag;
         QString server;
         QStringList dohUpstreams;
-        bool allowLocalFallback = true;
+        int profileId = -1;
+        int groupId = -1;
+        int mixedPort = -1;
+        QString bindingRole;
+        QString bootstrapResolverTag;
+        QJsonObject expectedBootstrapServer;
+    };
+
+    struct ManagedMixedBinding {
+        QString inboundTag;
+        int listenPort = -1;
+        QString outboundTag;
+        bool allowResolveBeforeTerminal = false;
+        QJsonObject expectedInbound;
+        // Snapshot after all profile-level/custom_outbound generation, but
+        // before top-level custom_config is merged.  Every reachable outbound
+        // (including its detour) must be identical so one managed port cannot
+        // be redirected or silently rewritten into a different managed line.
+        QMap<QString, QJsonObject> expectedOutbounds;
     };
 
     class BuildConfigResult {
     public:
         QString error;
         QJsonObject coreConfig;
+        // Immutable property of the final configuration that passed the
+        // managed-TUN validator. Runtime state must commit this value instead
+        // of re-reading mutable UI settings after the Start RPC.
+        bool managedInternalTun = false;
 
-        QList<std::shared_ptr<NekoGui_traffic::TrafficData>> outboundStats; // all, but not including "bypass" "block"
+        QList<NekoGui_traffic::TrafficBinding> outboundStats; // all, but not including "bypass" "block"
         std::shared_ptr<NekoGui_traffic::TrafficData> outboundStat;         // main
         QStringList ignoreConnTag;
     };
@@ -49,6 +73,9 @@ namespace NekoGui {
         QJsonArray inbounds;
         QJsonArray outbounds;
         QList<ResolverBindingRequest> resolverBindingRequests;
+        QList<ManagedMixedBinding> managedMixedBindings;
+        int resolverContextMixedPort = -1;
+        QString resolverContextRole;
     };
 
     std::shared_ptr<BuildConfigResult> BuildConfig(const std::shared_ptr<ProxyEntity> &ent, bool forTest, bool forExport);

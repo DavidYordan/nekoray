@@ -123,7 +123,11 @@ func readConfig(ctx context.Context, paths []string, directories []string) (opti
 	return mergedOptions, nil
 }
 
-func createSingBoxWithOptions(ctx context.Context, options option.Options, platformWriter sblog.PlatformWriter) (*box.Box, context.CancelFunc, error) {
+// createSingBoxCandidateWithOptions deliberately leaves a partially started
+// instance to its caller when Start fails. The lifecycle owner must cancel and
+// close that candidate while holding its lifecycle mutex, so a Close failure
+// can be retained as an explicit blocked state instead of being discarded.
+func createSingBoxCandidateWithOptions(ctx context.Context, options option.Options, platformWriter sblog.PlatformWriter) (*box.Box, context.CancelFunc, error) {
 	if options.Log == nil {
 		options.Log = &option.LogOptions{}
 	}
@@ -141,11 +145,23 @@ func createSingBoxWithOptions(ctx context.Context, options option.Options, platf
 	}
 	err = instance.Start()
 	if err != nil {
-		cancel()
-		_ = instance.Close()
-		return nil, nil, fmt.Errorf("start service: %w", err)
+		return instance, cancel, fmt.Errorf("start service: %w", err)
 	}
 	return instance, cancel, nil
+}
+
+func createSingBoxWithOptions(ctx context.Context, options option.Options, platformWriter sblog.PlatformWriter) (*box.Box, context.CancelFunc, error) {
+	instance, cancel, err := createSingBoxCandidateWithOptions(ctx, options, platformWriter)
+	if err == nil || instance == nil {
+		return instance, cancel, err
+	}
+	if cancel != nil {
+		cancel()
+	}
+	if closeErr := instance.Close(); closeErr != nil {
+		return instance, cancel, fmt.Errorf("%w; candidate shutdown failed: %v", err, closeErr)
+	}
+	return nil, nil, err
 }
 
 func checkSingBoxWithOptions(ctx context.Context, options option.Options) error {
@@ -177,6 +193,42 @@ func CreateSingBox(config []byte, platformWriter sblog.PlatformWriter) (*box.Box
 		return nil, nil, err
 	}
 	return createSingBoxWithOptions(ctx, options, platformWriter)
+}
+
+func createSingBoxCandidate(
+	config []byte,
+	platformWriter sblog.PlatformWriter,
+	bindOperationCancel func(context.CancelFunc),
+) (*box.Box, context.CancelFunc, error) {
+	ctx, operationCancel := context.WithCancel(singBoxContext())
+	if bindOperationCancel != nil {
+		// Bind before parsing or box construction so an expired RPC cannot
+		// leave a candidate running until the factory eventually returns.
+		bindOperationCancel(operationCancel)
+	}
+	options, err := json.UnmarshalExtendedContext[option.Options](ctx, config)
+	if err != nil {
+		operationCancel()
+		return nil, nil, err
+	}
+	instance, candidateCancel, createErr := createSingBoxCandidateWithOptions(
+		ctx,
+		options,
+		platformWriter,
+	)
+	if instance == nil {
+		if candidateCancel != nil {
+			candidateCancel()
+		}
+		operationCancel()
+		return nil, nil, createErr
+	}
+	return instance, func() {
+		if candidateCancel != nil {
+			candidateCancel()
+		}
+		operationCancel()
+	}, createErr
 }
 
 func createSingBoxFromFiles(paths []string, directories []string) (*box.Box, context.CancelFunc, error) {

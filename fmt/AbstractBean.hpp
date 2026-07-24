@@ -24,7 +24,7 @@ namespace NekoGui_fmt {
         QString custom_outbound = "";
 
         QString serverResolverDohUpstreams = "";
-        bool serverResolverAllowLocalFallback = true;
+        bool serverResolverAllowLocalFallback = false;
         bool inheritSubscriptionClient = true;
         bool inheritSubscriptionResolver = true;
 
@@ -34,6 +34,8 @@ namespace NekoGui_fmt {
 
         QString ToNekorayShareLink(const QString &type);
 
+        // Upstream NekoRay's explicit, user-confirmed maintenance action.
+        // This is not used as a runtime resolver fallback.
         [[nodiscard]] virtual QString DisplayAddress();
 
         [[nodiscard]] virtual QString DisplayName();

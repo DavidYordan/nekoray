@@ -30,15 +30,18 @@ namespace NekoGui {
 
         bool AddProfile(const std::shared_ptr<ProxyEntity> &ent, int gid = -1);
 
-        void DeleteProfile(int id);
+        [[nodiscard]] bool DeleteProfile(int id, const QString &reason = {}, QString *error = nullptr);
 
-        void MoveProfile(const std::shared_ptr<ProxyEntity> &ent, int gid);
+        [[nodiscard]] bool MoveProfile(
+            const std::shared_ptr<ProxyEntity> &ent,
+            int gid,
+            QString *error = nullptr);
 
         std::shared_ptr<ProxyEntity> GetProfile(int id);
 
         bool AddGroup(const std::shared_ptr<Group> &ent);
 
-        void DeleteGroup(int gid);
+        [[nodiscard]] bool DeleteGroup(int gid, const QString &reason = {}, QString *error = nullptr);
 
         std::shared_ptr<Group> GetGroup(int id);
 
