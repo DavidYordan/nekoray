@@ -11,16 +11,18 @@ Windows x64 是当前首要验收平台。OpenWrt 是相同 core 的诊断环境
 
 历史一次性 Mixed/AnyTLS 调查只在矩阵中作为明确标注日期的诊断背景保留；原始证据见 [2026-07-20 接管基线](../archive/audits/2026-07-20-takeover-baseline.md)。历史中的单次成功不能升级为当前通过结论。
 
-## 2026-07-28 原生 2080 路由回归整改
+## 2026-07-28 主入口与专用端口路由整改
 
 | 检查 | 结果 | 边界 |
 |---|---:|---|
 | 修复前定向回归 | 14/15 | 新增 `primary_mixed_preserves_native_routing` 后，旧构建只有该用例失败，证明断言命中了既存的无条件主线路绑定 |
 | 增量重建 `nekobox` | 通过 | 重新编译 `ConfigBuilder.cpp` 并链接 GUI，不等同于完整 Windows 打包 |
-| `test_final_config_guards.ps1` | 15/15 | 原生 `mixed-in` 保留自定义 route 命中，不再存在仅凭 `mixed-in` 无条件终结到 `proxy` 的规则；专用辅助端口严格绑定路径未改 |
-| CTest | 4/4 | 配置恢复、runtime transition、分享格式和 resolver policy 纯测试通过 |
+| `test_final_config_guards.ps1` | 15/15 | 原生 `mixed-in` 保留自定义 route 命中，不再存在仅凭 `mixed-in` 无条件终结到 `proxy` 的规则；该安全导出路径不包含运行态辅助端口 |
+| 辅助端口 reject 编译红绿回归 | 通过 | 旧实现只产生 terminal binding，新 `auxiliary_route_compiler_test` 要求复制三个显式 reject 且不复制 resolve/direct/bypass/其它 outbound；修复前失败、修复后通过 |
+| 辅助端口 core schema fixture | 通过 | `test/fixtures/auxiliary-reject-routing.json` 使用文档保留地址，`nekobox_core check -c` 返回 0；不启动 listener 或远端连接 |
+| CTest | 5/5 | 配置恢复、runtime transition、分享格式、辅助端口路由编译和 resolver policy 纯测试通过 |
 
-本轮没有启动真实 GUI、线路或 Windows TUN，也没有执行完整 package。主入口回归已有配置级红绿证据；辅助端口的真实双线路出口、显式 reject/block 排序和 Windows 集成仍待验证。
+本轮没有启动真实 GUI、线路或 Windows TUN，也没有执行完整 package。主入口回归与辅助端口 reject/terminal 顺序已有配置级红绿证据；真实双线路出口、单线失败隔离和 Windows 集成仍待验证。
 
 ## 2026-07-24 端口恢复与 Clash TUN 归因
 
@@ -67,7 +69,7 @@ Windows x64 是当前首要验收平台。OpenWrt 是相同 core 的诊断环境
 |---|---|---|---|---|
 | L1 本地无侵入 | 配置/schema | 每个导出配置执行 `nekobox_core check`；空配置、迁移、损坏配置 | 已验证损坏主/路由配置及错误类型、非字符串、重复辅助映射原件不被覆盖；其它迁移矩阵不完整 | 必须自动化通过 |
 | L1 本地无侵入 | Mixed contract | HTTP absolute-form、HTTPS CONNECT、SOCKS5h、认证正反例、端口占用、非 loopback/TUN 拒绝 | 正向及安全收紧有证据，反例不完整 | 必须全部通过 |
-| L1 本地无侵入 | 端口映射/OS 副作用 | 主 `2080` 保持上游路由语义；每个专用端口命中其绑定完整 chain；顶层 custom 不得改变专用 listener/outbound 绑定；无明确操作不得改变系统代理/TUN | 2026-07-28 已用导出红绿回归关闭主入口无条件绑定；辅助绑定与部分 OS guard 有证据，仍缺完整 C++ golden 和真实双线路验证 | 必须通过 |
+| L1 本地无侵入 | 端口映射/OS 副作用 | 主 `2080` 保持上游路由语义；每个专用端口命中其绑定完整 chain；显式 reject/block 可生效；顶层 custom 不得改变专用 listener/outbound 绑定；无明确操作不得改变系统代理/TUN | 2026-07-28 已用导出红绿回归关闭主入口无条件绑定；辅助 reject/terminal 编译已有纯 C++ golden 和 core schema fixture，仍缺完整 ConfigBuilder 运行态 golden 与真实双线路验证 | 必须通过 |
 | L1 本地无侵入 | 工具安全 | 不改系统代理/TUN/路由/DNS；拒绝 TUN、系统 NTP 写入和非空 endpoints；只保留目标 outbound detour 闭包并只结束精确 PID；不停止或改写 Clash TUN | 启动 GUI/core、写审计报告及构建/临时目录的脚本参数继续使用固定磁盘、非生产/非 reparse 路径护栏；本地/远端收紧器已有 fixture，OpenWrt Python 单测 19/19 | 必须保持 |
 | L2 OpenWrt 探针 | core/工具安全 | 相同 `1.13.12-routefluent-anytls-client.7` core 的 schema、loopback Mixed、监听 PID 与远端基线保护 | 2026-07-20 历史执行：既有 PID/命令行、配置/manifest 哈希和监听均不变，临时目录已清理；旧探针对临时副本强制 `auto_detect_interface=true`，尚未按默认 preserve 重跑 | 必须重跑并保持 |
 | L2 OpenWrt 探针 | 远端链路 | Trojan、AnyTLS、DNS、detour 有/无的对照；HTTP/CONNECT/SOCKS5h | 2026-07-20 历史诊断：AnyTLS mihomo 无 detour 与独立 profile 2 Trojan 均三协议 204；主 AnyTLS + `g-2` detour 失败。因所有变体均被旧探针强制 `auto_detect_interface=true`，只支持同一变体内的组合归因，不能作为当前导出策略验收 | 主组合阻断发布，按 preserve 重跑 |
