@@ -11,7 +11,7 @@
 
 ## 先分清两层语义
 
-必须分开验证两类入口：原生 Mixed `2080` 保留 NekoRay 正常路由语义，当前主 profile 只是默认出站；新增专用 Mixed 端口才严格进入与其绑定的完整 chain。2026-07-28 的整改已移除主入口无条件终结绑定，并加入配置导出回归断言；主入口仍须继续对照 NekoRay 4.0.1 验证完整 route/reject/DNS 行为。提交 `3f7ff19` 又把普通规则中的显式 reject/block 编译为仅匹配对应辅助 inbound 的前置规则，随后才执行精确 chain 绑定；direct、bypass、主线和其它 outbound 不会被复制到该前置区。该顺序已有纯 C++ 测试、core schema 和双回环上游运行证据，仍须用真实 profile 与 ConfigBuilder 最终配置验证不跨线。
+必须分开验证两类入口：原生 Mixed `2080` 保留 NekoRay 正常路由语义，当前主 profile 只是默认出站；新增专用 Mixed 端口才严格进入与其绑定的完整 chain。2026-07-28 的整改已移除主入口无条件终结绑定，并加入配置导出回归断言；主入口仍须继续对照 NekoRay 4.0.1 验证完整 route/reject/DNS 行为。提交 `3f7ff19` 又把普通规则中的显式 reject/block 编译为仅匹配对应辅助 inbound 的前置规则，随后才执行精确 chain 绑定；direct、bypass、主线和其它 outbound 不会被复制到该前置区。提交 `a3dee71` 已通过隔离 appdata 中的 ProfileManager/ConfigBuilder 生成一条两跳辅助 chain，验证最终 listener、detour 闭包、reject/terminal 顺序和普通主入口语义，并由当前 core `check`；它没有启动这份生成配置，真实节点与 Windows GUI 仍未验证。
 
 `route.auto_detect_interface` 只让 sing-box 在操作系统路由层选择合格的底层接口，主要用于避免 TUN 回环。它不读取 Mixed 端口，也不在主线路和辅助线路之间做选择。测试报告必须分别记录“命中了哪个逻辑 outbound”和“底层套接字走了哪个接口”；不能用接口自动检测来修正端口映射。
 
@@ -72,6 +72,16 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\verify_mixed_inbound
 
 该测试只使用 `127.0.0.1` 上两个 Mixed listener 和两个带不同状态码的 HTTP proxy 桩：验证端口 A/B 分别命中各自上游、terminal 后的跨线路规则不能改投、显式 reject 不触达任一上游，以及停止 A 上游后 B 仍工作。它核对所有监听 PID、只结束自己创建的进程、比较系统代理前后快照并删除受保护临时目录。它使用手写脱敏 core fixture，不证明 GUI/ProfileManager/ConfigBuilder 已生成同一配置，也不代表真实节点可用。
 
+最终生成链路的无启动审计：
+
+```powershell
+.\test\test_final_config_guards.ps1 `
+  -ExecutablePath .\build-package-windows64\nekobox.exe `
+  -CorePath .\deployment\windows64\nekobox_core.exe
+```
+
+其中辅助线路用例在隔离 appdata 中持久化主 SOCKS profile、辅助 chain profile 和两个文档保留地址的 SOCKS hop，再调用显式辅助审计导出。它要求普通 `2080` route 仍命中原生规则，辅助 listener 精确指向两跳 detour 闭包，reject 位于 terminal 前而跨线 redirect 位于 terminal 后；同时要求导出不含 TUN、`set_system_proxy=true` 或 `auto_detect_interface`。普通导出仍必须省略辅助线路，`for_test` 与辅助审计组合必须失败。该用例只写临时文件并执行 `check`，不启动生成的 listener。
+
 ## 诊断开关
 
 以下选项只修改临时副本：
@@ -92,7 +102,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\verify_mixed_inbound
 
 ## 已知限制
 
-对真实节点直接运行 `verify_mixed_inbound.ps1` 仍依赖真实 DNS、节点和所选测试 URL，不能完全分离本地 Mixed contract 与远端出站。仓内 `test_mixed_probe.ps1` 与 `test_runtime_connectivity.ps1` 已改用精确 PID 持有的 loopback HTTP 204 origin，避免公共站抖动，并验证 origin 清理；新增 `test_auxiliary_route_runtime.ps1` 覆盖两个专用端口的不同回环出口、reject 和单上游故障隔离。它们仍未覆盖错误认证、真实 profile chain、WFP、IPv6 或持续健康，也不能证明进程就是本次 GUI 启动的实例。
+对真实节点直接运行 `verify_mixed_inbound.ps1` 仍依赖真实 DNS、节点和所选测试 URL，不能完全分离本地 Mixed contract 与远端出站。仓内 `test_mixed_probe.ps1` 与 `test_runtime_connectivity.ps1` 已改用精确 PID 持有的 loopback HTTP 204 origin，避免公共站抖动，并验证 origin 清理；`test_auxiliary_route_runtime.ps1` 覆盖两个专用端口的不同回环出口、reject 和单上游故障隔离，配置导出 guard 则覆盖 ProfileManager/ConfigBuilder 的两跳 chain 生成。两类证据尚未合并为“启动生成配置”的同一用例，也未覆盖错误认证、真实节点 profile、WFP、IPv6 或持续健康，不能证明进程就是本次 GUI 启动的实例。
 
 2026-07-22 使用本轮 `deployment/windows64/nekobox_core.exe` 的回归中，Mixed fixture 为 7/7，额外 listener、系统代理、禁用日志和 origin 清理均通过；runtime connectivity 的 expected 204 正例中 HTTP/SOCKS5h 均为 204，expected 200 反例按预期报告 2 项 mismatch，系统代理、fixture 端口和 origin 清理均通过。clean GUI build tree 不输出 `nekobox_core.exe`。这是 loopback/工具契约证据，不是生产节点或 Windows TUN/WFP 证据。
 

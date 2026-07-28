@@ -16,14 +16,16 @@ Windows x64 是当前首要验收平台。OpenWrt 是相同 core 的诊断环境
 | 检查 | 结果 | 边界 |
 |---|---:|---|
 | 修复前定向回归 | 14/15 | 新增 `primary_mixed_preserves_native_routing` 后，旧构建只有该用例失败，证明断言命中了既存的无条件主线路绑定 |
+| 辅助生成定向回归 | 15/16 | 在实现审计导出前，新增的 ProfileManager/ConfigBuilder 辅助 chain 用例单独失败；旧构建仍能导出并通过 core schema，但没有生成辅助 listener/chain |
 | 增量重建 `nekobox` | 通过 | 重新编译 `ConfigBuilder.cpp` 并链接 GUI，不等同于完整 Windows 打包 |
-| `test_final_config_guards.ps1` | 15/15 | 原生 `mixed-in` 保留自定义 route 命中，不再存在仅凭 `mixed-in` 无条件终结到 `proxy` 的规则；该安全导出路径不包含运行态辅助端口 |
+| `test_final_config_guards.ps1` | 18/18 | 普通导出仍只含主线路；显式审计导出从隔离持久化 profile 生成辅助 listener 和两跳 SOCKS detour，保留 inbound-scoped reject/terminal 顺序且不含 TUN、系统代理请求或 `auto_detect_interface`；与 `for_test` 组合会失败 |
+| 生成配置 core schema | 通过 | 上述 ProfileManager/ConfigBuilder 最终 JSON 由当前 `nekobox_core check -c` 返回 0；不启动 listener 或远端连接 |
 | 辅助端口 reject 编译红绿回归 | 通过 | 旧实现只产生 terminal binding，新 `auxiliary_route_compiler_test` 要求复制三个显式 reject 且不复制 resolve/direct/bypass/其它 outbound；修复前失败、修复后通过 |
 | 辅助端口 core schema fixture | 通过 | `test/fixtures/auxiliary-reject-routing.json` 使用文档保留地址，`nekobox_core check -c` 返回 0；不启动 listener 或远端连接 |
 | 双专用端口回环运行 | 通过 | 提交 `59b8cb3`：A/B 分别返回 210/211；terminal 后的跨线路规则不能把 A 改投 B；reject 返回 502 且两个上游命中数不变；停止 A 上游后 A 返回 502、B 继续 211，core 与两个 listener 均存活 |
 | CTest | 5/5 | 配置恢复、runtime transition、分享格式、辅助端口路由编译和 resolver policy 纯测试通过 |
 
-本轮启动了当前 package core 与四个固定回环 listener，但没有启动真实 GUI、节点或 Windows TUN，也没有执行完整 package。主入口回归与辅助端口 reject/terminal 顺序已有配置级红绿和合成运行证据；真实 profile chain、ConfigBuilder 最终运行配置和 Windows GUI 集成仍待验证。
+提交 `a3dee71` 已推送。当前证据分别覆盖“构建器生成、只做 schema 检查”和“手写脱敏配置、实际双端口运行”，尚未把二者合并为启动 ConfigBuilder 生成配置的同一闭环。本轮没有启动真实 GUI、节点或 Windows TUN，也没有执行完整 package；真实节点 profile 与 Windows GUI 集成仍待验证。
 
 ## 2026-07-24 端口恢复与 Clash TUN 归因
 
@@ -70,7 +72,7 @@ Windows x64 是当前首要验收平台。OpenWrt 是相同 core 的诊断环境
 |---|---|---|---|---|
 | L1 本地无侵入 | 配置/schema | 每个导出配置执行 `nekobox_core check`；空配置、迁移、损坏配置 | 已验证损坏主/路由配置及错误类型、非字符串、重复辅助映射原件不被覆盖；其它迁移矩阵不完整 | 必须自动化通过 |
 | L1 本地无侵入 | Mixed contract | HTTP absolute-form、HTTPS CONNECT、SOCKS5h、认证正反例、端口占用、非 loopback/TUN 拒绝 | 正向及安全收紧有证据，反例不完整 | 必须全部通过 |
-| L1 本地无侵入 | 端口映射/OS 副作用 | 主 `2080` 保持上游路由语义；每个专用端口命中其绑定完整 chain；显式 reject/block 可生效；顶层 custom 不得改变专用 listener/outbound 绑定；无明确操作不得改变系统代理/TUN | 2026-07-28 已用导出红绿回归关闭主入口无条件绑定；辅助 reject/terminal 已有纯 C++ golden、core schema 和双回环上游隔离运行证据，仍缺完整 ConfigBuilder 运行态 golden 与真实 profile 验证 | 必须通过 |
+| L1 本地无侵入 | 端口映射/OS 副作用 | 主 `2080` 保持上游路由语义；每个专用端口命中其绑定完整 chain；显式 reject/block 可生效；顶层 custom 不得改变专用 listener/outbound 绑定；无明确操作不得改变系统代理/TUN | 2026-07-28 已用导出红绿回归关闭主入口无条件绑定；辅助 reject/terminal 已有纯 C++ golden、ProfileManager/ConfigBuilder 两跳 chain 导出、core schema 和双回环上游隔离运行证据。仍缺启动生成配置的同一闭环与真实节点 profile 验证 | 必须通过 |
 | L1 本地无侵入 | 工具安全 | 不改系统代理/TUN/路由/DNS；拒绝 TUN、系统 NTP 写入和非空 endpoints；只保留目标 outbound detour 闭包并只结束精确 PID；不停止或改写 Clash TUN | 启动 GUI/core、写审计报告及构建/临时目录的脚本参数继续使用固定磁盘、非生产/非 reparse 路径护栏；本地/远端收紧器已有 fixture，OpenWrt Python 单测 19/19 | 必须保持 |
 | L2 OpenWrt 探针 | core/工具安全 | 相同 `1.13.12-routefluent-anytls-client.7` core 的 schema、loopback Mixed、监听 PID 与远端基线保护 | 2026-07-20 历史执行：既有 PID/命令行、配置/manifest 哈希和监听均不变，临时目录已清理；旧探针对临时副本强制 `auto_detect_interface=true`，尚未按默认 preserve 重跑 | 必须重跑并保持 |
 | L2 OpenWrt 探针 | 远端链路 | Trojan、AnyTLS、DNS、detour 有/无的对照；HTTP/CONNECT/SOCKS5h | 2026-07-20 历史诊断：AnyTLS mihomo 无 detour 与独立 profile 2 Trojan 均三协议 204；主 AnyTLS + `g-2` detour 失败。因所有变体均被旧探针强制 `auto_detect_interface=true`，只支持同一变体内的组合归因，不能作为当前导出策略验收 | 主组合阻断发布，按 preserve 重跑 |
@@ -108,7 +110,7 @@ L2 历史诊断细节见[已验证基线](OPENWRT_REMOTE_LAB.md#已验证基线)
 
 ## 工具入口
 
-- `tools/export_profile_core_config.ps1`：导出单个 profile 的实际 core 配置并可执行 `check`。
+- `tools/export_profile_core_config.ps1`：导出单个 profile 的实际 core 配置并可执行 `check`；显式 `-IncludeAuxiliaryAudit` 会把已保存的辅助 listener/chain 一并生成，但不会启动它们。
 - `tools/verify_mixed_inbound.ps1`：只接受主 `mixed-in -> proxy` 连通性诊断；拒绝 TUN/系统 NTP 写入/endpoints、裁剪到 `proxy` 的精确 detour 闭包后启动临时配置，验证监听 PID 和三种代理请求；不是辅助映射 contract 或 Windows 集成验收器。
 - `tools/verify_mixed_openwrt.py`：在固定 `192.168.1.7`、`127.0.0.1:52080` 和唯一临时目录中执行相同的严格收紧与 L2 探针；必须先 `--dry-run`，真实结果须满足远端基线未变和清理完成。
 - `test/fixtures/mixed-direct-sanitization.json`：验证诊断脚本不会启动额外 LAN inbound/controller、修改系统代理或写配置指定日志。
@@ -122,7 +124,7 @@ L2 历史诊断细节见[已验证基线](OPENWRT_REMOTE_LAB.md#已验证基线)
 - `go/cmd/nekobox_core/core_lifecycle_test.go`：覆盖失败/取消 candidate、blocked Close、旧 reference、dial/stats/Stop 互斥、并发 Start、deadline 准入 fence、Exit STOPPED 前置与终态 `EXITING`；另覆盖 reconcile barrier 先挡迟到 Start/Exit、等待阻塞 Start/Stop、精确 active/failed-clean/blocked target、config hash 与 ordering watermark。`grpc_box_test.go` 覆盖 deadline/Exit/对账映射；`grpc_exit_integration_test.go` 通过真实 localhost gRPC 验证排队 Stop deadline 和 ACK 交付后 GracefulStop。`go/grpc_server/auth` 和 `grpc_identity_test.go` 覆盖 token + daemon UUID、协议 v3、one-shot shutdown controller、metadata 清除和握手回显。
 - `go/cmd/nekobox_core/internal/boxapi/boxapi_test.go`：除无 instance fail-closed 外，覆盖 generation-bound HTTP transport 禁用 keep-alive，防止连接跨代复用。
 - `test/test_config_preservation.ps1`：在隔离 appdata 中启动配置导出路径，验证已存在但损坏的主/路由配置、重复/非字符串/错误 JSON 类型的辅助映射、非法活动路由路径、未知 profile 类型与悬空 group 引用保持 SHA-256 不变，并验证 snapshot/metadata；同时验证显式事务报告与 before 回滚，以及 pending 事务在加载前阻断且主配置不变，当前为 10/10。
-- `test/test_final_config_guards.ps1`：在隔离临时 appdata 中验证安全 `internal-full` 文件导出、部分 TUN/系统代理/system endpoint/NTP 副作用拒绝，以及标准 SOCKS profile 的测试态 custom、Managed Mixed listener、detour 禁改和 custom route 空字段回归；2026-07-20 为 10/10。不启动线路，也不覆盖 live/test 的 TUN on/off 四象限、export 删除字段或所有 NTP/direct-action dialer，不能代表完整 C++ golden。
+- `test/test_final_config_guards.ps1`：在隔离临时 appdata 中验证安全 `internal-full` 文件导出、部分 TUN/系统代理/system endpoint/NTP 副作用拒绝，以及标准 SOCKS profile 的测试态 custom、主 Mixed 原生路由、辅助两跳 chain 审计生成、detour 禁改和 custom route 空字段回归；当前为 18/18。辅助用例可调用当前 core `check`，但不启动线路，也不覆盖 live/test 的 TUN on/off 四象限或所有 NTP/direct-action dialer，不能代表完整 C++ golden。
 - `test/test_auxiliary_route_runtime.ps1`：用手写脱敏配置启动当前 core、两个 Mixed 和两个回环 HTTP proxy 桩，验证不同端口出口、terminal 后不跨线、reject 不触达上游和单上游故障隔离；不经过 GUI/ProfileManager/ConfigBuilder，不代表真实线路。
 - `tools/verify_runtime_connectivity.ps1`：采集整套运行时快照；不是自动验收器。
 - `tools/verify_fail_closed_restart.ps1`：采集 fail-closed 相关状态；使用限制见 [fail-closed 验证](FAIL_CLOSED.md)。

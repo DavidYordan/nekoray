@@ -19,7 +19,9 @@
 - 提交 `3f7ff19` 把普通显式 reject/block 编译为辅助 inbound 专属的前置规则，随后仍由精确 chain terminal 终结；direct、bypass、主线和其它 outbound 不进入前置区。
 - `auxiliary_route_compiler_test` 已完成失败到通过的红绿回归；CTest 5/5，脱敏辅助规则 fixture 通过当前 `nekobox_core check`。
 - 提交 `59b8cb3` 新增双专用端口回环运行测试：A/B 精确命中不同上游，terminal 后不跨线，reject 不触达上游；停止 A 上游后 B 继续工作，core 与两个 listener 未重绑或退出，系统代理不变且全部临时端口释放。
-- 本轮没有完整打包、真实 GUI 或真实线路。该运行测试使用手写脱敏 fixture，ConfigBuilder/ProfileManager 最终运行配置和 Windows GUI 集成仍未形成闭环证据。
+- 提交 `a3dee71` 新增显式、无启动副作用的辅助线路审计导出。隔离 appdata 中的 ProfileManager/ConfigBuilder 现能生成主 profile 加辅助两跳 chain 的最终 JSON；回归检查 listener、detour 闭包、inbound-scoped reject、terminal、普通主入口路由，以及不存在 TUN、系统代理请求和 `auto_detect_interface`，并通过当前 core `check`。
+- 辅助生成用例在实现前为 15/16 且只在辅助 chain 断言失败；实现和边界用例补齐后为 18/18。普通导出仍省略辅助线路，`for_test` 与辅助审计组合会明确失败。
+- 本轮没有完整打包、真实 GUI 或真实线路。双端口运行仍使用手写脱敏 fixture；生成配置只执行了 `check`，尚未启动为同一闭环，Windows GUI 集成也未验证。
 
 ## 2026-07-24 当前整改与诊断
 

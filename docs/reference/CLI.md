@@ -49,8 +49,16 @@ nekobox.exe -flag_export_profile_config <profile-id> <output-json>
 
 - `-flag_export_profile_config_for_test`：只生成 URL/full-test 使用的有界配置；拒绝 `internal-full`，且顶层 `custom_config` 只要改变生成结果就失败。
 - `-flag_export_profile_config_for_share`：兼容别名；当前与默认导出使用同一 `forExport` 安全路径。
+- `-flag_export_profile_config_include_auxiliary_audit`：仅用于默认的无副作用文件导出；把当前持久化的辅助 Mixed 映射及其完整 outbound chain 一并生成，供最终配置审计。它不能与 `for_test` 组合。
 
-默认导出、`for_share` 和 `for_test` 都不会启动线路，并执行已知 OS 副作用校验。默认/分享导出会省略产品 TUN、辅助 Mixed 运行态及相关本机字段；它仍可包含主 Mixed、自定义 listener、server、密码、DoH 和路由，因此只适合审计/分享前脱敏，不能当作可盲目启动的沙箱配置。
+默认导出、`for_share`、`for_test` 和显式辅助审计都不会启动线路，并执行已知 OS 副作用校验。默认/分享导出继续省略产品 TUN、辅助 Mixed 运行态及相关本机字段；显式辅助审计只额外生成已保存的辅助 listener/chain，仍省略产品 TUN、`auto_detect_interface` 等运行机器字段。导出仍可包含自定义 listener、server、密码、DoH 和路由，因此只适合本地审计/分享前脱敏，不能当作可盲目启动的沙箱配置。
+
+仓库工具可使用同一入口，并选择只做 schema/pre-start 检查：
+
+```powershell
+.\tools\export_profile_core_config.ps1 -ProfileId <id> `
+  -IncludeAuxiliaryAudit -Check
+```
 
 ## core 高级 CLI
 
