@@ -5,8 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import select
-import socket
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
@@ -14,7 +12,6 @@ class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     response_status = 200
     line_name = ""
-    connect_tunnel = False
 
     def _record(self, method: str, target: str) -> None:
         print(
@@ -41,10 +38,6 @@ class Handler(BaseHTTPRequestHandler):
     do_HEAD = _respond
 
     def do_CONNECT(self) -> None:
-        if self.connect_tunnel:
-            self._tunnel_connect()
-            return
-
         self.send_response(200, "Connection Established")
         self.send_header("Connection", "keep-alive")
         self.end_headers()
@@ -76,44 +69,6 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.flush()
         self.close_connection = True
 
-    def _tunnel_connect(self) -> None:
-        self._record(self.command, self.path)
-        host, separator, raw_port = self.path.rpartition(":")
-        try:
-            port = int(raw_port)
-        except ValueError:
-            port = 0
-        if separator != ":" or host != "127.0.0.1" or not 1 <= port <= 65535:
-            self.send_error(403, "Loopback CONNECT target required")
-            return
-
-        try:
-            upstream = socket.create_connection((host, port), timeout=5)
-        except OSError:
-            self.send_error(502, "CONNECT target unavailable")
-            return
-
-        try:
-            self.send_response(200, "Connection Established")
-            self.send_header("Connection", "keep-alive")
-            self.end_headers()
-            self.wfile.flush()
-
-            peers = (self.connection, upstream)
-            while True:
-                readable, _, exceptional = select.select(peers, (), peers, 5)
-                if exceptional or not readable:
-                    break
-                for source in readable:
-                    data = source.recv(65536)
-                    if not data:
-                        return
-                    destination = upstream if source is self.connection else self.connection
-                    destination.sendall(data)
-        finally:
-            upstream.close()
-            self.close_connection = True
-
     def log_message(self, _format: str, *_args: object) -> None:
         return
 
@@ -123,7 +78,6 @@ def main() -> None:
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--status", type=int, required=True)
     parser.add_argument("--line", required=True)
-    parser.add_argument("--connect-tunnel", action="store_true")
     args = parser.parse_args()
     if not 1 <= args.port <= 65535:
         parser.error("--port must be between 1 and 65535")
@@ -134,7 +88,6 @@ def main() -> None:
 
     Handler.response_status = args.status
     Handler.line_name = args.line
-    Handler.connect_tunnel = args.connect_tunnel
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     server.serve_forever(poll_interval=0.1)
 

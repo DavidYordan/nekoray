@@ -40,7 +40,7 @@ foreach ($requiredDirectory in @($mingwBin, $qtBin, $qtPlatformPlugins)) {
 $env:PATH = "$mingwBin;$qtBin;$env:PATH"
 $env:QT_QPA_PLATFORM_PLUGIN_PATH = $qtPlatformPlugins
 
-$ports = @(18119, 18120, 18121, 18130, 18131, 18132)
+$ports = @(18119, 18120, 18121, 18130, 18131, 18132, 18133)
 function Get-ListeningConnections([int[]] $LocalPorts) {
     @(
         foreach ($port in $LocalPorts) {
@@ -118,6 +118,43 @@ function Get-HitCount([string] $Path) {
     ).Count
 }
 
+function ConvertTo-PemText([string] $Label, [byte[]] $Bytes) {
+    $body = [Convert]::ToBase64String(
+        $Bytes,
+        [Base64FormattingOptions]::InsertLineBreaks)
+    "-----BEGIN $Label-----`n$body`n-----END $Label-----`n"
+}
+
+function New-LoopbackCertificate([string] $CertificatePath, [string] $KeyPath) {
+    $rsa = [Security.Cryptography.RSACng]::new(2048)
+    $certificate = $null
+    try {
+        $request = [Security.Cryptography.X509Certificates.CertificateRequest]::new(
+            "CN=localhost",
+            $rsa,
+            [Security.Cryptography.HashAlgorithmName]::SHA256,
+            [Security.Cryptography.RSASignaturePadding]::Pkcs1)
+        $san = [Security.Cryptography.X509Certificates.SubjectAlternativeNameBuilder]::new()
+        $san.AddDnsName("localhost")
+        $san.AddIpAddress([Net.IPAddress]::Loopback)
+        $request.CertificateExtensions.Add($san.Build())
+        $certificate = $request.CreateSelfSigned(
+            [DateTimeOffset]::UtcNow.AddMinutes(-5),
+            [DateTimeOffset]::UtcNow.AddDays(1))
+        $certificatePem = ConvertTo-PemText `
+            "CERTIFICATE" `
+            ($certificate.Export([Security.Cryptography.X509Certificates.X509ContentType]::Cert))
+        $privateKeyPem = ConvertTo-PemText `
+            "PRIVATE KEY" `
+            ($rsa.Key.Export([Security.Cryptography.CngKeyBlobFormat]::Pkcs8PrivateBlob))
+        [IO.File]::WriteAllText($CertificatePath, $certificatePem, [Text.UTF8Encoding]::new($false))
+        [IO.File]::WriteAllText($KeyPath, $privateKeyPem, [Text.UTF8Encoding]::new($false))
+    } finally {
+        if ($null -ne $certificate) { $certificate.Dispose() }
+        $rsa.Dispose()
+    }
+}
+
 function Invoke-ProfileConfigExport(
     [string] $AppData,
     [int] $ProfileId,
@@ -147,6 +184,21 @@ function Invoke-ProfileConfigExport(
         } else {
             ""
         }
+    }
+}
+
+function Invoke-CoreConfigCheck([string] $ConfigPath) {
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $output = (& $coreFull check -c $ConfigPath 2>&1) -join "`n"
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    [pscustomobject]@{
+        exit_code = $exitCode
+        output = $output
     }
 }
 
@@ -182,6 +234,84 @@ function New-HttpProfile(
     }
 }
 
+function New-AnyTLSProfile(
+    [int] $Id,
+    [string] $Name,
+    [int] $ServerPort,
+    [int] $GroupId
+) {
+    [ordered]@{
+        type = "anytls"
+        id = $Id
+        gid = $GroupId
+        yc = 0
+        report = ""
+        bean = [ordered]@{
+            _v = 0
+            name = $Name
+            addr = "127.0.0.1"
+            port = $ServerPort
+            c_cfg = ""
+            c_out = ""
+            server_resolver_doh = ""
+            server_resolver_fallback = $false
+            inherit_subscription_client = $false
+            inherit_subscription_resolver = $false
+            pass = "anytls-loopback-fixture-password"
+            idle_chk = ""
+            idle_timeout = ""
+            min_idle = 0
+            anytls_client_mode = "mihomo"
+            anytls_client_value = ""
+            insecure = $true
+            disable_sni = $false
+            sni = "localhost"
+            alpn = ""
+            cert = ""
+            utls = ""
+            pbk = ""
+            sid = ""
+        }
+        traffic = [ordered]@{}
+    }
+}
+
+function New-TrojanProfile(
+    [int] $Id,
+    [string] $Name,
+    [int] $ServerPort,
+    [int] $GroupId
+) {
+    [ordered]@{
+        type = "trojan"
+        id = $Id
+        gid = $GroupId
+        yc = 0
+        report = ""
+        bean = [ordered]@{
+            _v = 0
+            name = $Name
+            addr = "127.0.0.1"
+            port = $ServerPort
+            c_cfg = ""
+            c_out = ""
+            server_resolver_doh = ""
+            server_resolver_fallback = $false
+            inherit_subscription_client = $false
+            inherit_subscription_resolver = $false
+            pass = "trojan-loopback-fixture-password"
+            flow = ""
+            stream = [ordered]@{
+                net = "tcp"
+                sec = "tls"
+                sni = "localhost"
+                insecure = $true
+            }
+        }
+        traffic = [ordered]@{}
+    }
+}
+
 $safeTempRoot = Assert-PathOutsideProtectedProduction `
     ([IO.Path]::GetFullPath([IO.Path]::GetTempPath())) `
     "Auxiliary-route runtime temporary root"
@@ -196,6 +326,10 @@ New-Item -ItemType Directory -Path $tempRoot | Out-Null
 
 $appData = Join-Path $tempRoot "appdata"
 $runtimeConfig = Join-Path $tempRoot "generated-auxiliary-runtime.json"
+$anyTlsServerConfig = Join-Path $tempRoot "anytls-server.json"
+$trojanServerConfig = Join-Path $tempRoot "trojan-server.json"
+$certificatePath = Join-Path $tempRoot "loopback-certificate.pem"
+$privateKeyPath = Join-Path $tempRoot "loopback-private-key.pem"
 $utf8NoBom = [Text.UTF8Encoding]::new($false)
 $lineAStdout = Join-Path $tempRoot "line-a.stdout.log"
 $lineAStderr = Join-Path $tempRoot "line-a.stderr.log"
@@ -203,16 +337,21 @@ $lineBStdout = Join-Path $tempRoot "line-b.stdout.log"
 $lineBStderr = Join-Path $tempRoot "line-b.stderr.log"
 $frontProxyStdout = Join-Path $tempRoot "front-proxy.stdout.log"
 $frontProxyStderr = Join-Path $tempRoot "front-proxy.stderr.log"
+$anyTlsServerStdout = Join-Path $tempRoot "anytls-server.stdout.log"
+$anyTlsServerStderr = Join-Path $tempRoot "anytls-server.stderr.log"
 $coreStdout = Join-Path $tempRoot "core.stdout.log"
 $coreStderr = Join-Path $tempRoot "core.stderr.log"
 $lineAProcess = $null
 $lineBProcess = $null
 $frontProxyProcess = $null
+$anyTlsServerProcess = $null
 $coreProcess = $null
 $result = $null
 $proxyBefore = Get-SystemProxySnapshot
 
 try {
+    New-LoopbackCertificate $certificatePath $privateKeyPath
+
     $initializationOutput = Join-Path $tempRoot "initialization-unused.json"
     $initialization = Invoke-ProfileConfigExport `
         -AppData $appData `
@@ -225,10 +364,10 @@ try {
     $profileDirectory = Join-Path $appData "config\profiles"
     [IO.Directory]::CreateDirectory($profileDirectory) | Out-Null
     $profiles = @(
-        (New-HttpProfile -Id 1 -Name "generated-main-fixture" -ServerPort 18130),
-        (New-HttpProfile -Id 2 -Name "generated-line-a-fixture" -ServerPort 18130 -GroupId 1),
+        (New-HttpProfile -Id 1 -Name "generated-main-fixture" -ServerPort 18131),
+        (New-AnyTLSProfile -Id 2 -Name "generated-line-a-anytls-fixture" -ServerPort 18130 -GroupId 1),
         (New-HttpProfile -Id 3 -Name "generated-line-b-fixture" -ServerPort 18131),
-        (New-HttpProfile -Id 4 -Name "generated-line-a-front-proxy-fixture" -ServerPort 18132 -GroupId 1)
+        (New-TrojanProfile -Id 4 -Name "generated-line-a-trojan-front-fixture" -ServerPort 18132 -GroupId 1)
     )
     foreach ($profile in $profiles) {
         $profilePath = Join-Path $profileDirectory "$($profile.id).json"
@@ -250,6 +389,60 @@ try {
         ($frontedGroup | ConvertTo-Json -Depth 30),
         $utf8NoBom)
 
+    $serverTls = [ordered]@{
+        enabled = $true
+        certificate_path = $certificatePath
+        key_path = $privateKeyPath
+    }
+    $anyTlsServer = [ordered]@{
+        log = [ordered]@{ level = "error"; timestamp = $false }
+        inbounds = @(
+            [ordered]@{
+                type = "anytls"
+                tag = "anytls-loopback-in"
+                listen = "127.0.0.1"
+                listen_port = 18130
+                users = @(
+                    [ordered]@{
+                        name = "anytls-loopback-fixture"
+                        password = "anytls-loopback-fixture-password"
+                    }
+                )
+                tls = $serverTls
+            }
+        )
+        outbounds = @([ordered]@{ type = "direct"; tag = "direct" })
+        route = [ordered]@{ final = "direct" }
+    }
+    $trojanServer = [ordered]@{
+        log = [ordered]@{ level = "error"; timestamp = $false }
+        inbounds = @(
+            [ordered]@{
+                type = "trojan"
+                tag = "trojan-loopback-in"
+                listen = "127.0.0.1"
+                listen_port = 18132
+                users = @(
+                    [ordered]@{
+                        name = "trojan-loopback-fixture"
+                        password = "trojan-loopback-fixture-password"
+                    }
+                )
+                tls = $serverTls
+            }
+        )
+        outbounds = @([ordered]@{ type = "direct"; tag = "direct" })
+        route = [ordered]@{ final = "direct" }
+    }
+    [IO.File]::WriteAllText(
+        $anyTlsServerConfig,
+        ($anyTlsServer | ConvertTo-Json -Depth 30),
+        $utf8NoBom)
+    [IO.File]::WriteAllText(
+        $trojanServerConfig,
+        ($trojanServer | ConvertTo-Json -Depth 30),
+        $utf8NoBom)
+
     $mainConfigPath = Join-Path $appData "config\groups\nekobox.json"
     $mainConfig = [IO.File]::ReadAllText($mainConfigPath) | ConvertFrom-Json
     $mainConfig | Add-Member -NotePropertyName "inbound_socks_port" -NotePropertyValue 18119 -Force
@@ -264,7 +457,7 @@ try {
 
     $routePath = Join-Path $appData "config\routes_box\Default"
     $route = [IO.File]::ReadAllText($routePath) | ConvertFrom-Json
-    $route.custom = '{"rules":[{"domain_suffix":["blocked.test"],"outbound":"block"},{"inbound":["aux-mixed-2"],"domain_suffix":["crossline.test"],"outbound":"bypass"}]}'
+    $route.custom = '{"rules":[{"domain_suffix":["blocked.test"],"outbound":"block"},{"inbound":["aux-mixed-2"],"ip_cidr":["127.0.0.1/32"],"outbound":"bypass"}]}'
     [IO.File]::WriteAllText(
         $routePath,
         ($route | ConvertTo-Json -Depth 30),
@@ -328,31 +521,38 @@ try {
     if ($lineATerminalRoutes.Count -ne 1 -or
         $lineATerminalOutbounds.Count -ne 1 -or
         $lineAFrontOutbounds.Count -ne 1 -or
-        $lineATerminalOutbounds[0].type -ne "http" -or
+        $lineATerminalOutbounds[0].type -ne "anytls" -or
         $lineATerminalOutbounds[0].server -ne "127.0.0.1" -or
         [int]$lineATerminalOutbounds[0].server_port -ne 18130 -or
-        $lineAFrontOutbounds[0].type -ne "http" -or
+        $lineATerminalOutbounds[0].client -ne "mihomo/1.19.28" -or
+        $lineATerminalOutbounds[0].tls.enabled -ne $true -or
+        $lineATerminalOutbounds[0].tls.insecure -ne $true -or
+        $lineAFrontOutbounds[0].type -ne "trojan" -or
         $lineAFrontOutbounds[0].server -ne "127.0.0.1" -or
-        [int]$lineAFrontOutbounds[0].server_port -ne 18132) {
+        [int]$lineAFrontOutbounds[0].server_port -ne 18132 -or
+        $lineAFrontOutbounds[0].tls.enabled -ne $true -or
+        $lineAFrontOutbounds[0].tls.insecure -ne $true) {
         throw "Generated auxiliary line A did not contain one complete two-hop detour chain."
     }
 
-    $previousErrorActionPreference = $ErrorActionPreference
-    try {
-        $ErrorActionPreference = "Continue"
-        $checkOutput = (& $coreFull check -c $runtimeConfig 2>&1) -join "`n"
-        $checkExitCode = $LASTEXITCODE
-    } finally {
-        $ErrorActionPreference = $previousErrorActionPreference
+    $clientCheck = Invoke-CoreConfigCheck $runtimeConfig
+    $anyTlsServerCheck = Invoke-CoreConfigCheck $anyTlsServerConfig
+    $trojanServerCheck = Invoke-CoreConfigCheck $trojanServerConfig
+    if ($clientCheck.exit_code -ne 0) {
+        throw "Generated auxiliary two-line config failed core schema validation: $($clientCheck.output)"
     }
-    if ($checkExitCode -ne 0) {
-        throw "Generated auxiliary two-line config failed core schema validation: $checkOutput"
+    if ($anyTlsServerCheck.exit_code -ne 0) {
+        throw "Loopback AnyTLS server config failed core schema validation: $($anyTlsServerCheck.output)"
     }
+    if ($trojanServerCheck.exit_code -ne 0) {
+        throw "Loopback Trojan server config failed core schema validation: $($trojanServerCheck.output)"
+    }
+    $checkExitCode = $clientCheck.exit_code
 
     $python = (Get-Command python -ErrorAction Stop).Source
     $lineAProcess = Start-Process `
         -FilePath $python `
-        -ArgumentList @("-I", $proxyScript, "--port", "18130", "--status", "210", "--line", "line-a") `
+        -ArgumentList @("-I", $proxyScript, "--port", "18133", "--status", "210", "--line", "line-a-origin") `
         -WorkingDirectory $tempRoot `
         -WindowStyle Hidden `
         -RedirectStandardOutput $lineAStdout `
@@ -366,23 +566,27 @@ try {
         -RedirectStandardOutput $lineBStdout `
         -RedirectStandardError $lineBStderr `
         -PassThru
+    Wait-OwnedListener $lineAProcess 18133 "Line A HTTP origin fixture"
+    Wait-OwnedListener $lineBProcess 18131 "Line B HTTP proxy fixture"
+
+    $anyTlsServerProcess = Start-Process `
+        -FilePath $coreFull `
+        -ArgumentList "run -c `"$anyTlsServerConfig`"" `
+        -WorkingDirectory $tempRoot `
+        -WindowStyle Hidden `
+        -RedirectStandardOutput $anyTlsServerStdout `
+        -RedirectStandardError $anyTlsServerStderr `
+        -PassThru
     $frontProxyProcess = Start-Process `
-        -FilePath $python `
-        -ArgumentList @(
-            "-I", $proxyScript,
-            "--port", "18132",
-            "--status", "200",
-            "--line", "line-a-front-proxy",
-            "--connect-tunnel"
-        ) `
+        -FilePath $coreFull `
+        -ArgumentList "run -c `"$trojanServerConfig`"" `
         -WorkingDirectory $tempRoot `
         -WindowStyle Hidden `
         -RedirectStandardOutput $frontProxyStdout `
         -RedirectStandardError $frontProxyStderr `
         -PassThru
-    Wait-OwnedListener $lineAProcess 18130 "Line A HTTP proxy fixture"
-    Wait-OwnedListener $lineBProcess 18131 "Line B HTTP proxy fixture"
-    Wait-OwnedListener $frontProxyProcess 18132 "Line A front proxy fixture"
+    Wait-OwnedListener $anyTlsServerProcess 18130 "Line A AnyTLS server fixture"
+    Wait-OwnedListener $frontProxyProcess 18132 "Line A Trojan front proxy fixture"
 
     $coreProcess = Start-Process `
         -FilePath $coreFull `
@@ -396,20 +600,18 @@ try {
     Wait-OwnedListener $coreProcess 18120 "Auxiliary line A Mixed listener"
     Wait-OwnedListener $coreProcess 18121 "Auxiliary line B Mixed listener"
 
-    $lineA = Invoke-ProxyRequest 18120 "http://line-a.test/probe"
+    $lineA = Invoke-ProxyRequest 18120 "http://127.0.0.1:18133/probe"
     $lineB = Invoke-ProxyRequest 18121 "http://line-b.test/probe"
-    $crossLine = Invoke-ProxyRequest 18120 "http://crossline.test/must-stay-a"
-    $frontProxyWasUsed = (Get-HitCount $frontProxyStdout) -gt 0
+    $crossLine = Invoke-ProxyRequest 18120 "http://127.0.0.1:18133/must-stay-a"
+    $lineAOriginWasUsed = (Get-HitCount $lineAStdout) -ge 2
 
     $lineAHitsBeforeReject = Get-HitCount $lineAStdout
     $lineBHitsBeforeReject = Get-HitCount $lineBStdout
-    $frontProxyHitsBeforeReject = Get-HitCount $frontProxyStdout
     $blocked = Invoke-ProxyRequest 18120 "http://blocked.test/must-reject"
     Start-Sleep -Milliseconds 250
     $rejectDidNotReachUpstream =
         (Get-HitCount $lineAStdout) -eq $lineAHitsBeforeReject -and
-        (Get-HitCount $lineBStdout) -eq $lineBHitsBeforeReject -and
-        (Get-HitCount $frontProxyStdout) -eq $frontProxyHitsBeforeReject
+        (Get-HitCount $lineBStdout) -eq $lineBHitsBeforeReject
 
     Stop-Process -Id $frontProxyProcess.Id -Force
     $frontProxyProcess.WaitForExit(5000) | Out-Null
@@ -419,11 +621,14 @@ try {
         Start-Sleep -Milliseconds 100
     }
 
-    $lineAFailed = Invoke-ProxyRequest 18120 "http://line-a.test/front-proxy-down"
+    $lineAFailed = Invoke-ProxyRequest 18120 "http://127.0.0.1:18133/front-proxy-down"
     $lineBAfterFailure = Invoke-ProxyRequest 18121 "http://line-b.test/still-running"
     $lineATerminalStillAvailable =
-        !$lineAProcess.HasExited -and
+        !$anyTlsServerProcess.HasExited -and
         @(Get-ListeningConnections @(18130) |
+            Where-Object { $_.OwningProcess -eq $anyTlsServerProcess.Id }).Count -eq 1 -and
+        !$lineAProcess.HasExited -and
+        @(Get-ListeningConnections @(18133) |
             Where-Object { $_.OwningProcess -eq $lineAProcess.Id }).Count -eq 1
     $coreStillRunning = !$coreProcess.HasExited -and
                         @(Get-ListeningConnections @(18119, 18120, 18121) |
@@ -433,17 +638,22 @@ try {
         config_source = "profile-manager-config-builder"
         generated_config = [pscustomobject]@{
             schema_check_exit_code = $checkExitCode
+            anytls_server_schema_check_exit_code = $anyTlsServerCheck.exit_code
+            trojan_server_schema_check_exit_code = $trojanServerCheck.exit_code
             main_mixed_port = 18119
             line_a_profile_id = 2
             line_a_mixed_port = 18120
+            line_a_protocol = "anytls"
+            line_a_client = "mihomo/1.19.28"
             line_a_front_proxy_profile_id = 4
             line_a_front_proxy_port = 18132
+            line_a_front_proxy_protocol = "trojan"
             line_b_profile_id = 3
             line_b_mixed_port = 18121
         }
         passed = [bool](
             $lineA.exit_code -eq 0 -and $lineA.http_code -eq 210 -and
-            $frontProxyWasUsed -and
+            $lineAOriginWasUsed -and
             $lineB.exit_code -eq 0 -and $lineB.http_code -eq 211 -and
             $crossLine.exit_code -eq 0 -and $crossLine.http_code -eq 210 -and
             $blocked.http_code -ne 210 -and $blocked.http_code -ne 211 -and
@@ -456,7 +666,7 @@ try {
         initial_mapping = [pscustomobject]@{
             line_a_status = $lineA.http_code
             line_a_exit_code = $lineA.exit_code
-            line_a_front_proxy_used = [bool]$frontProxyWasUsed
+            line_a_origin_used = [bool]$lineAOriginWasUsed
             line_b_status = $lineB.http_code
             line_b_exit_code = $lineB.exit_code
         }
@@ -473,14 +683,20 @@ try {
             failed_component = "line-a-front-proxy"
             failed_line_status = $lineAFailed.http_code
             failed_line_exit_code = $lineAFailed.exit_code
-            terminal_proxy_still_available = [bool]$lineATerminalStillAvailable
+            anytls_server_and_origin_still_available = [bool]$lineATerminalStillAvailable
             surviving_line_status = $lineBAfterFailure.http_code
             surviving_line_exit_code = $lineBAfterFailure.exit_code
             core_and_all_generated_inbounds_still_running = [bool]$coreStillRunning
         }
     }
 } finally {
-    foreach ($process in @($coreProcess, $lineAProcess, $lineBProcess, $frontProxyProcess)) {
+    foreach ($process in @(
+        $coreProcess,
+        $frontProxyProcess,
+        $anyTlsServerProcess,
+        $lineAProcess,
+        $lineBProcess
+    )) {
         if ($null -ne $process -and !$process.HasExited) {
             Stop-Process -Id $process.Id -Force
             $process.WaitForExit(5000) | Out-Null
