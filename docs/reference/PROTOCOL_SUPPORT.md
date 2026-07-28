@@ -1,12 +1,12 @@
 # 协议与能力证据矩阵
 
 状态：接管基线；“上游应保留”“当前有代码”“已经验收”是三件不同的事。
-最后更新：2026-07-22
+最后更新：2026-07-28
 
 | 能力 | NekoRay基线 | 当前分支实现 | 实测证据 | 接管处理 |
 |---|---|---|---|---|
-| AnyTLS | 无 | Bean/UI/链接/Clash/core均有 | 2026-07-20 旧探针强制 `auto_detect_interface=true`：Mihomo client 单跳三协议 204；经 Trojan detour EOF；仅为组合诊断，preserve 重跑待办 | 三项扩展，修复组合与继承 |
-| Trojan | 有 | 有 | 同一历史强制接口变体下 OpenWrt 单跳三协议 204；preserve 重跑待办 | 保留 |
+| AnyTLS | 无 | Bean/UI/链接/Clash/core均有 | 提交 `f298d46`：Windows 回环中由 ProfileManager/ConfigBuilder 生成 Mihomo-client AnyTLS，经 Trojan group front proxy 到独立 HTTP origin 成功；停止 Trojan 后 AnyTLS server/origin 仍存活而该端口失败。2026-07-20 真实远端组合 EOF 仍待 preserve 重跑 | 三项扩展；继续验证真实组合与继承 |
+| Trojan | 有 | 有 | 提交 `f298d46` 已作为 Windows 回环 AnyTLS 前置代理实际承载流量并完成故障隔离；2026-07-20 OpenWrt 单跳三协议 204，真实远端组合仍待 preserve 重跑 | 保留 |
 | Shadowsocks | 有 | 有，但v2ray-plugin导入/UI回归 | 未复验 | 恢复兼容并测试 |
 | SOCKS/HTTP | 有 | 有，部分userinfo兼容回归 | Mixed入口协议fixture有基线 | 恢复兼容并测试 |
 | VMess/VLESS | 有 | 有，v2rayN分享格式回归 | 未复验 | 保留；不等于恢复Xray core |

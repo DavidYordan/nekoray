@@ -23,7 +23,8 @@
 - 辅助生成用例在实现前为 15/16 且只在辅助 chain 断言失败；实现和边界用例补齐后为 18/18。普通导出仍省略辅助线路，`for_test` 与辅助审计组合会明确失败。
 - 提交 `9a328a5` 将双端口回环运行改为直接启动隔离 ProfileManager/ConfigBuilder 导出的配置，并删除已被替代的手写双线路 JSON。两条单跳 HTTP 辅助线路分别返回 210/211；跨线 `bypass` 位于 terminal 后而不能移动 A，reject 不触达上游；停止 A 上游后 B 与主/辅三个生成 listener 均存活，系统代理不变且五个临时端口全部释放。
 - 提交 `55bb799` 将 A 线改为隔离 group 中的 HTTP terminal + group front proxy，两跳 detour 由同一导出配置实际启动。A 经前置代理返回 210，B 单跳返回 211；停止 A 前置代理且保持其 terminal 存活后，A 返回 502、B 仍为 211，证明没有绕过 detour、跨线或影响其它 listener；系统代理不变且六个临时端口全部释放。
-- 本轮没有完整打包、普通 GUI、真实线路或 Windows TUN。为避免占用外部 `2080`，生成运行测试只在隔离 appdata 中把主 listener 改为 `18119`；默认 `2080` 仍由 18/18 配置 guard 验证。回环 HTTP group front proxy 已运行，显式 chain profile 和真实 AnyTLS/Trojan 组合仍未运行，Windows GUI 集成也未验证。
+- 提交 `f298d46` 用产品 profile 替换 A 的通用 HTTP 两跳：A 现为显式 Mihomo client 的 AnyTLS terminal + Trojan group front proxy，两个协议服务端和 HTTP origin 均由当前 Windows core/回环 fixture 独立运行并使用临时自签证书。A 返回 210、B 保持 211；结束 Trojan 后 AnyTLS server/origin 仍监听而 A 返回 502，B 和三个生成 listener 继续存活，系统代理不变且七个临时端口全部释放。被替代的 Python CONNECT 隧道代码已删除。
+- 本轮没有完整打包、普通 GUI、真实远端线路或 Windows TUN。为避免占用外部 `2080`，生成运行测试只在隔离 appdata 中把主 listener 改为 `18119`；默认 `2080` 仍由 18/18 配置 guard 验证。回环 AnyTLS+Trojan group front proxy 已运行，显式 chain profile、真实供应商节点和 Windows GUI 集成仍未验证。
 
 ## 2026-07-24 当前整改与诊断
 
@@ -64,7 +65,7 @@ OpenWrt `192.168.1.7` 使用同版本 `sing-box 1.13.12-routefluent-anytls-clien
 | 移除 detour并改 native | 失败 | 失败 | 失败 | 服务端 internal error |
 | 独立 Trojan profile 2（与 `g-2` 对象相同） | 204 | 204 | 204 | Trojan 单跳可用 |
 
-因此临时 loopback Mixed、目标 outbound 的 Mihomo AnyTLS 单跳和 Trojan 单跳分别可达；组合 detour 尚未闭环。探针固定改写为临时 `52080` 并显式指向目标 outbound，不能证明产品 `2080` 主端口映射。旧探针还会在临时 OpenWrt 副本强制 `auto_detect_interface=true`，所以这些结果只能用于协议组合归因，不能证明导出配置的接口策略；工具现已改为默认 preserve，后续需按新默认重跑。
+因此该轮临时 loopback Mixed、目标 outbound 的 Mihomo AnyTLS 单跳和 Trojan 单跳分别可达，但真实远端组合 detour 在当时尚未闭环。探针固定改写为临时 `52080` 并显式指向目标 outbound，不能证明产品 `2080` 主端口映射。旧探针还会在临时 OpenWrt 副本强制 `auto_detect_interface=true`，所以这些结果只能用于该远端场景的组合归因，不能证明导出配置的接口策略；工具现已改为默认 preserve，后续需按新默认重跑。提交 `f298d46` 的 Windows 回环组合成功只关闭本地生成/core 基线，不覆盖这项真实远端结果。
 
 ## 已完成的接管止损
 

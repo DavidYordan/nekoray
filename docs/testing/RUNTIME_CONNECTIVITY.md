@@ -11,7 +11,7 @@
 
 ## 先分清两层语义
 
-必须分开验证两类入口：原生 Mixed `2080` 保留 NekoRay 正常路由语义，当前主 profile 只是默认出站；新增专用 Mixed 端口才严格进入与其绑定的完整 chain。2026-07-28 的整改已移除主入口无条件终结绑定，并加入配置导出回归断言；主入口仍须继续对照 NekoRay 4.0.1 验证完整 route/reject/DNS 行为。提交 `3f7ff19` 又把普通规则中的显式 reject/block 编译为仅匹配对应辅助 inbound 的前置规则，随后才执行精确 chain 绑定；direct、bypass、主线和其它 outbound 不会被复制到该前置区。提交 `a3dee71` 已通过隔离 appdata 中的 ProfileManager/ConfigBuilder 生成一条两跳辅助 chain 并由当前 core `check`；`9a328a5` 把双线路回环运行改为启动同一路径导出的配置；`55bb799` 再以 group `front_proxy_id` 生成并实际运行 A 两跳/B 单跳。显式 chain profile、真实 AnyTLS/Trojan 节点与 Windows GUI 仍未运行验证。
+必须分开验证两类入口：原生 Mixed `2080` 保留 NekoRay 正常路由语义，当前主 profile 只是默认出站；新增专用 Mixed 端口才严格进入与其绑定的完整 chain。2026-07-28 的整改已移除主入口无条件终结绑定，并加入配置导出回归断言；主入口仍须继续对照 NekoRay 4.0.1 验证完整 route/reject/DNS 行为。提交 `3f7ff19` 又把普通规则中的显式 reject/block 编译为仅匹配对应辅助 inbound 的前置规则，随后才执行精确 chain 绑定；direct、bypass、主线和其它 outbound 不会被复制到该前置区。提交 `a3dee71` 已通过隔离 appdata 中的 ProfileManager/ConfigBuilder 生成一条两跳辅助 chain 并由当前 core `check`；`9a328a5` 把双线路回环运行改为启动同一路径导出的配置；`55bb799` 以 group `front_proxy_id` 生成并实际运行 A 两跳/B 单跳；`f298d46` 再将 A 替换为实际 Mihomo-client AnyTLS + Trojan detour。显式 chain profile、真实供应商节点与 Windows GUI 仍未运行验证。
 
 `route.auto_detect_interface` 只让 sing-box 在操作系统路由层选择合格的底层接口，主要用于避免 TUN 回环。它不读取 Mixed 端口，也不在主线路和辅助线路之间做选择。测试报告必须分别记录“命中了哪个逻辑 outbound”和“底层套接字走了哪个接口”；不能用接口自动检测来修正端口映射。
 
@@ -71,7 +71,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\verify_mixed_inbound
   -CorePath .\deployment\windows64\nekobox_core.exe -Json
 ```
 
-该测试在受保护临时目录中初始化隔离 appdata，持久化主 HTTP profile、A terminal、A group front proxy、B 单跳 profile、辅助端口映射和 reject/跨线 route，再经 GUI 审计导出、core `check` 后启动同一 JSON。主 Mixed 为避免碰撞只在该隔离数据中改到 `18119`；默认 `2080` 仍由配置 guard 单独断言，测试不会改产品默认。三个回环 HTTP 桩分别承担 A terminal、A CONNECT 隧道前置代理和 B terminal。运行阶段要求 A 经 detour 返回 210、B 返回 211、terminal 后的 `bypass` 不能移动 A、显式 reject 不触达三个上游；停止 A 前置代理并确认 A terminal 仍监听后，A 必须失败而 B 与主/辅三个 listener 继续工作。CONNECT 桩只允许 `127.0.0.1` 目标。测试核对精确 PID、要求生成配置无 TUN、系统代理请求或 `auto_detect_interface`，比较系统代理前后快照，只结束自己创建的进程并删除临时 appdata/config。它不代表真实 AnyTLS/Trojan 节点或显式 chain profile 可用。
+该测试在受保护临时目录中初始化隔离 appdata，持久化主 HTTP profile、A AnyTLS terminal、A Trojan group front proxy、B HTTP 单跳 profile、辅助端口映射和 reject/跨线 route，再经 GUI 审计导出、core `check` 后启动同一 JSON。主 Mixed 为避免碰撞只在该隔离数据中改到 `18119`；默认 `2080` 仍由配置 guard 单独断言，测试不会改产品默认。测试每次生成只含 `localhost`/`127.0.0.1` 的临时自签证书；当前 core 分别启动独立 Trojan inbound、AnyTLS inbound 和产品 client，Python 桩只承担 A HTTP origin 与 B HTTP proxy。运行阶段要求 A 以 `client=mihomo/1.19.28` 经 Trojan detour 到 origin 并返回 210，B 返回 211，terminal 后的 `bypass` 不能移动 A，显式 reject 不触达两个 HTTP 目标；停止 Trojan 并确认 AnyTLS server 与 origin 仍由原 PID 监听后，A 必须失败而 B 与主/辅三个 listener 继续工作。测试要求所有三份 core 配置通过 `check`，生成配置无 TUN、系统代理请求或 `auto_detect_interface`，比较系统代理前后快照，只结束自己创建的进程并释放七个临时端口。它不代表真实供应商节点、显式 chain profile 或普通 GUI 可用。
 
 最终生成链路的无启动审计：
 
@@ -103,7 +103,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\verify_mixed_inbound
 
 ## 已知限制
 
-对真实节点直接运行 `verify_mixed_inbound.ps1` 仍依赖真实 DNS、节点和所选测试 URL，不能完全分离本地 Mixed contract 与远端出站。仓内 `test_mixed_probe.ps1` 与 `test_runtime_connectivity.ps1` 已改用精确 PID 持有的 loopback HTTP 204 origin，避免公共站抖动，并验证 origin 清理；`test_auxiliary_route_runtime.ps1` 现覆盖 ProfileManager/ConfigBuilder 生成的两个专用端口、A group front proxy 两跳、B 单跳、reject、前置代理故障隔离和不绕过 detour，配置导出 guard 另覆盖显式 chain profile 结构。仍未覆盖显式 chain profile 运行、错误认证、真实 AnyTLS/Trojan 节点、WFP、IPv6 或持续健康，也不能证明普通 GUI 生命周期已完成同一闭环。
+对真实节点直接运行 `verify_mixed_inbound.ps1` 仍依赖真实 DNS、节点和所选测试 URL，不能完全分离本地 Mixed contract 与远端出站。仓内 `test_mixed_probe.ps1` 与 `test_runtime_connectivity.ps1` 已改用精确 PID 持有的 loopback HTTP 204 origin，避免公共站抖动，并验证 origin 清理；`test_auxiliary_route_runtime.ps1` 现覆盖 ProfileManager/ConfigBuilder 生成的两个专用端口、A AnyTLS + Trojan group front proxy、B HTTP 单跳、reject、前置代理故障隔离和不绕过 detour，配置导出 guard 另覆盖显式 chain profile 结构。仍未覆盖显式 chain profile 运行、错误认证、真实供应商节点、WFP、IPv6 或持续健康，也不能证明普通 GUI 生命周期已完成同一闭环。
 
 2026-07-22 使用本轮 `deployment/windows64/nekobox_core.exe` 的回归中，Mixed fixture 为 7/7，额外 listener、系统代理、禁用日志和 origin 清理均通过；runtime connectivity 的 expected 204 正例中 HTTP/SOCKS5h 均为 204，expected 200 反例按预期报告 2 项 mismatch，系统代理、fixture 端口和 origin 清理均通过。clean GUI build tree 不输出 `nekobox_core.exe`。这是 loopback/工具契约证据，不是生产节点或 Windows TUN/WFP 证据。
 
