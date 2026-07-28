@@ -1,9 +1,11 @@
 # 推进路线
 
-状态：现行
-最后更新：2026-07-24
+状态：**历史执行台账；自 2026-07-27 起不再作为现行需求或开发顺序**
+最后更新：2026-07-27
 
-原则：先止损和恢复 NekoRay，再收敛三项核心扩展，最后解决 Windows fail-closed 运行时。除 2026-07-22 已明确追加的批量分享格式外，不新增其它未经需求授权的产品功能。
+> 本文件保留上一阶段已经做过什么、当时如何判断的证据。后续开发必须重新按 [产品方向与开发契约](PRODUCT.md) 排序，不能根据这里的复选框继续扩建。特别是以下旧结论已经失效：把原生 `2080` 变成无条件主线路入口；把 persistent Runtime/WFP 当作发布前提；把人工多入口管理视为越界功能。MultiMapper 和 RouteFluent 现在是受限参考材料，具体实现仍不可盲目移植。
+
+原历史原则：先止损和恢复 NekoRay，再收敛当时理解的三项扩展，最后解决 Windows fail-closed 运行时。该排序和范围判断已被 2026-07-27 产品契约取代。
 
 ## 阶段 0：冻结边界与保护环境
 
@@ -67,9 +69,9 @@
 - [x] 最终 custom merge 校验锁定 outbound、strict resolver group、DoH server 和原生 bootstrap，并拒绝 RouteFluent fallback/local-only 字段。
 - [x] 增加纯 C++ 订阅来源/DoH 生成策略测试和隔离导出 guard；仍缺完整 ProfileManager 导入→group 持久化→最终 outbound golden 与断网 DNS 泄漏观测测试。
 
-## 阶段 3：Windows 持久 fail-closed 运行时
+## 阶段 3：Windows 持久 fail-closed 运行时（历史方案，停止实施）
 
-已完成的 lifecycle executor/generation、daemon UUID 与对账屏障只是在现有 GUI/core 进程内封住直接竞态；下列 RuntimeStateMachine、独立 service、stable anchor 和 persistent WFP 仍全部是发布阻断，详见 [ADR 0010](architecture/decisions/0010-process-local-lifecycle-generation-fencing.md) 与 [ADR 0011](architecture/decisions/0011-daemon-identity-and-lifecycle-reconciliation.md)。
+上一阶段曾把下列 RuntimeStateMachine、独立 service、stable anchor 和 persistent WFP 列为发布阻断；该判断已失效。下列清单仅保留历史完成度，不得继续执行。已有 lifecycle executor/generation、daemon UUID 与对账屏障只按实际竞态收益和上游兼容性审计。
 
 1. [x] 完成本地 sing-box 生命周期调查：当前无原地 reload，选定持久 service + stable anchor + generation 架构。
 2. [ ] 建立单线程 RuntimeStateMachine，分离 desired/observed/owner/health。

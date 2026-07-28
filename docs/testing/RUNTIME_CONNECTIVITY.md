@@ -1,7 +1,7 @@
 # Windows 运行时连通性验证
 
-状态：现行
-最后更新：2026-07-24
+状态：现行测试说明；线路断言已按产品契约更正
+最后更新：2026-07-28
 
 ## 环境硬约束
 
@@ -11,7 +11,7 @@
 
 ## 先分清两层语义
 
-端口决定的是逻辑线路：主 Mixed `2080` 进入当前主 profile 的 `proxy` 链；每个辅助 Mixed 端口进入与该端口绑定的辅助 profile 链。当前生成器会在顶层 `custom_config` 合并前快照完整受管 Mixed listener 和沿 detour 可达的全部 outbound 对象，合并后要求对象逐项相同，并要求精确无条件绑定出现在可能改投或提前 resolve 的规则之前。profile 级 custom outbound 可在快照前修改普通字段，但不能新增/改变 detour。普通显式分流不得把 Mixed 流量改送 `direct`、`block` 或其它线路；该 validator 也不是对所有自定义路由/DNS 语义的全局证明，漏过时仍按 P0 回归处理。
+必须分开验证两类入口：原生 Mixed `2080` 保留 NekoRay 正常路由语义，当前主 profile 只是默认出站；新增专用 Mixed 端口才严格进入与其绑定的完整 chain。2026-07-28 的整改已移除主入口无条件终结绑定，并加入配置导出回归断言；主入口仍须继续对照 NekoRay 4.0.1 验证完整 route/reject/DNS 行为。专用入口继续验证不落到 `direct`、主线或其它线路，并补齐显式 reject/block 的排序证据。
 
 `route.auto_detect_interface` 只让 sing-box 在操作系统路由层选择合格的底层接口，主要用于避免 TUN 回环。它不读取 Mixed 端口，也不在主线路和辅助线路之间做选择。测试报告必须分别记录“命中了哪个逻辑 outbound”和“底层套接字走了哪个接口”；不能用接口自动检测来修正端口映射。
 
@@ -19,7 +19,7 @@
 
 1. **本地无侵入验证**：配置导出与 `check`、direct fixture、Mixed HTTP/CONNECT/SOCKS5 contract、监听 PID 和端口映射。此级不得修改系统代理、TUN、路由或 DNS。
 2. **OpenWrt 临时探针**：本机 Clash TUN 使真实出站归因不清时，在 `192.168.1.7` 用相同版本 core 验证 schema、DNS、detour 和远端协议。具体边界见 [OpenWrt 远程实验室](OPENWRT_REMOTE_LAB.md)。
-3. **Windows 集成验收**：Wintun、系统代理、WFP/fail-closed、GUI 生命周期、线路重启和 Windows 接口选择只能在 Windows 验证。优先使用独立 Windows 测试环境；只有必须停止 Clash TUN 才能取得有效证据时，才申请用户安排维护窗口。
+3. **Windows 集成验收**：真实 GUI、Mixed、系统代理/TUN 的上游回归、线路重启和 Windows 接口选择只能在 Windows 验证。WFP/persistent Runtime 不是当前核心发布门。优先使用独立 Windows 测试环境；只有必须停止 Clash TUN 才能取得有效证据时，才申请用户安排维护窗口。
 
 第二级成功只说明配置/出站链能在相同 core 上闭环；第二级成功而第三级失败，优先调查 Windows 路由、接口和生命周期。两级都以同一临时配置失败时，再调查节点、DNS、detour 或配置生成。
 

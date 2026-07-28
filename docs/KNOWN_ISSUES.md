@@ -1,7 +1,9 @@
 # 已知问题
 
-状态：现行发布阻断清单
-最后更新：2026-07-22
+状态：实现缺陷清单；优先级须服从 [产品方向与开发契约](PRODUCT.md)
+最后更新：2026-07-28
+
+> 本文件中历史的 `P0`、persistent Runtime/WFP 和主 `2080` 严格绑定结论不再自动构成发布要求。现行重点是恢复上游回归，并完成多入口、AnyTLS 与专用并发端口的最小闭环。
 
 ## P0：范围与数据兼容
 
@@ -51,21 +53,21 @@ v2rayN VMess 分享格式、SOCKS userinfo、Shadowsocks v2ray-plugin Clash解�
 
 域名 DoH endpoint 现在由生成的原生 `dns-local` bootstrap，保留 SNI 且不强制地址族。该解析仅用于建立 DoH 传输；线路 server 已绑定 strict provider resolver，provider DoH 全部失败时仍不会改用本机 DNS。标准生成器与最终 custom validator 已把受管 outbound、strict resolver group、DoH server 和 bootstrap 锁成完整链，并拒绝 RouteFluent `fallback`/`local_only` 字段。
 
-仍需：清理仅为旧数据兼容保留的 fallback/health 字段及第三方 core 中仍能表达旧实验语义的实现；建立完整 ProfileManager 订阅导入/刷新持久化 golden，以及真实断网、DNS 抓取和 Windows/OpenWrt 对照，证明 provider DoH 失败时没有线路 server 本机 DNS 请求。MultiMapper 与复杂批量 resolver/change-IP 平台已移除；上游简单 **Resolve domain** 因使用 Windows 系统 resolver 并永久改写节点域名而暂时禁用。
+仍需：清理仅为旧数据兼容保留的 fallback/health 字段及第三方 core 中仍能表达旧实验语义的实现；建立完整 ProfileManager 订阅导入/刷新持久化 golden，以及真实断网、DNS 抓取和 Windows/OpenWrt 对照，证明 provider DoH 失败时没有线路 server 本机 DNS 请求。旧的复杂批量 resolver/change-IP 实现已移除，但人工多入口管理现为核心缺失项：必须保留原始域名/SNI，区分 resolver 来源，并由用户手工固定入口。
 
 ## P0：Mixed、并发线路与最终配置
 
 ### 最终受管绑定 guard 已实现，规则语义与自动回归仍不完整
 
-标准生成路径现为 `2080 -> proxy chain`、每个辅助 port -> 对应辅助 chain。空链/失效映射/重复端口已改为构建失败，主/辅助入口都不再在精确绑定前借默认 DNS `resolve`。
+标准生成路径现为主 `2080` 保留 NekoRay 正常路由、每个辅助 port -> 对应辅助 chain。空链/失效映射/重复端口已改为构建失败；辅助入口不在精确绑定前借默认 DNS `resolve`，主入口则恢复正常 sniff/resolve/route 序列。
 
-标准生成完成、顶层 `custom_config` 合并前，builder 会快照每个受管 Mixed 的完整 listener 以及沿 detour 可达的每个 outbound 完整对象；合并后要求对象逐项相同，并检查 tag/port 唯一、精确无条件 route 绑定、所有 Mixed 的提前 resolve、目标 outbound 类型和 detour 闭环。profile 级 `custom_outbound` 可在快照前修改普通字段，但不得新增/改变 detour。server-domain outbound → strict resolver group → 精确 DoH server → 原生 bootstrap 也按生成对象锁定。冲突、缺失、循环、direct/bypass/block/selector/urltest、resolver 篡改和 RouteFluent fallback 字段会构建失败。当前仍缺完整 ProfileManager/import C++ golden和真实 DNS 泄漏观测，也需确认规则排序保留 NekoRay 原有 sniff/reject 等非改投语义；不能把这些窄约束表述为任意路由/DNS 配置均已严格证明。
+标准生成完成、顶层 `custom_config` 合并前，builder 会快照每个专用辅助 Mixed 的完整 listener 以及沿 detour 可达的每个 outbound 完整对象；合并后要求对象逐项相同，并检查 tag/port 唯一、精确无条件 route 绑定、辅助 Mixed 的提前 resolve、目标 outbound 类型和 detour 闭环。profile 级 `custom_outbound` 可在快照前修改普通字段，但不得新增/改变 detour。server-domain outbound → strict resolver group → 精确 DoH server → 原生 bootstrap 也按生成对象锁定。冲突、缺失、循环、direct/bypass/block/selector/urltest、resolver 篡改和 RouteFluent fallback 字段会构建失败。当前仍缺完整 ProfileManager/import C++ golden 和真实 DNS 泄漏观测，也需确认专用端口规则排序保留显式 reject/block；不能把这些窄约束表述为任意路由/DNS 配置均已严格证明。
 
 停止、重启、崩溃或退出过去会静默清空辅助端口 map，加载/UI 刷新也会修剪未知/损坏映射。接管工作树已改为仅显式映射操作可修改：字段类型错误、非字符串、损坏或重复项会让既有主配置原件保持不变并中止启动，同时生成可验证 quarantine 证据；显式启停/删除在原子保存失败时回滚内存且不 reload。仍缺可操作的修复 UI 与完整 ConfigBuilder C++ golden。
 
-### 上游路由语义出现回归
+### 原生主入口路由回归已修复，专用端口规则仍需收敛
 
-把 Mixed 终结绑定放在所有普通规则之前同时绕过了部分 NekoRay block/reject、DNS hijack 与用户路由动作。正确编译顺序应保留不会改投/泄漏的 sniff、reject 等动作，再确保最终只能去绑定线路；不能用简单“所有规则之前”永久替代原语义。
+2026-07-28 已把原生 `2080` 恢复为普通 route 序列，并移除 `mixed-in -> proxy` 的无条件终结规则；定向配置导出回归由旧构建 14/15 失败转为重建后 15/15 通过。专用线路端口仍在普通规则之前终结到绑定 chain，下一步必须在不允许 `direct`、主线或其它线路的前提下，保留必要协议处理和明确的 reject/block。
 
 ### desired state 与真实 listener 非事务
 
@@ -77,9 +79,9 @@ v2rayN VMess 分享格式、SOCKS userinfo、Shadowsocks v2ray-plugin Clash解�
 
 AnyTLS client 继承还有保真缺口：显式 native、订阅继承和非法 custom 值可在链接/刷新间混淆。任意 1–128 ASCII custom client 也超出已验证范围。
 
-## P0：TUN 下重启/切线不合格
+## 历史候选：TUN 下重启/切线与 persistent Runtime（不再是核心发布门）
 
-当前 `Start` 要求旧 instance 为空，`Stop` 会关闭整个 sing-box Box；内部 TUN、Mixed、DNS 和 outbounds 同时消失。UI 仍会禁止 TUN 状态下的线路/辅助端口变化，但已删除“先手动关闭 TUN”的错误引导，改为明确说明独立 persistent Windows kill-switch 尚未实现。该阻断只是避免已知直连窗口的临时止损，仍与“开 TUN 可切线/退出”的最终需求正面冲突。
+当前 `Start` 要求旧 instance 为空，`Stop` 会关闭整个 sing-box Box；内部 TUN、Mixed、DNS 和 outbounds 同时消失。上一阶段据此把 persistent Windows kill-switch 设为 P0，并禁止部分上游操作。该产品要求并未得到用户确认；现在应比较 NekoRay 4.0.1 行为，保留必要的所有权修复，审计并撤销额外限制。
 
 源码审计已确认当前没有真正的原地 reload：gRPC 的数据面变更仍只有 Start/Stop；`GetDaemonInfo` 只做精确实例握手，`ReconcileLifecycle` 是推进 ordering watermark 的进程内对账屏障，都不是 reload。Stop 会关闭整个 Box；Wintun、路由、DNS 与动态 WFP session 随 worker 消失，core 还会在 GUI 父进程退出后主动结束。标准内部 TUN 现强制 `strict_route=true` 并同时覆盖 IPv4/IPv6，旧 UI 字段只作为兼容数据保留；这只能收紧 worker 活动期，不能覆盖切换、崩溃或 GUI 退出空窗。
 
@@ -103,7 +105,7 @@ Windows legacy 外置 TUN launcher 过去只把 `vpn_pid` 设为占位值，停�
 
 sing-box 的 Mixed/HTTP inbound 原生支持 `set_system_proxy=true`，并会在 listener Start/Close 时自动写入/清理 Windows 代理。最终配置现全局拒绝该字段为 true；受管 TUN 必须与完整生成对象相同，并保留上游 `auto_detect_interface=dataStore->spmode_vpn`，不得出现 `route.default_interface`，也不得由 outbound/endpoint/DNS/NTP 或嵌套 route `action=direct` dialer 覆盖 bind-address/interface。validator 还拒绝系统 WireGuard/Tailscale endpoint 与 NTP 写系统时钟。test 路径同样遵循上游 TUN 意图，文件 export 删除接口自动检测字段；没有本机双 TUN 特例。`internal-full` 在产品 TUN 或辅助并发运行时拒绝、在 latency/full-test 中拒绝；文件导出只有通过同一 OS 副作用 guard 才允许。`test/test_final_config_guards.ps1` 已覆盖其中一部分导出拒绝分支，但仍缺 live/test 的 TUN on/off 四象限、export 删除边界和上述 dialer 路径的完整 C++ golden；并应在受控 core fork 中编译期禁用 Windows 自动系统代理副作用。
 
-没有独立 WFP 过滤层时，简单删除 guard 或“先 check 再 Stop”都不能保证无直连。已选定的 P0 方向是持久 Windows Runtime Service、稳定 TUN/Mixed anchor、独立 persistent WFP kill-switch，以及候选 generation 预检和提交；提交前失败保留当前 generation，提交后故障进入阻断，禁止自动切回旧线路。只有用户明确选择、旧 generation 重新验证后才允许显式回滚。当前每次 core 启动已有独立 UUID，所有 RPC 在 handler 前验证精确身份，ready 也必须通过 UUID/协议 v3 握手；Start/Stop 响应不确定后会用同一 executor 内的更高 command sequence 对账屏障，成功时可确认精确 active、failed-clean/fenced stopped 或原 runtime 仍 active；Exit 也已有结构化 ACK、ACK 丢失 non-admission 对账和精确 QProcess finished 闭环。协议 v3 可取消未准入命令，并对 Start 的取消/发布做原子仲裁，但已准入 Stop 仍不可中断，对账自身也可能超时；此时 GUI 仍必须保留 indeterminate。它们也没有 Windows OS 事实源、Runtime Service、stable anchor 或 persistent WFP，盲目重试仍禁止。
+没有独立 WFP 过滤层时不能证明“全机永不直连”，但本项目并未确认需要承担这一全局承诺。持久 Windows Runtime Service、稳定 TUN/Mixed anchor 与 WFP kill-switch 只保留为历史候选；未经用户另行确认不得继续作为 P0 扩建。已有 UUID、executor 和对账代码只按实际竞态收益与上游兼容性决定保留、简化或回退。
 
 ## P0：Windows 系统代理所有权未实现
 
@@ -115,7 +117,7 @@ legacy WinINet helper 不返回可靠结果，也没有保存完整 PAC/proxy/by
 - URL Test 已恢复为通过显式有界临时配置测试所选线路；产品 TUN 已 requested 或内部 worker 活动时都会拒绝新测试，测试未结束时也拒绝启 TUN，避免异步转换窗口把测试流量捕获到错误线路。超时/取消只发请求，直到实际 worker/RPC 退出前仍保持测试活动标记。TCP Ping 因直接打开系统 socket、不能证明所选线路而在 GUI/core 两层禁用。
 - sniffing 的旧 destination/routing 模式差异被压成同一动作。
 - 上游文档/帮助入口被隐藏；私人分支应指向本地文档，而不是消失。
-- MultiMapper 和越界的复杂批量 resolver/change-IP 平台已移出产品代码。上游简单 **Resolve domain** 当前只显示禁用原因，不再解析或保存 profile；若未来恢复，必须通过该节点对应的 provider resolver、不得调用 Windows 系统 DNS，并保留可回退的原始域名。
+- MultiMapper 专用平台不进入产品，但其来源/候选/固定入口思想是明确参考。旧 **Resolve domain** 当前只显示禁用原因；后续要实现的是 provider-aware、保留原始域名/SNI、诊断不自动改选的人工多入口闭环。
 
 ## P1：构建与测试可信度
 

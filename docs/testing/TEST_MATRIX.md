@@ -1,15 +1,26 @@
 # 测试矩阵
 
-状态：现行
-最后更新：2026-07-24
+状态：现行证据台账；产品断言服从 [产品方向与开发契约](../PRODUCT.md)
+最后更新：2026-07-28
 
 ## 证据要求
 
 每次发布候选至少记录：提交号、GUI/core 文件哈希、Windows 版本、命令、预期结果、实际结果和脱敏报告路径。日志、导出配置和报告可能含节点名、服务器地址、路由、进程及本地路径，不得提交真实凭据。
 
-Windows 是唯一产品平台。OpenWrt 是相同 core 的诊断环境，不是产品兼容目标，也不能代替 Windows 发布验收。
+Windows x64 是当前首要验收平台。OpenWrt 是相同 core 的诊断环境，不是产品兼容目标，也不能代替 Windows 验收。
 
 历史一次性 Mixed/AnyTLS 调查只在矩阵中作为明确标注日期的诊断背景保留；原始证据见 [2026-07-20 接管基线](../archive/audits/2026-07-20-takeover-baseline.md)。历史中的单次成功不能升级为当前通过结论。
+
+## 2026-07-28 原生 2080 路由回归整改
+
+| 检查 | 结果 | 边界 |
+|---|---:|---|
+| 修复前定向回归 | 14/15 | 新增 `primary_mixed_preserves_native_routing` 后，旧构建只有该用例失败，证明断言命中了既存的无条件主线路绑定 |
+| 增量重建 `nekobox` | 通过 | 重新编译 `ConfigBuilder.cpp` 并链接 GUI，不等同于完整 Windows 打包 |
+| `test_final_config_guards.ps1` | 15/15 | 原生 `mixed-in` 保留自定义 route 命中，不再存在仅凭 `mixed-in` 无条件终结到 `proxy` 的规则；专用辅助端口严格绑定路径未改 |
+| CTest | 4/4 | 配置恢复、runtime transition、分享格式和 resolver policy 纯测试通过 |
+
+本轮没有启动真实 GUI、线路或 Windows TUN，也没有执行完整 package。主入口回归已有配置级红绿证据；辅助端口的真实双线路出口、显式 reject/block 排序和 Windows 集成仍待验证。
 
 ## 2026-07-24 端口恢复与 Clash TUN 归因
 
@@ -56,13 +67,13 @@ Windows 是唯一产品平台。OpenWrt 是相同 core 的诊断环境，不是�
 |---|---|---|---|---|
 | L1 本地无侵入 | 配置/schema | 每个导出配置执行 `nekobox_core check`；空配置、迁移、损坏配置 | 已验证损坏主/路由配置及错误类型、非字符串、重复辅助映射原件不被覆盖；其它迁移矩阵不完整 | 必须自动化通过 |
 | L1 本地无侵入 | Mixed contract | HTTP absolute-form、HTTPS CONNECT、SOCKS5h、认证正反例、端口占用、非 loopback/TUN 拒绝 | 正向及安全收紧有证据，反例不完整 | 必须全部通过 |
-| L1 本地无侵入 | 端口映射/OS 副作用 | 主 `2080` 命中当前主 profile；每个辅助端口命中其绑定 profile；顶层 custom 不得改变完整受管 listener/outbound 快照；未授权/非精确 TUN、`set_system_proxy=true` 及已知系统 endpoint/时钟副作用必须拒绝；live/test 的 TUN on/off 四象限应等于上游 `dataStore->spmode_vpn`，export 应删除接口自动检测字段 | 生成表达式与 Managed TUN validator 已审计；NTP/嵌套 route direct-action bind 覆盖已纳入 guard，三份 loopback fixture 无必要 `true` 已移除。导出 fixture 仅覆盖部分 OS guard，上述四象限/export 边界和 Mixed/TUN 完整 C++ golden 仍缺 | 必须通过 |
+| L1 本地无侵入 | 端口映射/OS 副作用 | 主 `2080` 保持上游路由语义；每个专用端口命中其绑定完整 chain；顶层 custom 不得改变专用 listener/outbound 绑定；无明确操作不得改变系统代理/TUN | 2026-07-28 已用导出红绿回归关闭主入口无条件绑定；辅助绑定与部分 OS guard 有证据，仍缺完整 C++ golden 和真实双线路验证 | 必须通过 |
 | L1 本地无侵入 | 工具安全 | 不改系统代理/TUN/路由/DNS；拒绝 TUN、系统 NTP 写入和非空 endpoints；只保留目标 outbound detour 闭包并只结束精确 PID；不停止或改写 Clash TUN | 启动 GUI/core、写审计报告及构建/临时目录的脚本参数继续使用固定磁盘、非生产/非 reparse 路径护栏；本地/远端收紧器已有 fixture，OpenWrt Python 单测 19/19 | 必须保持 |
 | L2 OpenWrt 探针 | core/工具安全 | 相同 `1.13.12-routefluent-anytls-client.7` core 的 schema、loopback Mixed、监听 PID 与远端基线保护 | 2026-07-20 历史执行：既有 PID/命令行、配置/manifest 哈希和监听均不变，临时目录已清理；旧探针对临时副本强制 `auto_detect_interface=true`，尚未按默认 preserve 重跑 | 必须重跑并保持 |
 | L2 OpenWrt 探针 | 远端链路 | Trojan、AnyTLS、DNS、detour 有/无的对照；HTTP/CONNECT/SOCKS5h | 2026-07-20 历史诊断：AnyTLS mihomo 无 detour 与独立 profile 2 Trojan 均三协议 204；主 AnyTLS + `g-2` detour 失败。因所有变体均被旧探针强制 `auto_detect_interface=true`，只支持同一变体内的组合归因，不能作为当前导出策略验收 | 主组合阻断发布，按 preserve 重跑 |
 | L1 本地无侵入 | 遥测一致性 | worker 更新 counter/rate 时 UI/JsonStore 只能读取同一代不可变快照，或由统一锁/原子协议保护；Reset 与持久化也必须纳入 | `last_update=0` 已消除未初始化读取；`TrafficBinding` 只隔离 profile/tag 身份。共享 `TrafficData` 的 counter/rate 仍存在无锁跨线程访问，尚无并发测试 | P2，稳定版前关闭 |
-| L3 Windows 集成 | 生命周期 | GUI 退出/重启、线路重启、core 崩溃与显式回滚；RPC identity/deadline/indeterminate 对账 | 每次 core 启动分配 UUID，全 RPC 在 handler 前验证身份，并以协议 v3 `GetDaemonInfo` 精确回显后才 ready。标准 `grpc-timeout` 与 context-aware executor 可取消未准入命令；Start 的取消/发布原子仲裁。高序号 `ReconcileLifecycle` barrier 返回的 active/stopped 仅为 daemon 内存态。Exit 只从 `STOPPED` 进入 `EXITING`，返回结构化 ACK 后 `GracefulStop`；GUI 冻结 generation/UUID/PID、持续等同一 QProcess `NormalExit/0`。raw core gate覆盖真实 QProcess/HTTP2 的正常 Exit，但不调用产品 Client/MainWindow，且无 listener/TUN。已准入 Stop/Close、再次超时对账与在途 handler 仍可能 unknown；缺 GUI→Client、ACK 丢失、父进程死亡和 Windows OS 资源验收 | 阻断发布 |
-| L3 Windows 集成 | 网络控制 | 系统代理、Wintun、persistent WFP kill-switch、IPv4/IPv6、DNS、PID/资源所有权 | 内部 TUN 活动配置已强制 strict+IPv4/IPv6，但 WFP 仍随 worker 消失；系统代理 UI 暂禁，精准 broker 未实现 | 阻断发布 |
+| L3 Windows 集成 | 生命周期 | GUI 退出/重启、线路重启、core 崩溃；与 4.0.1 对照无额外限制或数据丢失 | 当前已有 UUID/executor/对账改造，但缺完整 GUI 证据，且复杂度可能超过需求 | 按上游回归审计 |
+| L3 Windows 集成 | 网络控制 | 系统代理、TUN、IPv4/IPv6、DNS 的手工操作与上游回归 | 当前加入了多项额外 guard；persistent WFP 不属于现行核心要求 | 不得比上游退化 |
 | L3 Windows 集成 | GUI/安装更新 | clean build、干净用户目录、安装/更新失败与回滚 | 无 Skip package 先 clean reset GUI build tree、强制 `BUILD_TESTING=ON`，在同轮 GUI tests 与刚构建 core 上依次运行 tracker 和 raw Exit，只有通过才写正式 zip；任一 Skip 只产诊断目录且不创建/覆盖 zip。独立 clean-room 环境、安装/更新失败与回滚矩阵仍未完成 | 阻断稳定版 |
 | L1/L3 | C++/Go/脚本自动测试 | CTest、自有 Go 模块与隔离导出 fixture | CTest 为 4 项纯测试；tracker/分享格式/resolver policy 和 Go 单测覆盖协议 v3 deadline、Start 取消/发布、Exit/对账/finished 顺序，完整 package 另有真实 core raw QProcess/HTTP2 gate。尚无 GUI→Client crash→commit、真实 timeout/ACK 丢失、分享剪贴板、TrafficData 并发或 ProfileManager/订阅完整 harness。两个 Go 模块普通测试通过，core module 的重复/race/vet 通过；PowerShell/Python fixture 有独立证据，但完整 ConfigBuilder/import、DNS 泄漏观测和持久 runtime 仍缺 C++/Windows 集成矩阵 | 阻断稳定版 |
 
@@ -70,9 +81,9 @@ Windows 是唯一产品平台。OpenWrt 是相同 core 的诊断环境，不是�
 
 ## 逻辑线路与接口选择的断言
 
-- 默认 Mixed 端口固定为 `2080`；辅助端口池保持 `12100..12299`。
-- 主/辅助 Mixed 入口必须强绑定各自逻辑 profile/outbound。标准路由规则不得将其改送 `direct`、`block` 或另一条线路；最终 custom 合并若破坏绑定必须在启动前失败关闭。
-- 断言对象不仅是 tag/port/detour：合并前捕获的完整受管 listener 和全部可达 outbound 必须在合并后逐项一致，且精确 terminal binding 必须先于可能改投/提前 resolve 的规则。这个断言不自动覆盖未受管的所有路由/DNS 语义。
+- 默认 Mixed 端口保持上游值 `2080`；专用端口范围是可调整的实现参数。
+- 主 `2080` 必须保留上游路由/reject/DNS 语义；专用线路入口才强绑定完整 profile chain，并拒绝改投 `direct`、主线或另一条线路。
+- 专用入口的断言对象不仅是 tag/port/detour：完整 listener 与全部可达 outbound 必须在 custom merge 后仍保持绑定。该断言不得遮蔽主入口的上游规则。
 - `auto_detect_interface` 仅是底层 OS 接口选择，不能改变入口到逻辑线路的绑定，也不能作为“Mixed 自动选线路”的验收依据。
 - 本机 Clash TUN 存在时，本地远端成功只能证明请求完成，不能单独证明物理出站归属，也不能排除代理套代理/Fake-IP 影响。此时按 [Clash TUN 共存](../operations/CLASH_TUN_COEXISTENCE.md) 和 [OpenWrt 远程实验室](OPENWRT_REMOTE_LAB.md) 做对照。
 

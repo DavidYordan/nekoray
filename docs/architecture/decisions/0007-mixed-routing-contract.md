@@ -1,11 +1,13 @@
 # ADR 0007：Mixed 端口到线路映射
 
-状态：Accepted
+状态：Partially Superseded by [产品方向与开发契约](../../PRODUCT.md)
 日期：2026-07-20
 
 ## 决策
 
-- 默认主入口 `mixed-in:2080` 绑定当前主 profile完整 outbound chain。
+> 2026-07-27 更正：以下严格绑定只适用于新增专用线路端口。原生 `mixed-in:2080` 必须保留 NekoRay 正常路由语义，不能被无条件主 chain 规则遮蔽。
+
+- 默认主入口 `mixed-in:2080` 使用 NekoRay 原生路由，当前主 profile 仅作为默认出站。
 - 每个 `aux-mixed-<profile-id>` 绑定同一 profile的辅助 chain。
 - 端口是逻辑线路选择器；`route.auto_detect_interface` 只处理底层接口/产品TUN防环路，不参与主/辅助选择。
 - 绑定线路失败时该入口失败；禁止改投 `direct`、`bypass`、主线、另一辅助线、selector/urltest或其它可用性fallback。

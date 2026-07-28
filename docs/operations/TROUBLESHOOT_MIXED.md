@@ -130,4 +130,4 @@ OpenWrt 能验证 schema、Mixed、Trojan/AnyTLS、DNS 和 detour，不能验证
 
 `test_mixed_probe.ps1` 会启动仓内 loopback HTTP 204 origin，并用 HTTP absolute-form、显式 HTTP CONNECT tunnel 与 SOCKS5 请求验证两个 direct fixture，不依赖公网；结束后 origin 端口必须释放。非 loopback、TUN、系统时钟写入、top-level endpoint 和动态 outbound fixtures 必须在启动 core 前被拒绝。错误认证和主/辅助端口映射 contract 仍需补齐。
 
-2026-07-20 使用本轮构建目录 core 的该组 fixture 为 7/7，额外 listener、系统代理、禁用日志与 origin 清理均通过。它只证明本地入口/工具收紧，不改变 AnyTLS + Trojan detour 和 Windows TUN/WFP 的发布阻断结论。
+2026-07-20 使用本轮构建目录 core 的该组 fixture 为 7/7，额外 listener、系统代理、禁用日志与 origin 清理均通过。它只证明本地入口/工具收紧；AnyTLS + Trojan detour 仍需验证，Windows TUN/WFP 则已于 2026-07-27 撤出核心发布门。

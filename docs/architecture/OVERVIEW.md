@@ -1,5 +1,7 @@
 # 架构总览
 
+> 本文件同时记录当前代码和上一阶段候选架构；目标边界以 [产品方向与开发契约](../PRODUCT.md) 为准。persistent Runtime/WFP 不再是核心需求；2026-07-28 已移除 `2080` 的无条件主线路绑定。
+
 ## 产品边界
 
 本项目不是 sing-box-only 重写。Qt UI、ProfileManager、NekoRay 路由/导入/测速/外置 core能力继续构成产品主体；RouteFluent patched sing-box 是主核心，用于承载 AnyTLS和 server-domain DoH扩展。Xray核心删除，其它 NekoRay能力默认保留。
@@ -10,8 +12,8 @@
 Qt Widgets UI
   -> DataStore / ProfileManager
   -> ConfigBuilder
-       -> 主 Mixed 2080 -> 主 chain
-       -> 辅助 Mixed port -> 对应辅助 chain
+       -> 主 Mixed 2080 -> NekoRay 原生路由
+       -> 专用 Mixed port -> 对应 profile 的完整 chain
        -> Clash 三态 resolver source -> strict server-domain resolver
           -> provider DoH endpoint -> native dns-local bootstrap
   -> TransitionCoordinator + CoreProcess {generation, daemon UUID, PID}
@@ -28,9 +30,9 @@ Qt Widgets UI
 
 GUI 已分别展示 TUN 的 requested state 和当前 worker-observed state，并可显示已提交 transition generation/config hash；受管 TUN observed 值来自最终通过校验的 candidate。core 崩溃后只重启空控制 core，不自动恢复 profile/TUN。worker 观测不是 Windows 接口、路由或 WFP 的事实源，持久保护层仍不存在。
 
-Windows GUI 现忽略 CRT `SIGTERM`/`SIGINT`，避免控制台信号调用 Qt 并绕过受保护退出路径。强制进程终止、崩溃、系统关机与父 GUI 消失仍会绕过或摧毁当前数据面；该窄止损不改变持久 Runtime/WFP 的必要性。
+Windows GUI 现忽略 CRT `SIGTERM`/`SIGINT`，避免控制台信号调用 Qt 并绕过受保护退出路径。强制进程终止、崩溃、系统关机与父 GUI 消失仍会绕过或摧毁当前数据面；是否需要持久 Runtime/WFP 不由这一事实自动推出。
 
-旧 Windows 外置 TUN launcher 无法获得可验证的 worker PID/句柄，停止时曾按映像名清理。接管工作树已禁止该启停路径但保留其数据模型，避免误伤其它安装；后续由 Runtime Service 精确接管，而不是把 NekoRay 能力静默删除。
+旧 Windows 外置 TUN launcher 无法获得可验证的 worker PID/句柄，停止时曾按映像名清理。接管工作树已禁止该启停路径但保留其数据模型，避免误伤其它安装；后续先恢复上游能力并窄修所有权，不预设必须由 Runtime Service 接管。
 
 NekoRay external-core能力被上一阶段误删，恢复后应重新接在 ConfigBuilder/进程管理边界：普通上游模式继续可用；无法加入单 Box并发的组合在并发托管模式中明确拒绝，而不是删除协议。
 
@@ -54,7 +56,7 @@ GUI TransitionCoordinator（Start/Stop/CrashCleanup 单一 ticket）
 
 它不是持久 runtime：所有 owner 都仍在 GUI/子进程边界内，父进程死亡会带走当前数据面；没有 Windows Service、stable Mixed/TUN anchor、persistent WFP、完整 desired/observed/owner/health 状态机或 Windows OS 事实源。final Start gate 也不会重建 candidate/比较完整 model revision。UUID/对账和 Exit ACK/finished 只证明一个 GUI-owned core 进程内的 lifecycle/进程结果；不证明线路健康、Mixed/TUN/WFP 或路由无泄漏。context-aware executor 已能取消未准入命令和未发布 Start，但已准入 Stop/Close、对账再次超时和 `GracefulStop` 的长时间在途 RPC 仍可能不确定。完整 package 的 raw QProcess/Qt HTTP/2 gate 使用无 listener、无 TUN 配置且不调用产品 Client/MainWindow，因此仍缺 GUI→Client、crash→commit、ACK 丢失注入、父进程死亡与 Windows 资源集成测试。
 
-## 候选 Windows 运行时
+## 历史候选 Windows 运行时（未获产品授权）
 
 ```text
 Qt GUI（控制面，可退出/重启）
@@ -67,12 +69,12 @@ Windows Runtime Service（稳定所有者）
   -> user-session system-proxy broker（仅手动命令）
 ```
 
-候选目标不是为了增加平台，而是实现冻结语义：GUI生命周期不改变OS模式；线路切换先保护、后准备/健康检查、再提交；失败全阻断而不直连。详见 [ADR 0008](decisions/0008-persistent-windows-runtime.md)。
+该方案来自上一阶段对“全机防泄漏”的扩张解释，不是现行三项核心能力的发布门。只作为历史研究材料保留；未经用户另行确认不得继续实施。详见 [ADR 0008](decisions/0008-persistent-windows-runtime.md)。
 
 ## 状态与所有权
 
 - GUI保存用户配置和显式命令，不把意图当作 observed state。
-- Runtime Service/状态机串行化运行变更并持有精确进程句柄、路径、创建时间、generation和配置hash。
+- 若保留现有状态机代码，它只能用于解决已复现的进程竞态；不得预设新增 Runtime Service。
 - Windows OS是系统代理、接口、路由和WFP状态的事实源。
 - ProfileManager mutation与订阅提交必须串行；文件保存必须原子。ConfigBuilder 的统计 tag/profile id 与 VLESS flow 已不再回写 live model，group speedtest 也改用 UI immutable job/fingerprint CAS，但完整 `BuildModelSnapshot` 仍未完成。`TrafficData::last_update` 已初始化为 `0`；共享 counter/rate 的 worker 写入与 UI/JsonStore 读取仍需独立遥测快照或同步协议，generation-local `TrafficBinding` 不等于统计线程安全。
 - 本机 Clash TUN 是外部底层网络，永远不属于本状态机。
@@ -82,7 +84,7 @@ Windows Runtime Service（稳定所有者）
 - `main/`：启动、DataStore、通用基础设施。
 - `db/`：profile/group、配置构建、路由与并发映射。
 - `fmt/`：协议 Bean、分享链接、core outbound。
-- `sub/`：订阅导入/刷新；未经授权的 MultiMapper 与复杂批量 resolver/change-IP 平台已移除。旧 Resolve domain 的系统 DNS/永久改 IP 实现也已删除，UI 入口仅保留无副作用禁用说明。
+- `sub/`：订阅导入/刷新；旧 MultiMapper 专用平台与系统 DNS/永久改 IP 实现已移除。人工多入口查看、刷新、固定/解除与分层诊断仍待以 NekoRay 原生模型最小实现。
 - `ui/`：Qt控制面。
 - `rpc/`、`go/grpc_server/`：C++/Go RPC边界。
 - `go/cmd/nekobox_core/`：patched sing-box wrapper。

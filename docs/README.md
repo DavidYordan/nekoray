@@ -1,13 +1,14 @@
 # 文档索引
 
-现行文档只描述本 Windows 私人分支。`archive/` 保存被推翻的 agent 设计、一次性证据和历史契约，不能作为当前需求。
+现行文档描述本私人分支。发生冲突时以用户最新要求和 [产品方向与开发契约](PRODUCT.md) 为准；实现、测试、ADR 和历史路线都不能反向创造需求。`archive/` 保存被推翻的 agent 设计、一次性证据和历史契约，不能作为当前需求。
 
 ## 先读
 
-- [产品契约](PRODUCT.md)：唯一产品范围源。
+- [Agent 工作规则](../AGENTS.md)：后续 agent 的项目级调查、开发、验证、文档与 Git 纪律。
+- [产品方向与开发契约](PRODUCT.md)：唯一产品范围源；先读术语、三项核心能力、当前改动分类和开发纪律。
 - [接管状态](TAKEOVER_STATUS.md)：当前实现、证据和发布判断。
 - [已知问题](KNOWN_ISSUES.md)：按 P0/P1/P2 排序的缺口。
-- [推进路线](ROADMAP.md)：恢复上游能力、三项核心扩展与明确追加需求的实施顺序。
+- [推进路线](ROADMAP.md)：2026-07-24 以前的执行台账；其中 persistent Runtime/WFP 和“移除多入口平台”等内容不再构成产品授权，后续应按产品契约重排。
 - [待确认决策](DECISIONS_NEEDED.md)：只保留无法从代码与现有要求推导的问题。
 
 ## 架构与决策
@@ -25,7 +26,7 @@
 - [ADR 0011：daemon 实例身份、生命周期对账与 Exit ACK](architecture/decisions/0011-daemon-identity-and-lifecycle-reconciliation.md)
 - [ADR 0012：恢复 NekoRay 原生 Mixed 默认端口](architecture/decisions/0012-restore-native-mixed-port.md)
 
-ADR 0005（MultiMapper）已撤出产品决策序列；相关材料只保留在历史归档。
+MultiMapper 不作为产品依赖或可直接移植的实现，但其多入口来源、候选、固定入口与分层诊断思想是本轮明确要求的参考材料。所有 ADR 均从属于产品契约；特别是 persistent Runtime/WFP 等候选架构不能作为三项核心需求的发布前提。
 
 ## 开发、操作与测试
 

@@ -4,36 +4,35 @@
 
 ## 产品边界
 
-本分支遵循“最小化扩展”原则：NekoRay 原有能力默认保留；只有 Xray 核心因不支持 AnyTLS 被明确删除。核心新增需求有三项：
+本分支遵循“最小化扩展”原则：NekoRay 原有能力默认保留；只有 Xray 运行核心因不支持 AnyTLS 被明确删除。核心新增需求有三项：
 
-1. AnyTLS 协议支持；
-2. 多线路并发：主 Mixed 端口和各辅助 Mixed 端口分别绑定确定的逻辑线路；
-3. 按字段存在性读取 Clash 自带的 server-domain DoH：专用 `dns.proxy-server-nameserver` 存在时以它为准；它完全缺失时才使用 `dns.nameserver` 中的 HTTPS DoH。
+1. Clash 订阅的 server-domain resolver 与人工多入口管理：按字段存在性读取订阅 DoH，保留不同解析来源的候选入口，由用户手工固定；
+2. AnyTLS 协议支持；
+3. 多线路并发端口：每个新增专用 Mixed 端口精确绑定一条完整逻辑线路，失败时不改投其它线路。
 
-2026-07-22 另明确追加一个私人导出便利功能：线路右键多选在保留上游含 remark 链接和 Neko Links 的同时，新增不含 URI fragment 的原生链接，以及严格的 `ip:port:user:pass` 凭据列表；完整边界见[产品契约](docs/PRODUCT.md#34-批量分享格式2026-07-22-用户明确追加)。
+原生 `127.0.0.1:2080` 仍是 NekoRay 的正常 Mixed 入口，不得用无条件规则遮蔽上游路由；严格线路选择由显式的专用并发端口承担。
+
+2026-07-22 另明确追加一个私人导出便利功能：线路右键多选在保留上游含 remark 链接和 Neko Links 的同时，新增不含 URI fragment 的原生链接，以及严格的 `ip:port:user:pass` 凭据列表；完整边界见[产品契约](docs/PRODUCT.md#7-已明确的便利功能)。
 
 旧能力只有在证明与上述扩展存在真实冲突后，才可以提出窄范围修改；不能因名称含 `v2ray`、依赖外置 core，或为了本机测试方便而删除、改写或硬编码产品行为。
 
 ## 冻结约束
 
-- 仅支持 Windows，项目纯私人使用。
-- 默认主 Mixed 端口恢复为 NekoRay 原生值 `2080`；辅助端口池仍为 `12100..12299`。
+- 当前首要验收平台是 Windows x64 私人便携构建；这不授权删除无冲突的上游能力。
+- 默认主 Mixed 端口恢复为 NekoRay 原生值 `2080`；辅助端口的具体默认范围只是实现参数，不是产品原则。
 - 本机基础网络现为 Clash TUN。它是外部底层网络，不属于本项目，也不得被测试擅自停止或改写；共存诊断见 [Clash TUN 共存](docs/operations/CLASH_TUN_COEXISTENCE.md)。
 - `auto_detect_interface` 只承担 NekoRay 原有的产品 TUN 防环路语义，不负责按 Mixed 端口选线路。测试环境绕行只能存在于显式、临时的测试副本中。
 - 只有用户的精准手动操作可以启停系统代理或 TUN。退出、重启、切线和配置重载不得改变这些 OS 模式。
-- 线路失败必须失败关闭，尤其辅助线路不得回落到主线路、`direct`、本机 DNS 或其它可用线路。
+- 受管 provider resolver 和专用并发端口必须失败关闭：不得回落到本机 DNS、主线路、`direct` 或其它可用线路。
 
 ## 当前判断
 
-- 标准生成配置中的 `2080 -> 主线路` 和 `辅助端口 -> 对应辅助线路` 已成立；空链会拒绝构建。顶层 `custom_config` 合并前会快照每个受管 Mixed 的完整 listener 和从该入口可达的全部 outbound 对象，合并后要求对象逐项一致并保留精确、无条件的入口绑定；这不是对任意自定义路由/DNS 的全局安全证明。完整负向回归与运行时事务切换仍是阻断项。
-- 2026-07-20 的历史隔离探针表明临时 Mixed 能处理 HTTP、CONNECT 和 SOCKS5h；在该次 `52080 -> 指定 outbound` 实验中，AnyTLS(Mihomo client) 与 Trojan 单独可用、组合 detour 失败。旧探针对临时副本强制了 `auto_detect_interface=true`，因此这只是组合归因，不能证明产品 `2080`/辅助端口映射或当前导出策略；仍须按 preserve 默认值重跑并做 Windows 集成验收。
-- 上一阶段误删了 external-core、Naive、部分分享链接/插件兼容、GeoSite 自动完成和 URL Test 等 NekoRay 能力；URL Test 已按有界测试配置恢复，其余仍须选择性恢复。
-- 接管工作树已把单文件保存改为带 durable before/after intent 的原子替换，停止删除未知 profile，并生成可验证 backup/quarantine；订阅刷新改为解析、暂存和校验成功后再提交，部分跨文件创建/删除/移动也已接入事务。剩余保存路径、非空 group、图形恢复和完整模型级事务仍未完成。
-- 越界的复杂批量 resolver/change-IP 平台已移除；旧 **Resolve domain** 因使用 Windows 系统 DNS 并永久改写节点域名而暂时禁用，避免破坏 provider DoH。
-- 配置导出默认是“不启动线路、剥离产品 TUN/辅助运行态并拒绝已知 OS 副作用”的审计导出；测试模式只允许有界生成配置。TCP Ping 因使用系统直连 socket 已禁用，改用 URL Test。
-- TUN 复选框现区分用户期望状态与当前 worker 回报，但后者不是 Windows OS 事实。core 崩溃后只重启空控制 core，不自动恢复 profile/TUN；TUN 下切线/退出仍靠禁止操作规避，没有独立 Windows fail-closed 层，因此不满足需求。
-- Windows GUI 现忽略 CRT `SIGTERM`/`SIGINT`，避免该窄入口绕过 UI 退出 guard 并直接带走内部 TUN；强制结束、崩溃、系统关机以及 GUI 与 worker 同生共死的问题仍未解决，不能把这一止损当作持久保护。
-- `nekobox_core run/check` 是供构建、审计和隔离测试显式调用的高级入口，不是普通 GUI 操作路径。GUI 使用 localhost、每会话随机令牌和每 daemon UUID 控制 core；所有 RPC 在 handler 前验证精确实例，`GetDaemonInfo` 身份/协议握手通过后才 ready，Start/Stop 响应不确定时使用同一 executor 内的高序号屏障对账。协议 v3 可取消未准入命令并仲裁 Start 取消/发布，但这些仍只是进程内 fence；Go core 尚未重复执行 C++ 产品策略校验，也没有持久 Runtime/WFP/OS 事实源。
+- Clash DoH 的字段存在性语义、strict provider resolver、AnyTLS 骨架、批量分享和辅助 listener 精确绑定思路可以保留并收敛。
+- 2026-07-28 已移除原生 `2080` 到主 outbound 的无条件终结绑定，并加入导出回归断言；专用并发端口继续承担严格线路选择。
+- 旧 **Resolve domain** 使用 Windows 系统 DNS 并永久覆盖域名，暂时禁用是合理止损；但来源可见、保留原域名/SNI、由用户固定入口的多入口管理仍然缺失。
+- 上一阶段误删了 external-core、Naive、部分分享/插件兼容、GeoSite 自动完成等上游能力，必须以 4.0.1 为对照选择性恢复。
+- 大规模配置事务、RPC 生命周期、persistent Runtime/WFP 等改造并非三项核心需求；已有代码只按实际必要性审计，不能继续被当作发布前提扩建。
+- MultiMapper 与 RouteFluent 只提供思想和测试材料：前者可参考来源/候选/固定入口，后者可参考显式端口/chain/fail-close；两者的完整产品架构都不移植。
 
 完整证据见 [接管状态](docs/TAKEOVER_STATUS.md) 和 [偏离审计](docs/archive/audits/2026-07-20-scope-deviation-audit.md)。
 
@@ -49,6 +48,7 @@
 
 ## 文档入口
 
+- [Agent 工作规则](AGENTS.md)
 - [产品契约](docs/PRODUCT.md)
 - [接管状态](docs/TAKEOVER_STATUS.md)
 - [已知问题](docs/KNOWN_ISSUES.md)

@@ -1,6 +1,6 @@
 # ADR 0004：Windows 运行时与网络模式安全不变量
 
-状态：Accepted
+状态：Partially Superseded by [产品方向与开发契约](../../PRODUCT.md)
 日期：2026-07-20
 最后复核：2026-07-22
 
@@ -8,7 +8,7 @@
 
 系统代理和 TUN 是 Windows OS 状态，不等同于 GUI 中保存的布尔意图。当前 GUI、sing-box worker 和内部 TUN 生命周期耦合；只在退出时保留注册表或状态标记，会形成指向已停止入口的黑洞，而整核重启内部 TUN 还可能产生默认直连窗口。
 
-本 ADR 冻结产品必须满足的行为，不选择具体服务、WFP 或热切换实现。候选实现见 [ADR 0008](0008-persistent-windows-runtime.md)。
+本 ADR 曾把全局 Windows 数据面生命周期解释为冻结要求。2026-07-27 后，只保留“系统代理/TUN 由用户明确操作、受管 provider resolver 与专用线路端口不 fallback”等最小语义；独立数据面、WFP 或热切换不再是核心发布门。候选历史见 [ADR 0008](0008-persistent-windows-runtime.md)。
 
 ## 决策
 

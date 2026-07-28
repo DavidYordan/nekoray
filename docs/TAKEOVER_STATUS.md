@@ -1,14 +1,23 @@
 # 接管状态
 
-状态：Alpha / 不可发布
+状态：2026-07-24 实现审计快照；附 2026-07-28 当前整改
 基线：NekoRay 4.0.1 `adef6cd` → `96f1166`，现行接管分支 `agent/takeover-remediation`
-最后更新：2026-07-24
+最后更新：2026-07-28
+
+> 本文件描述已有代码与当时证据，不再决定需求优先级。人工多入口管理现已确认属于核心能力；原生 `2080` 的无条件主线路绑定、persistent Runtime/WFP 发布门和“MultiMapper 全部越界”等旧判断均已被产品契约纠正。
 
 ## 结论先行
 
-上一阶段已经明显偏离需求：它不仅增加 AnyTLS、并发线路和 Clash server-domain DoH，还删除了多项 NekoRay 能力、加入 MultiMapper 与复杂 resolver 工具，并用“禁止 TUN 下重载”代替无泄漏切换。因此当前分支不能按既有方向继续堆功能，必须先恢复最小分支边界。
+上一阶段已经明显偏离需求：它在增加 AnyTLS、并发线路和 Clash server-domain DoH 的同时，删除了多项 NekoRay 能力，并加入了范围过大的 MultiMapper 专用实现、复杂 resolver 工具与运行时重构。因此当前分支不能按既有方向继续堆功能，必须先恢复最小分支边界。MultiMapper 对多入口的探索本身仍是有效参考。
 
 “Mixed 无法连接”包含入口、出站和本机底层网络三个层次，不能再混为一谈。隔离 core 测试证明 Mixed listener 能接收 HTTP、CONNECT、SOCKS5h 并进入指定 outbound；旧 GUI ready 检测缺陷也已修复。本轮在 Clash TUN global/Fake-IP 环境中，WD 与 NEX 的真实请求均已命中 `proxy` 后才分别在 Trojan TLS/AnyTLS session 层失败；进程级物理接口+真实 IP 的一次性 TLS 对照成功。当前本机不通的首要原因是 Clash 接管后形成的代理套代理/双 TUN 解析路径，而 NEX 另有既存的 **AnyTLS(Mihomo client) 经 Trojan detour** 组合缺陷。
+
+## 2026-07-28 当前整改
+
+- 原生 `127.0.0.1:2080` 已恢复为 NekoRay 普通路由入口：移除 `mixed-in -> proxy` 无条件终结规则，当前 profile 仍通过正常 route final 作为默认出站。
+- 新增 `primary_mixed_preserves_native_routing` 配置导出回归。旧构建为 14/15 且只在该新用例失败；重建后为 15/15，CTest 4/4。
+- 专用辅助端口的严格 listener/chain 绑定未改，不会因本轮修复改投主线、其它线路或 direct。
+- 本轮没有完整打包或启动真实线路。专用端口对显式 reject/block 的保留、真实双线路出口和 Windows 集成仍未形成闭环证据。
 
 ## 2026-07-24 当前整改与诊断
 
@@ -17,7 +26,7 @@
 - WD profile 0 当前导出为原生 NekoRay DNS 路径，无 provider resolver group，并通过 `nekobox_core check`；没有再次出现“无 DoH 订阅被强制要求显式 bootstrap”的错误。
 - 本机真实链路失败发生在请求进入目标 outbound 之后，不是 `2080` 未监听或 HTTP inbound 不支持。详细证据与安全绕过边界见 [Clash TUN 共存与本机诊断](operations/CLASH_TUN_COEXISTENCE.md)。
 - `192.168.1.7` 本轮无 ARP 且 SSH 未取得 banner，OpenWrt 对照未能执行，不能把超时当成线路证据。
-- 已删除所有“先手动关闭 TUN 再继续”的产品提示。当前仍阻断会卸载内部 TUN 的重启/退出操作，并明确说明缺少独立 persistent Windows kill-switch；直接删除阻断会产生已知直连窗口，不能冒充完成需求。真正完成仍需 Runtime Service、stable anchor 与 persistent WFP。
+- 已删除所有“先手动关闭 TUN 再继续”的产品提示。当前围绕独立 Runtime Service、stable anchor 与 persistent WFP 的实现属于上一阶段候选架构，不再是本项目核心需求或发布前提；现有 guard 是否比 NekoRay 上游造成更多限制，应作为回归单独审计。
 - 本轮没有停止或改写 Clash TUN，没有启停系统代理或项目 TUN，也没有把物理接口、Fake-IP、LAN DNS 或 `auto_detect_interface` 诊断值固化进产品。
 
 ## 审计结果
@@ -57,12 +66,12 @@ OpenWrt `192.168.1.7` 使用同版本 `sing-box 1.13.12-routefluent-anytls-clien
 - 产品生成器已精确恢复上游 `auto_detect_interface=dataStore->spmode_vpn`：live 与 test 都只随产品 TUN 意图变化，文件 export 随后删除该字段；没有 Clash、物理网卡、Fake-IP 或本机双 TUN 特例。三份 loopback 诊断 fixture 也已移除无必要的 `true`。尚缺 live/test 的 TUN on/off 四象限与 export 删除边界的 C++ golden，不能把源码审计写成自动验证完成。
 - OpenWrt 探针默认保留该字段，仅显式诊断参数可强制；收紧器会拒绝系统 NTP 写入/非空 endpoint，并把 outbound 缩到目标线路的精确 detour 闭包；当前 Python 工具单测 19/19 通过。
 - 主 Mixed 默认已于 2026-07-24 恢复为 `2080`；辅助端口池保持 `12100..12299`；Clash API 默认保持关闭（配置值 `-9090`，启用时端口 `9090`）。
-- 主/辅助 Mixed 标准路径显式绑定各自 chain；辅助 chain 失败、profile失效、端口重复现在整体构建失败，不再留下孤儿入口。
-- 主/辅助 Mixed 都不再在精确线路绑定前借全局/默认 DNS 执行 `resolve`；使用 provider server-domain DoH 的 outbound 会绑定精确 strict resolver。无 provider DoH 的普通节点仍走 NekoRay/sing-box 原有解析路径。
+- 主 Mixed 通过 NekoRay 正常路由规则和 route final 使用默认 chain；辅助 Mixed 才显式绑定各自 chain。辅助 chain 失败、profile 失效、端口重复现在整体构建失败，不再留下孤儿入口。
+- 辅助 Mixed 不在精确线路绑定前借全局/默认 DNS 执行 `resolve`；主 Mixed 恢复正常 sniff/resolve/route 序列。使用 provider server-domain DoH 的 outbound 会绑定精确 strict resolver；无 provider DoH 的普通节点仍走 NekoRay/sing-box 原有解析路径。
 - 没有 provider DoH 的普通节点不再强制使用自定义 `local_only` resolver group。
 - Clash 导入按字段存在性选择唯一 resolver 来源：专用 `proxy-server-nameserver` 显式存在时权威、不借普通 nameserver；专用字段 absent 时才提取 `dns.nameserver` 的 HTTPS DoH。所选来源的非法 HTTPS 项使刷新失败且旧数据不变，非 HTTPS 项只计数；来源和策略版本随 group 保存。
 - 生成配置已移除 provider local fallback/probe。域名 DoH endpoint 使用 NekoRay 原生 `dns-local` bootstrap，保留 TLS SNI、不强制地址族；它只建立 DoH 传输，不会在 provider DoH 失败后解析线路 server。无 provider DoH 的节点走原生解析。
-- 顶层 custom 合并前会捕获每个受管 Mixed 的完整生成 listener 和沿 detour 可达的全部 outbound 对象；合并后要求这些对象逐项相同、各 tag/port 唯一且精确无条件 route 绑定仍在所有可能改投/提前 resolve 规则之前。profile 级 `custom_outbound` 可在快照前修改普通字段，但不得新增或改变 detour。provider resolver 的 outbound → strict group → 精确 DoH server → 原生 bootstrap 也按生成对象锁定，并拒绝 RouteFluent fallback/local-only 字段。旧策略留下的非空订阅 DoH 在成功刷新前拒绝构建。
+- 顶层 custom 合并前会捕获每个专用辅助 Mixed 的完整生成 listener 和沿 detour 可达的全部 outbound 对象；合并后要求这些对象逐项相同、各 tag/port 唯一且精确无条件 route 绑定仍在所有可能改投/提前 resolve 规则之前。主 Mixed 不参加这种终结绑定校验。profile 级 `custom_outbound` 可在快照前修改普通字段，但不得新增或改变 detour。provider resolver 的 outbound → strict group → 精确 DoH server → 原生 bootstrap 也按生成对象锁定，并拒绝 RouteFluent fallback/local-only 字段。旧策略留下的非空订阅 DoH 在成功刷新前拒绝构建。
 - 辅助端口 map 不再因 stop/restart/crash/exit 或 UI 刷新被清空；字段类型错误、非字符串、损坏或重复项会使既有主配置原件保持不变并中止启动。显式启停/删除映射只有在原子保存成功后才继续 reload，失败会回滚内存。
 - 普通单文件保存使用禁止 direct-write fallback 的 `QSaveFile`，与多文件事务共享提交串行化 mutex 和跨进程磁盘锁。每次实际内容变化在 commit 前发布短生命周期 durable before/after intent；精确验证 before/after 后写成 `aborted`/`committed`、移到 `recovery/retired-single-file-transactions/` 并尽力删除，无法判定则保留 `prepared` 并阻断。加载时存在性也进入快照，旧进程不能把被外部删除的文件当作新文件重建。覆盖前建立可验证备份，损坏/未知 profile 原件保留并生成 quarantine，且 ID 不复用，危险 reorder 已禁止。group 创建会同时提交 group 文件与 `pm.json`；单 profile/空 group 删除和 profile 跨组移动已接入持久 before/after manifest 与失败逆序回滚。启动扫描到完整配置加载由同一可重入磁盘锁覆盖；锁不会仅因运行超过 30 秒被抢占。扫描会枚举隐藏/系统项，拒绝 active lock、意外条目、manifest/身份/header 问题和非终态状态；终态只校验 JSON 与 schema/id/state header，合法终态即使 entries 损坏也不阻断启动，但 report 会深解析并标为 `valid=false`，非法终态 schema 仍阻断。命令行可先生成报告，再由用户明确选择结构化事务的完整 before/after，恢复中途不允许改方向；它不自动恢复 unknown/quarantine。配置根以下会拒绝危险 Windows 名、大小写重复和 reparse/junction，选定根本身是必须由操作者确认非 junction/别名的信任锚。删除对象会 tombstone，测速线程迟到保存不能复活文件；运行中的 auxiliary 也拒绝删除。非空 group 的旧半删除路径仍整体禁用。
 - route 名现限制为安全 Windows 单文件名，非法 `active_routing` 保留主配置原件并中止加载；非活动 route 使用事务删除，活动 route 必须先显式切换，不再直接删除后尝试补救。

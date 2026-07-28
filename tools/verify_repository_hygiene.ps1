@@ -156,7 +156,10 @@ foreach ($file in $jsonFixtures) {
     }
 }
 
-$markdownFiles = @((Get-Item (Join-Path $repoRoot "README.md"))) + @(
+$markdownFiles = @(
+    (Get-Item (Join-Path $repoRoot "README.md"))
+    (Get-Item (Join-Path $repoRoot "AGENTS.md"))
+) + @(
     Get-ChildItem -LiteralPath (Join-Path $repoRoot "docs") -Recurse -File -Filter *.md
 )
 $linkCount = 0
