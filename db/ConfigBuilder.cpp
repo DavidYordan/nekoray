@@ -891,17 +891,29 @@ namespace NekoGui {
 
     // Common
 
-    std::shared_ptr<BuildConfigResult> BuildConfig(const std::shared_ptr<ProxyEntity> &ent, bool forTest, bool forExport) {
+    std::shared_ptr<BuildConfigResult> BuildConfig(
+        const std::shared_ptr<ProxyEntity> &ent,
+        bool forTest,
+        bool forExport,
+        bool includeAuxiliaryForAudit) {
         auto result = std::make_shared<BuildConfigResult>();
         auto status = std::make_shared<BuildConfigStatus>();
         status->ent = ent;
         status->result = result;
         status->forTest = forTest;
         status->forExport = forExport;
+        status->includeAuxiliaryForAudit = includeAuxiliaryForAudit;
+        if (includeAuxiliaryForAudit && (forTest || !forExport)) {
+            result->error = QStringLiteral(
+                "Auxiliary-line audit is only available for the side-effect-free standard export mode.");
+            return result;
+        }
+        const auto includeAuxiliaryLines =
+            !forTest && (!forExport || includeAuxiliaryForAudit);
         const auto managedInternalTunExpected =
             !forTest && !forExport && dataStore->vpn_internal_tun && dataStore->spmode_vpn;
 
-        if (!forTest && !forExport && !dataStore->aux_profile_ports_load_error.isEmpty()) {
+        if (includeAuxiliaryLines && !dataStore->aux_profile_ports_load_error.isEmpty()) {
             result->error = dataStore->aux_profile_ports_load_error;
             return result;
         }
@@ -919,7 +931,7 @@ namespace NekoGui {
                     "internal-full profiles cannot run under the product Tun switch because their OS-network state is not managed or observable. "
                     "Use a standard profile; do not disable Tun as a workaround because that would authorize default-network restoration.");
             }
-            if (!forTest && !forExport && !dataStore->aux_profile_ports.isEmpty()) {
+            if (includeAuxiliaryLines && !dataStore->aux_profile_ports.isEmpty()) {
                 result->error = QStringLiteral(
                     "internal-full profiles are isolated full configurations and cannot run with auxiliary Mixed lines. "
                     "Select a standard profile or disable all auxiliary Mixed mappings.");
@@ -1348,7 +1360,8 @@ namespace NekoGui {
             return;
         }
 
-        if (!status->forTest && !status->forExport) {
+        if (!status->forTest &&
+            (!status->forExport || status->includeAuxiliaryForAudit)) {
             int auxChainId = 1000;
             const auto mainEnt = status->ent;
             QSet<int> managedMixedPorts{dataStore->inbound_socks_port};

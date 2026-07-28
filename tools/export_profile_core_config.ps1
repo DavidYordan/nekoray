@@ -5,12 +5,17 @@ param(
     [string] $OutputPath = "",
     [switch] $ForTest,
     [switch] $ForShare,
+    [switch] $IncludeAuxiliaryAudit,
     [switch] $Check,
     [switch] $Json
 )
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+
+if ($ForTest -and $IncludeAuxiliaryAudit) {
+    throw "IncludeAuxiliaryAudit is only valid for the standard side-effect-free export mode."
+}
 
 $Root = Split-Path -Parent $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($Root)) {
@@ -56,6 +61,9 @@ if ($ForTest) {
 if ($ForShare) {
     $argsList += "-flag_export_profile_config_for_share"
 }
+if ($IncludeAuxiliaryAudit) {
+    $argsList += "-flag_export_profile_config_include_auxiliary_audit"
+}
 
 $exportProcess = Start-Process -FilePath $nekobox -ArgumentList $argsList -WorkingDirectory $packageFull -WindowStyle Hidden -Wait -PassThru
 if ($exportProcess.ExitCode -ne 0) {
@@ -98,6 +106,7 @@ $dohServers = @($dnsServers | Where-Object { $_.type -eq "https" -or $_.type -eq
 
 $result = [pscustomobject]@{
     profile_id = $ProfileId
+    includes_auxiliary_audit = [bool]$IncludeAuxiliaryAudit
     output_path = $outputFull
     check_exit_code = $checkExitCode
     inbound_count = @($config.inbounds).Count

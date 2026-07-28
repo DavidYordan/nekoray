@@ -51,6 +51,9 @@ namespace NekoGui {
         std::shared_ptr<ProxyEntity> ent;
         bool forTest;
         bool forExport;
+        // Explicit, side-effect-free CLI audit only. Normal exports retain
+        // their upstream-compatible primary-profile scope.
+        bool includeAuxiliaryForAudit;
 
         // priv
         QList<int> globalProfiles;
@@ -78,7 +81,11 @@ namespace NekoGui {
         QString resolverContextRole;
     };
 
-    std::shared_ptr<BuildConfigResult> BuildConfig(const std::shared_ptr<ProxyEntity> &ent, bool forTest, bool forExport);
+    std::shared_ptr<BuildConfigResult> BuildConfig(
+        const std::shared_ptr<ProxyEntity> &ent,
+        bool forTest,
+        bool forExport,
+        bool includeAuxiliaryForAudit = false);
 
     void BuildConfigSingBox(const std::shared_ptr<BuildConfigStatus> &status);
 

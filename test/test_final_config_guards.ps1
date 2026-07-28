@@ -1,5 +1,6 @@
 param(
-    [string]$ExecutablePath = ""
+    [string]$ExecutablePath = "",
+    [string]$CorePath = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -13,6 +14,11 @@ if ([string]::IsNullOrWhiteSpace($ExecutablePath)) {
 $ExecutablePath = (Resolve-Path -LiteralPath $ExecutablePath).Path
 $ExecutablePath = Assert-PathOutsideProtectedProduction $ExecutablePath "Config-guard GUI executable"
 Assert-DirectoryTreeHasNoReparsePoints (Split-Path -Parent $ExecutablePath) "Config-guard GUI directory tree"
+if (![string]::IsNullOrWhiteSpace($CorePath)) {
+    $CorePath = (Resolve-Path -LiteralPath $CorePath).Path
+    $CorePath = Assert-PathOutsideProtectedProduction $CorePath "Config-guard core executable"
+    Assert-DirectoryTreeHasNoReparsePoints (Split-Path -Parent $CorePath) "Config-guard core directory tree"
+}
 
 $mingwBin = Join-Path $repoRoot "qtsdk\tools\Tools\mingw1310_64\bin"
 $qtBin = Join-Path $repoRoot "qtsdk\qt\6.5.3\mingw_64\bin"
@@ -81,6 +87,8 @@ function Add-Case(
     [int]$ExpectedProviderDohCount = -1,
     [int]$ExpectedPrimaryMixedPort = -1,
     [switch]$AssertPrimaryUsesNativeRouting,
+    [switch]$AssertGeneratedAuxiliaryContract,
+    [switch]$AssertAuxiliaryOmitted,
     [switch]$AssertNativeBootstrap,
     [switch]$UseSubscriptionGroupResolver,
     [int]$GroupResolverPolicyVersion = 1,
@@ -129,6 +137,61 @@ function Add-Case(
         }
         $profilePath = Join-Path $profileDir "1.json"
         [IO.File]::WriteAllText($profilePath, ($profile | ConvertTo-Json -Depth 30), $utf8NoBom)
+
+        if ($AssertGeneratedAuxiliaryContract -or $AssertAuxiliaryOmitted) {
+            $auxProfile = [ordered]@{
+                type = "chain"
+                id = 2
+                gid = 0
+                yc = 0
+                report = ""
+                bean = [ordered]@{
+                    _v = 0
+                    name = "final-config-guard-auxiliary-chain-fixture"
+                    list = @(3, 4)
+                }
+                traffic = [ordered]@{}
+            }
+            $auxProfilePath = Join-Path $profileDir "2.json"
+            [IO.File]::WriteAllText($auxProfilePath, ($auxProfile | ConvertTo-Json -Depth 30), $utf8NoBom)
+            $auxiliaryHops = @(
+                [ordered]@{ id = 3; addr = "192.0.2.2"; port = 1081 },
+                [ordered]@{ id = 4; addr = "192.0.2.3"; port = 1082 }
+            )
+            foreach ($hop in $auxiliaryHops) {
+                $hopProfile = [ordered]@{
+                    type = "socks"
+                    id = $hop.id
+                    gid = 0
+                    yc = 0
+                    report = ""
+                    bean = [ordered]@{
+                        _v = 0
+                        name = "final-config-guard-auxiliary-hop-$($hop.id)"
+                        addr = $hop.addr
+                        port = $hop.port
+                        c_cfg = ""
+                        c_out = ""
+                        server_resolver_doh = ""
+                        server_resolver_fallback = $false
+                        inherit_subscription_client = $false
+                        inherit_subscription_resolver = $false
+                        v = 5
+                        username = ""
+                        password = ""
+                        stream = [ordered]@{}
+                    }
+                    traffic = [ordered]@{}
+                }
+                $hopProfilePath = Join-Path $profileDir "$($hop.id).json"
+                [IO.File]::WriteAllText($hopProfilePath, ($hopProfile | ConvertTo-Json -Depth 30), $utf8NoBom)
+            }
+
+            $mainConfigPath = Join-Path $lab "config\groups\nekobox.json"
+            $mainConfig = [IO.File]::ReadAllText($mainConfigPath) | ConvertFrom-Json
+            $mainConfig | Add-Member -NotePropertyName "aux_profile_ports" -NotePropertyValue @("2:12100") -Force
+            [IO.File]::WriteAllText($mainConfigPath, ($mainConfig | ConvertTo-Json -Depth 30), $utf8NoBom)
+        }
 
         if ($UseSubscriptionGroupResolver) {
             $groupPath = Join-Path $lab "config\groups\0.json"
@@ -224,6 +287,145 @@ function Add-Case(
                 $outputAssertionPassed = $false
             }
         }
+        $coreCheckExitCode = $null
+        if ($AssertGeneratedAuxiliaryContract -and $run.output_created) {
+            $outputPath = Join-Path $lab "export.json"
+            $output = [IO.File]::ReadAllText($outputPath) | ConvertFrom-Json
+            $auxiliaryTag = "aux-mixed-2"
+            $auxiliaryMixed = @($output.inbounds | Where-Object { $_.tag -eq $auxiliaryTag })
+            $tunInbounds = @($output.inbounds | Where-Object { $_.type -eq "tun" })
+            $systemProxyInbounds = @(
+                $output.inbounds | Where-Object {
+                    $_.PSObject.Properties.Name -contains "set_system_proxy" -and
+                    $_.set_system_proxy -eq $true
+                }
+            )
+            if ($auxiliaryMixed.Count -ne 1 -or
+                $auxiliaryMixed[0].type -ne "mixed" -or
+                $auxiliaryMixed[0].listen -ne "127.0.0.1" -or
+                [int]$auxiliaryMixed[0].listen_port -ne 12100 -or
+                $tunInbounds.Count -ne 0 -or
+                $systemProxyInbounds.Count -ne 0 -or
+                @($output.route.PSObject.Properties.Name) -contains "auto_detect_interface") {
+                $outputAssertionPassed = $false
+            }
+
+            $terminalIndex = -1
+            $terminalOutbound = ""
+            $routeRules = @($output.route.rules)
+            for ($index = 0; $index -lt $routeRules.Count; $index++) {
+                $rule = $routeRules[$index]
+                $propertyNames = @($rule.PSObject.Properties.Name)
+                $inboundTags = @()
+                if ($propertyNames -contains "inbound") { $inboundTags += @($rule.inbound) }
+                if ($inboundTags.Count -eq 1 -and
+                    $inboundTags[0] -eq $auxiliaryTag -and
+                    $propertyNames -contains "outbound" -and
+                    $propertyNames.Count -eq 2) {
+                    $terminalIndex = $index
+                    $terminalOutbound = [string]$rule.outbound
+                    break
+                }
+            }
+            if ($terminalIndex -lt 0 -or [string]::IsNullOrWhiteSpace($terminalOutbound)) {
+                $outputAssertionPassed = $false
+            } else {
+                $matchingOutbounds = @($output.outbounds | Where-Object { $_.tag -eq $terminalOutbound })
+                if ($matchingOutbounds.Count -ne 1 -or $matchingOutbounds[0].type -ne "socks") {
+                    $outputAssertionPassed = $false
+                } else {
+                    $terminalDetour = if ($matchingOutbounds[0].PSObject.Properties.Name -contains "detour") {
+                        [string]$matchingOutbounds[0].detour
+                    } else {
+                        ""
+                    }
+                    $detourOutbounds = @($output.outbounds | Where-Object { $_.tag -eq $terminalDetour })
+                    if ([string]::IsNullOrWhiteSpace($terminalDetour) -or
+                        $detourOutbounds.Count -ne 1 -or
+                        $detourOutbounds[0].type -ne "socks" -or
+                        $matchingOutbounds[0].server -ne "192.0.2.3" -or
+                        $detourOutbounds[0].server -ne "192.0.2.2") {
+                        $outputAssertionPassed = $false
+                    }
+                }
+
+                for ($index = 0; $index -lt $terminalIndex; $index++) {
+                    if (@($routeRules[$index].PSObject.Properties.Name) -contains "outbound") {
+                        $outputAssertionPassed = $false
+                    }
+                }
+            }
+
+            $scopedRejectFound = $false
+            $postTerminalRedirectFound = $false
+            for ($index = 0; $index -lt $routeRules.Count; $index++) {
+                $rule = $routeRules[$index]
+                $propertyNames = @($rule.PSObject.Properties.Name)
+                if ($index -lt $terminalIndex -and
+                    $propertyNames -contains "type" -and
+                    $propertyNames -contains "mode" -and
+                    $propertyNames -contains "action" -and
+                    $rule.type -eq "logical" -and
+                    $rule.mode -eq "and" -and
+                    $rule.action -eq "reject") {
+                    $conditions = @($rule.rules)
+                    if ($conditions.Count -eq 2) {
+                        $firstConditionNames = @($conditions[0].PSObject.Properties.Name)
+                        $secondConditionNames = @($conditions[1].PSObject.Properties.Name)
+                        if ($firstConditionNames -contains "inbound" -and
+                            $secondConditionNames -contains "domain_suffix" -and
+                            @($conditions[0].inbound).Count -eq 1 -and
+                            @($conditions[0].inbound)[0] -eq $auxiliaryTag -and
+                            @($conditions[1].domain_suffix) -contains "blocked.generated.test") {
+                            $scopedRejectFound = $true
+                        }
+                    }
+                }
+                $inboundTags = @()
+                if ($propertyNames -contains "inbound") { $inboundTags += @($rule.inbound) }
+                if ($index -gt $terminalIndex -and
+                    $propertyNames -contains "domain_suffix" -and
+                    $propertyNames -contains "outbound" -and
+                    $inboundTags.Count -eq 1 -and
+                    $inboundTags[0] -eq $auxiliaryTag -and
+                    @($rule.domain_suffix) -contains "must-not-redirect.generated.test" -and
+                    $rule.outbound -eq "bypass") {
+                    $postTerminalRedirectFound = $true
+                }
+            }
+            if (-not $scopedRejectFound -or -not $postTerminalRedirectFound) {
+                $outputAssertionPassed = $false
+            }
+
+            if (![string]::IsNullOrWhiteSpace($CorePath)) {
+                $previousErrorActionPreference = $ErrorActionPreference
+                try {
+                    $ErrorActionPreference = "Continue"
+                    $null = (& $CorePath check -c $outputPath 2>&1) -join "`n"
+                    $coreCheckExitCode = $LASTEXITCODE
+                } finally {
+                    $ErrorActionPreference = $previousErrorActionPreference
+                }
+                if ($coreCheckExitCode -ne 0) {
+                    $outputAssertionPassed = $false
+                }
+            }
+        }
+        if ($AssertAuxiliaryOmitted -and $run.output_created) {
+            $output = [IO.File]::ReadAllText((Join-Path $lab "export.json")) | ConvertFrom-Json
+            $auxiliaryRouteJson = @($output.route.rules) | ConvertTo-Json -Depth 30 -Compress
+            $auxiliaryOutbounds = @(
+                $output.outbounds | Where-Object {
+                    $_.PSObject.Properties.Name -contains "server" -and
+                    $_.server -in @("192.0.2.2", "192.0.2.3")
+                }
+            )
+            if (@($output.inbounds | Where-Object { $_.tag -eq "aux-mixed-2" }).Count -ne 0 -or
+                $auxiliaryOutbounds.Count -ne 0 -or
+                $auxiliaryRouteJson.IndexOf("aux-mixed-2", [StringComparison]::Ordinal) -ge 0) {
+                $outputAssertionPassed = $false
+            }
+        }
         $passed = if ($ShouldSucceed) {
             $run.exit_code -eq 0 -and $run.output_created -and $outputAssertionPassed
         } else {
@@ -236,6 +438,7 @@ function Add-Case(
             output_created = $run.output_created
             error_matched = $errorMatched
             output_assertion_passed = $outputAssertionPassed
+            core_check_exit_code = $coreCheckExitCode
             stderr = $run.stderr.Trim()
         }
     } finally {
@@ -299,6 +502,35 @@ Add-Case `
     -RoutingCustom '{"rules":[{"inbound":["mixed-in"],"domain_suffix":["native-routing.example"],"outbound":"bypass"}]}' `
     -ExpectedPrimaryMixedPort 2080 `
     -AssertPrimaryUsesNativeRouting
+
+Add-Case `
+    -Name "generated_auxiliary_line_is_strict_and_main_stays_native" `
+    -CoreConfig '{}' `
+    -ShouldSucceed $true `
+    -FixtureType "socks" `
+    -RoutingCustom '{"rules":[{"inbound":["mixed-in"],"domain_suffix":["native-routing.example"],"outbound":"bypass"},{"domain_suffix":["blocked.generated.test"],"outbound":"block"},{"inbound":["aux-mixed-2"],"domain_suffix":["must-not-redirect.generated.test"],"outbound":"bypass"}]}' `
+    -ExtraArguments @("-flag_export_profile_config_include_auxiliary_audit") `
+    -ExpectedPrimaryMixedPort 2080 `
+    -AssertPrimaryUsesNativeRouting `
+    -AssertGeneratedAuxiliaryContract
+
+Add-Case `
+    -Name "normal_export_remains_primary_only" `
+    -CoreConfig '{}' `
+    -ShouldSucceed $true `
+    -FixtureType "socks" `
+    -RoutingCustom '{"rules":[{"inbound":["mixed-in"],"domain_suffix":["native-routing.example"],"outbound":"bypass"}]}' `
+    -ExpectedPrimaryMixedPort 2080 `
+    -AssertPrimaryUsesNativeRouting `
+    -AssertAuxiliaryOmitted
+
+Add-Case `
+    -Name "reject_auxiliary_audit_in_test_mode" `
+    -CoreConfig '{}' `
+    -ShouldSucceed $false `
+    -ExpectedError "Auxiliary-line audit is only available for the side-effect-free standard export mode." `
+    -ExtraArguments @("-flag_export_profile_config_for_test", "-flag_export_profile_config_include_auxiliary_audit") `
+    -FixtureType "socks"
 
 Add-Case `
     -Name "native_domain_without_provider_doh" `

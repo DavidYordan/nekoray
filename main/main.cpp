@@ -47,6 +47,7 @@ namespace {
         QString outputPath;
         bool forTest = false;
         bool forExport = true;
+        bool includeAuxiliaryForAudit = false;
     };
 
     struct ConfigTransactionMaintenanceOptions {
@@ -99,6 +100,8 @@ namespace {
             options.outputPath = argv.at(exportIndex + 2);
         }
         options.forTest = argv.contains("-flag_export_profile_config_for_test");
+        options.includeAuxiliaryForAudit =
+            argv.contains("-flag_export_profile_config_include_auxiliary_audit");
         // Every file export is side-effect-free and omits product TUN state.
         // The legacy "for_share" spelling is retained as an explicit alias;
         // there is no CLI path that exports a live OS-mode configuration.
@@ -207,7 +210,8 @@ namespace {
         if (options.profileId == kNoProfileId || options.outputPath.trimmed().isEmpty()) {
             writeStderr(
                 "Usage: nekobox.exe -flag_export_profile_config <profile_id> <output_json_path> "
-                "[-flag_export_profile_config_for_test|-flag_export_profile_config_for_share]");
+                "[-flag_export_profile_config_for_test|-flag_export_profile_config_for_share] "
+                "[-flag_export_profile_config_include_auxiliary_audit]");
             return 2;
         }
         if (!ensureConfigSubdirs()) {
@@ -221,7 +225,11 @@ namespace {
             writeStderr(QStringLiteral("Profile not found: %1").arg(options.profileId));
             return 1;
         }
-        const auto result = NekoGui::BuildConfig(profile, options.forTest, options.forExport);
+        const auto result = NekoGui::BuildConfig(
+            profile,
+            options.forTest,
+            options.forExport,
+            options.includeAuxiliaryForAudit);
         if (!result->error.isEmpty()) {
             writeStderr(QStringLiteral("BuildConfig return error: %1").arg(result->error));
             return 1;
