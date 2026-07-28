@@ -1,4 +1,5 @@
 #include "db/ConfigBuilder.hpp"
+#include "db/AuxiliaryRouteCompiler.hpp"
 #include "db/Database.hpp"
 #include "db/ResolverConfig.hpp"
 #include "fmt/includes.h"
@@ -613,6 +614,7 @@ namespace NekoGui {
                         .arg(binding.inboundTag)
                         .arg(index);
                 }
+                if (action == "reject" && !rule.contains("outbound")) continue;
                 if (RouteRuleCanTerminateOrRedirect(rule)) {
                     return QStringLiteral("Route rule %1 can redirect managed Mixed inbound '%2' before its exact binding to outbound '%3'. Move custom routing rules after the managed binding.")
                         .arg(index)
@@ -1408,10 +1410,6 @@ namespace NekoGui {
                 // Preserve the domain for the bound proxy chain instead.
                 AppendInboundRouteActions(status->frontRoutingRules, inboundTag, false);
 
-                status->frontRoutingRules += QJsonObject{
-                    {"inbound", QJsonArray{inboundTag}},
-                    {"outbound", auxOutboundTag},
-                };
                 status->managedMixedBindings += ManagedMixedBinding{
                     inboundTag,
                     it.value(),
@@ -1665,23 +1663,37 @@ namespace NekoGui {
             if (geosite.isEmpty()) status->result->error = +"geosite.db not found";
         }
 
-        // final add routing rule
-        auto routingRules = status->frontRoutingRules;
+        // Build the ordinary NekoRay rule sequence first. Dedicated auxiliary
+        // listeners copy only explicit reject actions ahead of their exact
+        // terminal line binding; redirect/direct/bypass rules stay ordinary
+        // and therefore cannot move an auxiliary listener to another line.
+        QJsonArray ordinaryRoutingRules;
         auto profileRoutingRules = NormalizeRouteRuleActions(QString2QJsonObject(dataStore->routing->custom)["rules"].toArray());
         if (status->forTest) {
-            routingRules = {};
             profileRoutingRules = {};
         } else {
-            QJSONARRAY_ADD(routingRules, profileRoutingRules)
+            QJSONARRAY_ADD(ordinaryRoutingRules, profileRoutingRules)
         }
         auto globalRoutingRules = NormalizeRouteRuleActions(QString2QJsonObject(dataStore->custom_route_global)["rules"].toArray());
-        if (!status->forTest) QJSONARRAY_ADD(routingRules, globalRoutingRules)
-        QJSONARRAY_ADD(routingRules, status->routingRules)
+        if (!status->forTest) QJSONARRAY_ADD(ordinaryRoutingRules, globalRoutingRules)
+        QJSONARRAY_ADD(ordinaryRoutingRules, status->routingRules)
         auto finalOutbound = dataStore->routing->def_outbound;
         if (!status->forTest && finalOutbound == "block") {
-            routingRules += QJsonObject{{"action", "reject"}};
+            ordinaryRoutingRules += QJsonObject{{"action", "reject"}};
             finalOutbound = "direct";
         }
+        auto routingRules = status->forTest ? QJsonArray{} : status->frontRoutingRules;
+        if (!status->forTest) {
+            for (const auto &binding: status->managedMixedBindings) {
+                QJSONARRAY_ADD(
+                    routingRules,
+                    BuildAuxiliaryRejectAndTerminalRules(
+                        binding.inboundTag,
+                        binding.outboundTag,
+                        ordinaryRoutingRules))
+            }
+        }
+        QJSONARRAY_ADD(routingRules, ordinaryRoutingRules)
         auto routeObj = QJsonObject{
             {"rules", routingRules},
             // Preserve NekoRay's product-TUN behavior (internal or companion

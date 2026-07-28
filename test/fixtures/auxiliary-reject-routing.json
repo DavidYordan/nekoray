@@ -1,0 +1,55 @@
+{
+  "log": {
+    "disabled": true
+  },
+  "inbounds": [
+    {
+      "type": "mixed",
+      "tag": "aux-mixed-42",
+      "listen": "127.0.0.1",
+      "listen_port": 52142
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "socks",
+      "tag": "aux-chain-42",
+      "server": "192.0.2.10",
+      "server_port": 1080
+    }
+  ],
+  "route": {
+    "rules": [
+      {
+        "inbound": [
+          "aux-mixed-42"
+        ],
+        "action": "sniff"
+      },
+      {
+        "type": "logical",
+        "mode": "and",
+        "rules": [
+          {
+            "inbound": [
+              "aux-mixed-42"
+            ]
+          },
+          {
+            "domain_suffix": [
+              "blocked.example"
+            ]
+          }
+        ],
+        "action": "reject"
+      },
+      {
+        "inbound": [
+          "aux-mixed-42"
+        ],
+        "outbound": "aux-chain-42"
+      }
+    ],
+    "final": "aux-chain-42"
+  }
+}

@@ -150,6 +150,7 @@ set(PROJECT_SOURCES
         db/Database.cpp
         db/traffic/TrafficLooper.cpp
         db/ProfileFilter.cpp
+        db/AuxiliaryRouteCompiler.cpp
         db/ConfigBuilder.cpp
         db/ResolverConfig.cpp
 
@@ -336,6 +337,13 @@ if (BUILD_TESTING)
     )
     add_test(NAME share_format_test COMMAND share_format_test)
     set_tests_properties(share_format_test PROPERTIES TIMEOUT 15)
+    add_executable(auxiliary_route_compiler_test
+            test/auxiliary_route_compiler_test.cpp
+            db/AuxiliaryRouteCompiler.cpp
+    )
+    target_link_libraries(auxiliary_route_compiler_test PRIVATE Qt${QT_VERSION_MAJOR}::Core)
+    add_test(NAME auxiliary_route_compiler_test COMMAND auxiliary_route_compiler_test)
+    set_tests_properties(auxiliary_route_compiler_test PROPERTIES TIMEOUT 15)
     if (NOT NKR_NO_YAML)
         add_executable(resolver_policy_test
                 test/resolver_policy_test.cpp
@@ -379,6 +387,11 @@ if (BUILD_TESTING)
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 $<TARGET_FILE:Qt${QT_VERSION_MAJOR}::Core>
                 $<TARGET_FILE_DIR:share_format_test>
+        )
+        add_custom_command(TARGET auxiliary_route_compiler_test POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:Qt${QT_VERSION_MAJOR}::Core>
+                $<TARGET_FILE_DIR:auxiliary_route_compiler_test>
         )
         if (TARGET resolver_policy_test)
             add_custom_command(TARGET resolver_policy_test POST_BUILD
