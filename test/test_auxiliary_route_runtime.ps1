@@ -1,4 +1,5 @@
 param(
+    [string] $ExecutablePath = "build-package-windows64/nekobox.exe",
     [string] $CorePath = "deployment/windows64/nekobox_core.exe",
     [switch] $Json
 )
@@ -9,21 +10,37 @@ Set-StrictMode -Version Latest
 $Root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 . (Join-Path $Root "tools\path_safety.ps1")
 
+$executableFull = if ([IO.Path]::IsPathRooted($ExecutablePath)) {
+    [IO.Path]::GetFullPath($ExecutablePath)
+} else {
+    [IO.Path]::GetFullPath((Join-Path $Root $ExecutablePath))
+}
+$executableFull = Assert-PathOutsideProtectedProduction $executableFull "Auxiliary-route runtime GUI executable"
 $coreFull = if ([IO.Path]::IsPathRooted($CorePath)) {
     [IO.Path]::GetFullPath($CorePath)
 } else {
     [IO.Path]::GetFullPath((Join-Path $Root $CorePath))
 }
 $coreFull = Assert-PathOutsideProtectedProduction $coreFull "Auxiliary-route runtime core executable"
-$runtimeFixture = Join-Path $PSScriptRoot "fixtures\auxiliary-two-line-runtime.json"
 $proxyScript = Join-Path $PSScriptRoot "fixtures\http_proxy_line_server.py"
-foreach ($required in @($coreFull, $runtimeFixture, $proxyScript)) {
+foreach ($required in @($executableFull, $coreFull, $proxyScript)) {
     if (!(Test-Path -LiteralPath $required -PathType Leaf)) {
         throw "Required file not found: $required"
     }
 }
 
-$ports = @(18120, 18121, 18130, 18131)
+$mingwBin = Join-Path $Root "qtsdk\tools\Tools\mingw1310_64\bin"
+$qtBin = Join-Path $Root "qtsdk\qt\6.5.3\mingw_64\bin"
+$qtPlatformPlugins = Join-Path $Root "qtsdk\qt\6.5.3\mingw_64\plugins\platforms"
+foreach ($requiredDirectory in @($mingwBin, $qtBin, $qtPlatformPlugins)) {
+    if (!(Test-Path -LiteralPath $requiredDirectory -PathType Container)) {
+        throw "Required Qt/MinGW directory not found: $requiredDirectory"
+    }
+}
+$env:PATH = "$mingwBin;$qtBin;$env:PATH"
+$env:QT_QPA_PLATFORM_PLUGIN_PATH = $qtPlatformPlugins
+
+$ports = @(18119, 18120, 18121, 18130, 18131)
 function Get-ListeningConnections([int[]] $LocalPorts) {
     @(
         foreach ($port in $LocalPorts) {
@@ -101,6 +118,69 @@ function Get-HitCount([string] $Path) {
     ).Count
 }
 
+function Invoke-ProfileConfigExport(
+    [string] $AppData,
+    [int] $ProfileId,
+    [string] $OutputPath,
+    [string[]] $ExtraArguments = @()
+) {
+    $stdoutPath = "$OutputPath.stdout.log"
+    $stderrPath = "$OutputPath.stderr.log"
+    if ([IO.File]::Exists($OutputPath)) { [IO.File]::Delete($OutputPath) }
+    $arguments = @(
+        "-appdata", $AppData,
+        "-flag_export_profile_config", "$ProfileId", $OutputPath
+    ) + $ExtraArguments
+    $process = Start-Process `
+        -FilePath $executableFull `
+        -ArgumentList $arguments `
+        -WindowStyle Hidden `
+        -RedirectStandardOutput $stdoutPath `
+        -RedirectStandardError $stderrPath `
+        -Wait `
+        -PassThru
+    [pscustomobject]@{
+        exit_code = $process.ExitCode
+        output_created = [IO.File]::Exists($OutputPath)
+        stderr = if ([IO.File]::Exists($stderrPath)) {
+            [IO.File]::ReadAllText($stderrPath)
+        } else {
+            ""
+        }
+    }
+}
+
+function New-HttpProfile(
+    [int] $Id,
+    [string] $Name,
+    [int] $ServerPort
+) {
+    [ordered]@{
+        type = "http"
+        id = $Id
+        gid = 0
+        yc = 0
+        report = ""
+        bean = [ordered]@{
+            _v = 0
+            name = $Name
+            addr = "127.0.0.1"
+            port = $ServerPort
+            c_cfg = ""
+            c_out = ""
+            server_resolver_doh = ""
+            server_resolver_fallback = $false
+            inherit_subscription_client = $false
+            inherit_subscription_resolver = $false
+            v = -80
+            username = ""
+            password = ""
+            stream = [ordered]@{}
+        }
+        traffic = [ordered]@{}
+    }
+}
+
 $safeTempRoot = Assert-PathOutsideProtectedProduction `
     ([IO.Path]::GetFullPath([IO.Path]::GetTempPath())) `
     "Auxiliary-route runtime temporary root"
@@ -113,6 +193,9 @@ if (!$tempRoot.StartsWith($expectedPrefix, [StringComparison]::OrdinalIgnoreCase
 }
 New-Item -ItemType Directory -Path $tempRoot | Out-Null
 
+$appData = Join-Path $tempRoot "appdata"
+$runtimeConfig = Join-Path $tempRoot "generated-auxiliary-runtime.json"
+$utf8NoBom = [Text.UTF8Encoding]::new($false)
 $lineAStdout = Join-Path $tempRoot "line-a.stdout.log"
 $lineAStderr = Join-Path $tempRoot "line-a.stderr.log"
 $lineBStdout = Join-Path $tempRoot "line-b.stdout.log"
@@ -126,16 +209,91 @@ $result = $null
 $proxyBefore = Get-SystemProxySnapshot
 
 try {
+    $initializationOutput = Join-Path $tempRoot "initialization-unused.json"
+    $initialization = Invoke-ProfileConfigExport `
+        -AppData $appData `
+        -ProfileId 999999 `
+        -OutputPath $initializationOutput
+    if ($initialization.exit_code -eq 0 -or $initialization.output_created) {
+        throw "Missing-profile initialization unexpectedly exported a configuration."
+    }
+
+    $profileDirectory = Join-Path $appData "config\profiles"
+    [IO.Directory]::CreateDirectory($profileDirectory) | Out-Null
+    $profiles = @(
+        (New-HttpProfile -Id 1 -Name "generated-main-fixture" -ServerPort 18130),
+        (New-HttpProfile -Id 2 -Name "generated-line-a-fixture" -ServerPort 18130),
+        (New-HttpProfile -Id 3 -Name "generated-line-b-fixture" -ServerPort 18131)
+    )
+    foreach ($profile in $profiles) {
+        $profilePath = Join-Path $profileDirectory "$($profile.id).json"
+        [IO.File]::WriteAllText(
+            $profilePath,
+            ($profile | ConvertTo-Json -Depth 30),
+            $utf8NoBom)
+    }
+
+    $mainConfigPath = Join-Path $appData "config\groups\nekobox.json"
+    $mainConfig = [IO.File]::ReadAllText($mainConfigPath) | ConvertFrom-Json
+    $mainConfig | Add-Member -NotePropertyName "inbound_socks_port" -NotePropertyValue 18119 -Force
+    $mainConfig | Add-Member `
+        -NotePropertyName "aux_profile_ports" `
+        -NotePropertyValue @("2:18120", "3:18121") `
+        -Force
+    [IO.File]::WriteAllText(
+        $mainConfigPath,
+        ($mainConfig | ConvertTo-Json -Depth 30),
+        $utf8NoBom)
+
+    $routePath = Join-Path $appData "config\routes_box\Default"
+    $route = [IO.File]::ReadAllText($routePath) | ConvertFrom-Json
+    $route.custom = '{"rules":[{"domain_suffix":["blocked.test"],"outbound":"block"},{"inbound":["aux-mixed-2"],"domain_suffix":["crossline.test"],"outbound":"bypass"}]}'
+    [IO.File]::WriteAllText(
+        $routePath,
+        ($route | ConvertTo-Json -Depth 30),
+        $utf8NoBom)
+
+    $export = Invoke-ProfileConfigExport `
+        -AppData $appData `
+        -ProfileId 1 `
+        -OutputPath $runtimeConfig `
+        -ExtraArguments @("-flag_export_profile_config_include_auxiliary_audit")
+    if ($export.exit_code -ne 0 -or !$export.output_created) {
+        throw "Generated auxiliary config export failed: $($export.stderr.Trim())"
+    }
+
+    $generatedConfig = [IO.File]::ReadAllText($runtimeConfig) | ConvertFrom-Json
+    $mainMixed = @($generatedConfig.inbounds | Where-Object { $_.tag -eq "mixed-in" })
+    $lineAMixed = @($generatedConfig.inbounds | Where-Object { $_.tag -eq "aux-mixed-2" })
+    $lineBMixed = @($generatedConfig.inbounds | Where-Object { $_.tag -eq "aux-mixed-3" })
+    $tunInbounds = @($generatedConfig.inbounds | Where-Object { $_.type -eq "tun" })
+    $systemProxyInbounds = @(
+        $generatedConfig.inbounds | Where-Object {
+            $_.PSObject.Properties.Name -contains "set_system_proxy" -and
+            $_.set_system_proxy -eq $true
+        }
+    )
+    if ($mainMixed.Count -ne 1 -or $mainMixed[0].type -ne "mixed" -or
+        $mainMixed[0].listen -ne "127.0.0.1" -or [int]$mainMixed[0].listen_port -ne 18119 -or
+        $lineAMixed.Count -ne 1 -or $lineAMixed[0].type -ne "mixed" -or
+        $lineAMixed[0].listen -ne "127.0.0.1" -or [int]$lineAMixed[0].listen_port -ne 18120 -or
+        $lineBMixed.Count -ne 1 -or $lineBMixed[0].type -ne "mixed" -or
+        $lineBMixed[0].listen -ne "127.0.0.1" -or [int]$lineBMixed[0].listen_port -ne 18121 -or
+        $tunInbounds.Count -ne 0 -or $systemProxyInbounds.Count -ne 0 -or
+        @($generatedConfig.route.PSObject.Properties.Name) -contains "auto_detect_interface") {
+        throw "Generated auxiliary config did not preserve the isolated listener/OS-side-effect contract."
+    }
+
     $previousErrorActionPreference = $ErrorActionPreference
     try {
         $ErrorActionPreference = "Continue"
-        $checkOutput = (& $coreFull check -c $runtimeFixture 2>&1) -join "`n"
+        $checkOutput = (& $coreFull check -c $runtimeConfig 2>&1) -join "`n"
         $checkExitCode = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $previousErrorActionPreference
     }
     if ($checkExitCode -ne 0) {
-        throw "Auxiliary two-line runtime fixture failed core schema validation: $checkOutput"
+        throw "Generated auxiliary two-line config failed core schema validation: $checkOutput"
     }
 
     $python = (Get-Command python -ErrorAction Stop).Source
@@ -160,12 +318,13 @@ try {
 
     $coreProcess = Start-Process `
         -FilePath $coreFull `
-        -ArgumentList "run -c `"$runtimeFixture`"" `
+        -ArgumentList "run -c `"$runtimeConfig`"" `
         -WorkingDirectory $tempRoot `
         -WindowStyle Hidden `
         -RedirectStandardOutput $coreStdout `
         -RedirectStandardError $coreStderr `
         -PassThru
+    Wait-OwnedListener $coreProcess 18119 "Generated primary Mixed listener"
     Wait-OwnedListener $coreProcess 18120 "Auxiliary line A Mixed listener"
     Wait-OwnedListener $coreProcess 18121 "Auxiliary line B Mixed listener"
 
@@ -192,10 +351,19 @@ try {
     $lineAFailed = Invoke-ProxyRequest 18120 "http://line-a.test/upstream-down"
     $lineBAfterFailure = Invoke-ProxyRequest 18121 "http://line-b.test/still-running"
     $coreStillRunning = !$coreProcess.HasExited -and
-                        @(Get-ListeningConnections @(18120, 18121) |
-                            Where-Object { $_.OwningProcess -eq $coreProcess.Id }).Count -eq 2
+                        @(Get-ListeningConnections @(18119, 18120, 18121) |
+                            Where-Object { $_.OwningProcess -eq $coreProcess.Id }).Count -eq 3
 
     $result = [pscustomobject]@{
+        config_source = "profile-manager-config-builder"
+        generated_config = [pscustomobject]@{
+            schema_check_exit_code = $checkExitCode
+            main_mixed_port = 18119
+            line_a_profile_id = 2
+            line_a_mixed_port = 18120
+            line_b_profile_id = 3
+            line_b_mixed_port = 18121
+        }
         passed = [bool](
             $lineA.exit_code -eq 0 -and $lineA.http_code -eq 210 -and
             $lineB.exit_code -eq 0 -and $lineB.http_code -eq 211 -and
@@ -226,7 +394,7 @@ try {
             failed_line_exit_code = $lineAFailed.exit_code
             surviving_line_status = $lineBAfterFailure.http_code
             surviving_line_exit_code = $lineBAfterFailure.exit_code
-            core_and_both_inbounds_still_running = [bool]$coreStillRunning
+            core_and_all_generated_inbounds_still_running = [bool]$coreStillRunning
         }
     }
 } finally {
@@ -258,6 +426,7 @@ $result | Add-Member -NotePropertyName side_effect_checks -NotePropertyValue ([p
 })
 $result.passed = [bool](
     $result.passed -and
+    $result.config_source -eq "profile-manager-config-builder" -and
     $result.side_effect_checks.system_proxy_state_unchanged -and
     $result.side_effect_checks.all_fixture_ports_released
 )
@@ -266,6 +435,7 @@ if ($Json) {
     $result | ConvertTo-Json -Depth 6
 } else {
     $result | Format-List
+    $result.generated_config | Format-List
     $result.initial_mapping | Format-List
     $result.cross_line_guard | Format-List
     $result.reject_guard | Format-List
