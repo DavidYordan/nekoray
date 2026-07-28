@@ -18,7 +18,8 @@
 - 新增 `primary_mixed_preserves_native_routing` 配置导出回归。旧构建为 14/15 且只在该新用例失败；重建后为 15/15。
 - 提交 `3f7ff19` 把普通显式 reject/block 编译为辅助 inbound 专属的前置规则，随后仍由精确 chain terminal 终结；direct、bypass、主线和其它 outbound 不进入前置区。
 - `auxiliary_route_compiler_test` 已完成失败到通过的红绿回归；CTest 5/5，脱敏辅助规则 fixture 通过当前 `nekobox_core check`。
-- 本轮没有完整打包或启动真实线路。真实双线路出口、单线失败隔离和 Windows 集成仍未形成闭环证据。
+- 提交 `59b8cb3` 新增双专用端口回环运行测试：A/B 精确命中不同上游，terminal 后不跨线，reject 不触达上游；停止 A 上游后 B 继续工作，core 与两个 listener 未重绑或退出，系统代理不变且全部临时端口释放。
+- 本轮没有完整打包、真实 GUI 或真实线路。该运行测试使用手写脱敏 fixture，ConfigBuilder/ProfileManager 最终运行配置和 Windows GUI 集成仍未形成闭环证据。
 
 ## 2026-07-24 当前整改与诊断
 
