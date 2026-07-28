@@ -1300,11 +1300,11 @@ namespace NekoGui {
                 };
             }
             status->inbounds += inboundObj;
-            // Preserve the client destination name until the exact main-line
-            // binding. Resolving it through the global/default DNS path before
-            // that binding would violate the same isolation contract as an
-            // auxiliary line.
-            AppendInboundRouteActions(status->frontRoutingRules, "mixed-in", false);
+            // The native Mixed listener remains NekoRay's normal routing
+            // ingress.  Its resolve/sniff actions stay in the ordinary
+            // generated rule sequence; only dedicated auxiliary listeners are
+            // strict line selectors.
+            AppendInboundRouteActions(status, "mixed-in");
         }
 
         // tun-in
@@ -1344,22 +1344,6 @@ namespace NekoGui {
         if (tagProxy.isEmpty()) {
             status->result->error = QStringLiteral("The primary profile produced an empty outbound chain.");
             return;
-        }
-
-        // A Mixed listener is a line selector, not a generic routing ingress.
-        // Bind the primary port to the selected primary chain before any user
-        // domain/IP routing rules, matching the existing auxiliary-port model.
-        if (!status->forTest) {
-            status->managedMixedBindings += ManagedMixedBinding{
-                "mixed-in",
-                dataStore->inbound_socks_port,
-                tagProxy,
-                false,
-            };
-            status->frontRoutingRules += QJsonObject{
-                {"inbound", QJsonArray{"mixed-in"}},
-                {"outbound", tagProxy},
-            };
         }
 
         if (!status->forTest && !status->forExport) {

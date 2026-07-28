@@ -80,6 +80,7 @@ function Add-Case(
     [string]$ResolverDoh = "",
     [int]$ExpectedProviderDohCount = -1,
     [int]$ExpectedPrimaryMixedPort = -1,
+    [switch]$AssertPrimaryUsesNativeRouting,
     [switch]$AssertNativeBootstrap,
     [switch]$UseSubscriptionGroupResolver,
     [int]$GroupResolverPolicyVersion = 1,
@@ -188,6 +189,41 @@ function Add-Case(
                 $outputAssertionPassed = $false
             }
         }
+        if ($AssertPrimaryUsesNativeRouting -and $run.output_created) {
+            $output = [IO.File]::ReadAllText((Join-Path $lab "export.json")) | ConvertFrom-Json
+            $nativeRouteFound = $false
+            $unconditionalPrimaryBindingFound = $false
+            foreach ($rule in @($output.route.rules)) {
+                $propertyNames = @($rule.PSObject.Properties.Name)
+                $inboundTags = @()
+                if ($propertyNames -contains "inbound") { $inboundTags += @($rule.inbound) }
+                $domainSuffixes = @()
+                if ($propertyNames -contains "domain_suffix") { $domainSuffixes += @($rule.domain_suffix) }
+                $outbound = ""
+                if ($propertyNames -contains "outbound") { $outbound = [string]$rule.outbound }
+                if ($inboundTags.Count -eq 1 -and
+                    $inboundTags[0] -eq "mixed-in" -and
+                    $domainSuffixes -contains "native-routing.example" -and
+                    $outbound -eq "bypass") {
+                    $nativeRouteFound = $true
+                }
+
+                $extraTerminalFields = @(
+                    $propertyNames | Where-Object { $_ -notin @("inbound", "outbound", "action") }
+                )
+                $action = if ($propertyNames -contains "action") { [string]$rule.action } else { "" }
+                if ($inboundTags.Count -eq 1 -and
+                    $inboundTags[0] -eq "mixed-in" -and
+                    $outbound -eq "proxy" -and
+                    $extraTerminalFields.Count -eq 0 -and
+                    ([string]::IsNullOrWhiteSpace($action) -or $action -eq "route")) {
+                    $unconditionalPrimaryBindingFound = $true
+                }
+            }
+            if (-not $nativeRouteFound -or $unconditionalPrimaryBindingFound) {
+                $outputAssertionPassed = $false
+            }
+        }
         $passed = if ($ShouldSucceed) {
             $run.exit_code -eq 0 -and $run.output_created -and $outputAssertionPassed
         } else {
@@ -240,14 +276,6 @@ Add-Case `
     -CustomConfig '{"ntp":{"enabled":true,"write_to_system":true}}'
 
 Add-Case `
-    -Name "reject_managed_mixed_inbound_replacement_export" `
-    -CoreConfig '{}' `
-    -ShouldSucceed $false `
-    -ExpectedError "Managed Mixed inbound 'mixed-in' changed after custom_config merge" `
-    -FixtureType "socks" `
-    -CustomConfig '{"inbounds":[{"tag":"mixed-in","type":"mixed","listen":"127.0.0.1","listen_port":2080,"detour":"direct"}]}'
-
-Add-Case `
     -Name "reject_profile_level_outbound_detour_export" `
     -CoreConfig '{}' `
     -ShouldSucceed $false `
@@ -262,6 +290,15 @@ Add-Case `
     -FixtureType "socks" `
     -RoutingCustom '{"rules":[{"domain_suffix":["example.test"],"outbound":"proxy"}]}' `
     -AssertNoNullRuleFields
+
+Add-Case `
+    -Name "primary_mixed_preserves_native_routing" `
+    -CoreConfig '{}' `
+    -ShouldSucceed $true `
+    -FixtureType "socks" `
+    -RoutingCustom '{"rules":[{"inbound":["mixed-in"],"domain_suffix":["native-routing.example"],"outbound":"bypass"}]}' `
+    -ExpectedPrimaryMixedPort 2080 `
+    -AssertPrimaryUsesNativeRouting
 
 Add-Case `
     -Name "native_domain_without_provider_doh" `
