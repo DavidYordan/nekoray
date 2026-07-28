@@ -22,10 +22,10 @@ Windows x64 是当前首要验收平台。OpenWrt 是相同 core 的诊断环境
 | 生成配置 core schema | 通过 | 上述 ProfileManager/ConfigBuilder 最终 JSON 由当前 `nekobox_core check -c` 返回 0；不启动 listener 或远端连接 |
 | 辅助端口 reject 编译红绿回归 | 通过 | 旧实现只产生 terminal binding，新 `auxiliary_route_compiler_test` 要求复制三个显式 reject 且不复制 resolve/direct/bypass/其它 outbound；修复前失败、修复后通过 |
 | 辅助端口 core schema fixture | 通过 | `test/fixtures/auxiliary-reject-routing.json` 使用文档保留地址，`nekobox_core check -c` 返回 0；不启动 listener 或远端连接 |
-| 双专用端口回环运行 | 通过 | 提交 `59b8cb3`：A/B 分别返回 210/211；terminal 后的跨线路规则不能把 A 改投 B；reject 返回 502 且两个上游命中数不变；停止 A 上游后 A 返回 502、B 继续 211，core 与两个 listener 均存活 |
+| 生成配置双专用端口回环运行 | 通过 | 提交 `9a328a5`：隔离 profile/映射/route 经 GUI 审计导出后由 core 启动；A/B 分别返回 210/211，terminal 后的 `bypass` 不能移动 A，reject 不触达上游；停止 A 上游后 B 与主/辅三个生成 listener 均存活 |
 | CTest | 5/5 | 配置恢复、runtime transition、分享格式、辅助端口路由编译和 resolver policy 纯测试通过 |
 
-提交 `a3dee71` 已推送。当前证据分别覆盖“构建器生成、只做 schema 检查”和“手写脱敏配置、实际双端口运行”，尚未把二者合并为启动 ConfigBuilder 生成配置的同一闭环。本轮没有启动真实 GUI、节点或 Windows TUN，也没有执行完整 package；真实节点 profile 与 Windows GUI 集成仍待验证。
+提交 `a3dee71`、`9a328a5` 已推送。两条单跳辅助 HTTP profile 现已完成 ProfileManager/ConfigBuilder → 最终 JSON → core 启动 → 双端口请求的同一闭环；两跳 detour 目前仍只完成生成与 schema 检查。本轮没有启动普通 GUI、真实节点或 Windows TUN，也没有执行完整 package；真实节点 profile 与 Windows GUI 集成仍待验证。
 
 ## 2026-07-24 端口恢复与 Clash TUN 归因
 
@@ -72,7 +72,7 @@ Windows x64 是当前首要验收平台。OpenWrt 是相同 core 的诊断环境
 |---|---|---|---|---|
 | L1 本地无侵入 | 配置/schema | 每个导出配置执行 `nekobox_core check`；空配置、迁移、损坏配置 | 已验证损坏主/路由配置及错误类型、非字符串、重复辅助映射原件不被覆盖；其它迁移矩阵不完整 | 必须自动化通过 |
 | L1 本地无侵入 | Mixed contract | HTTP absolute-form、HTTPS CONNECT、SOCKS5h、认证正反例、端口占用、非 loopback/TUN 拒绝 | 正向及安全收紧有证据，反例不完整 | 必须全部通过 |
-| L1 本地无侵入 | 端口映射/OS 副作用 | 主 `2080` 保持上游路由语义；每个专用端口命中其绑定完整 chain；显式 reject/block 可生效；顶层 custom 不得改变专用 listener/outbound 绑定；无明确操作不得改变系统代理/TUN | 2026-07-28 已用导出红绿回归关闭主入口无条件绑定；辅助 reject/terminal 已有纯 C++ golden、ProfileManager/ConfigBuilder 两跳 chain 导出、core schema 和双回环上游隔离运行证据。仍缺启动生成配置的同一闭环与真实节点 profile 验证 | 必须通过 |
+| L1 本地无侵入 | 端口映射/OS 副作用 | 主 `2080` 保持上游路由语义；每个专用端口命中其绑定完整 chain；显式 reject/block 可生效；顶层 custom 不得改变专用 listener/outbound 绑定；无明确操作不得改变系统代理/TUN | 2026-07-28 已用导出红绿回归关闭主入口无条件绑定；辅助 reject/terminal 已有纯 C++ golden、ProfileManager/ConfigBuilder 两跳 chain schema，以及生成配置的双单跳线路运行证据。仍缺生成两跳/front-proxy chain 的运行闭环与真实节点 profile 验证 | 必须通过 |
 | L1 本地无侵入 | 工具安全 | 不改系统代理/TUN/路由/DNS；拒绝 TUN、系统 NTP 写入和非空 endpoints；只保留目标 outbound detour 闭包并只结束精确 PID；不停止或改写 Clash TUN | 启动 GUI/core、写审计报告及构建/临时目录的脚本参数继续使用固定磁盘、非生产/非 reparse 路径护栏；本地/远端收紧器已有 fixture，OpenWrt Python 单测 19/19 | 必须保持 |
 | L2 OpenWrt 探针 | core/工具安全 | 相同 `1.13.12-routefluent-anytls-client.7` core 的 schema、loopback Mixed、监听 PID 与远端基线保护 | 2026-07-20 历史执行：既有 PID/命令行、配置/manifest 哈希和监听均不变，临时目录已清理；旧探针对临时副本强制 `auto_detect_interface=true`，尚未按默认 preserve 重跑 | 必须重跑并保持 |
 | L2 OpenWrt 探针 | 远端链路 | Trojan、AnyTLS、DNS、detour 有/无的对照；HTTP/CONNECT/SOCKS5h | 2026-07-20 历史诊断：AnyTLS mihomo 无 detour 与独立 profile 2 Trojan 均三协议 204；主 AnyTLS + `g-2` detour 失败。因所有变体均被旧探针强制 `auto_detect_interface=true`，只支持同一变体内的组合归因，不能作为当前导出策略验收 | 主组合阻断发布，按 preserve 重跑 |
@@ -80,7 +80,7 @@ Windows x64 是当前首要验收平台。OpenWrt 是相同 core 的诊断环境
 | L3 Windows 集成 | 生命周期 | GUI 退出/重启、线路重启、core 崩溃；与 4.0.1 对照无额外限制或数据丢失 | 当前已有 UUID/executor/对账改造，但缺完整 GUI 证据，且复杂度可能超过需求 | 按上游回归审计 |
 | L3 Windows 集成 | 网络控制 | 系统代理、TUN、IPv4/IPv6、DNS 的手工操作与上游回归 | 当前加入了多项额外 guard；persistent WFP 不属于现行核心要求 | 不得比上游退化 |
 | L3 Windows 集成 | GUI/安装更新 | clean build、干净用户目录、安装/更新失败与回滚 | 无 Skip package 先 clean reset GUI build tree、强制 `BUILD_TESTING=ON`，在同轮 GUI tests 与刚构建 core 上依次运行 tracker 和 raw Exit，只有通过才写正式 zip；任一 Skip 只产诊断目录且不创建/覆盖 zip。独立 clean-room 环境、安装/更新失败与回滚矩阵仍未完成 | 阻断稳定版 |
-| L1/L3 | C++/Go/脚本自动测试 | CTest、自有 Go 模块与隔离导出 fixture | CTest 为 4 项纯测试；tracker/分享格式/resolver policy 和 Go 单测覆盖协议 v3 deadline、Start 取消/发布、Exit/对账/finished 顺序，完整 package 另有真实 core raw QProcess/HTTP2 gate。尚无 GUI→Client crash→commit、真实 timeout/ACK 丢失、分享剪贴板、TrafficData 并发或 ProfileManager/订阅完整 harness。两个 Go 模块普通测试通过，core module 的重复/race/vet 通过；PowerShell/Python fixture 有独立证据，但完整 ConfigBuilder/import、DNS 泄漏观测和持久 runtime 仍缺 C++/Windows 集成矩阵 | 阻断稳定版 |
+| L1/L3 | C++/Go/脚本自动测试 | CTest、自有 Go 模块与隔离导出 fixture | CTest 为 5 项纯测试，覆盖 tracker、分享格式、辅助 route 编译和 resolver policy；Go 单测覆盖协议 v3 deadline、Start 取消/发布、Exit/对账/finished 顺序，完整 package 另有真实 core raw QProcess/HTTP2 gate。尚无 GUI→Client crash→commit、真实 timeout/ACK 丢失、分享剪贴板、TrafficData 并发或 ProfileManager/订阅完整 harness。两个 Go 模块普通测试通过，core module 的重复/race/vet 通过；PowerShell 已覆盖 ConfigBuilder 双单跳辅助线路运行，但完整 import、两跳/front-proxy 运行和 DNS 泄漏观测仍缺 C++/Windows 集成矩阵 | 阻断稳定版 |
 
 共享路径护栏只是 fail-closed 的路径前置筛选：它没有通过最终文件句柄验证 final-file identity，不能声称已解决所有 hardlink 或其它同文件别名。报告/导出工具 `export_profile_core_config.ps1`、`verify_runtime_connectivity.ps1` 和 `verify_fail_closed_restart.ps1` 会拒绝覆盖已存在的目标文件；此项必须与路径护栏分开测试，且不得当作完整文件身份保证。
 
@@ -125,7 +125,7 @@ L2 历史诊断细节见[已验证基线](OPENWRT_REMOTE_LAB.md#已验证基线)
 - `go/cmd/nekobox_core/internal/boxapi/boxapi_test.go`：除无 instance fail-closed 外，覆盖 generation-bound HTTP transport 禁用 keep-alive，防止连接跨代复用。
 - `test/test_config_preservation.ps1`：在隔离 appdata 中启动配置导出路径，验证已存在但损坏的主/路由配置、重复/非字符串/错误 JSON 类型的辅助映射、非法活动路由路径、未知 profile 类型与悬空 group 引用保持 SHA-256 不变，并验证 snapshot/metadata；同时验证显式事务报告与 before 回滚，以及 pending 事务在加载前阻断且主配置不变，当前为 10/10。
 - `test/test_final_config_guards.ps1`：在隔离临时 appdata 中验证安全 `internal-full` 文件导出、部分 TUN/系统代理/system endpoint/NTP 副作用拒绝，以及标准 SOCKS profile 的测试态 custom、主 Mixed 原生路由、辅助两跳 chain 审计生成、detour 禁改和 custom route 空字段回归；当前为 18/18。辅助用例可调用当前 core `check`，但不启动线路，也不覆盖 live/test 的 TUN on/off 四象限或所有 NTP/direct-action dialer，不能代表完整 C++ golden。
-- `test/test_auxiliary_route_runtime.ps1`：用手写脱敏配置启动当前 core、两个 Mixed 和两个回环 HTTP proxy 桩，验证不同端口出口、terminal 后不跨线、reject 不触达上游和单上游故障隔离；不经过 GUI/ProfileManager/ConfigBuilder，不代表真实线路。
+- `test/test_auxiliary_route_runtime.ps1`：在隔离 appdata 中持久化主/辅 HTTP profiles、映射和 route，经 GUI 审计导出后启动当前 core，以两个回环 HTTP proxy 桩验证不同端口出口、terminal 后不跨线、reject 不触达上游和单上游故障隔离；主端口仅在该隔离配置中改为 `18119`，不改变默认 `2080`。它不代表真实节点或两跳 detour。
 - `tools/verify_runtime_connectivity.ps1`：采集整套运行时快照；不是自动验收器。
 - `tools/verify_fail_closed_restart.ps1`：采集 fail-closed 相关状态；使用限制见 [fail-closed 验证](FAIL_CLOSED.md)。
 

@@ -61,13 +61,13 @@ v2rayN VMess 分享格式、SOCKS userinfo、Shadowsocks v2ray-plugin Clash解�
 
 标准生成路径现为主 `2080` 保留 NekoRay 正常路由、每个辅助 port -> 对应辅助 chain。空链/失效映射/重复端口已改为构建失败；辅助入口不在精确绑定前借默认 DNS `resolve`，主入口则恢复正常 sniff/resolve/route 序列。
 
-标准生成完成、顶层 `custom_config` 合并前，builder 会快照每个专用辅助 Mixed 的完整 listener 以及沿 detour 可达的每个 outbound 完整对象；合并后要求对象逐项相同，并检查 tag/port 唯一、精确无条件 route 绑定、辅助 Mixed 的提前 resolve、目标 outbound 类型和 detour 闭环。profile 级 `custom_outbound` 可在快照前修改普通字段，但不得新增/改变 detour。server-domain outbound → strict resolver group → 精确 DoH server → 原生 bootstrap 也按生成对象锁定。冲突、缺失、循环、direct/bypass/block/selector/urltest、resolver 篡改和 RouteFluent fallback 字段会构建失败。提交 `3f7ff19` 已为专用端口加入显式 reject/block 的 inbound-scoped 编译和纯 C++ golden；`59b8cb3` 又用两个回环上游验证了不跨线、reject 和单上游故障隔离；`a3dee71` 通过隔离 ProfileManager/ConfigBuilder 生成并检查两跳辅助 chain。当前仍缺完整 import C++ golden、启动生成配置的同一闭环、真实节点双线路运行和 DNS 泄漏观测，不能把这些窄约束表述为任意路由/DNS 配置均已严格证明。
+标准生成完成、顶层 `custom_config` 合并前，builder 会快照每个专用辅助 Mixed 的完整 listener 以及沿 detour 可达的每个 outbound 完整对象；合并后要求对象逐项相同，并检查 tag/port 唯一、精确无条件 route 绑定、辅助 Mixed 的提前 resolve、目标 outbound 类型和 detour 闭环。profile 级 `custom_outbound` 可在快照前修改普通字段，但不得新增/改变 detour。server-domain outbound → strict resolver group → 精确 DoH server → 原生 bootstrap 也按生成对象锁定。冲突、缺失、循环、direct/bypass/block/selector/urltest、resolver 篡改和 RouteFluent fallback 字段会构建失败。提交 `3f7ff19` 已加入显式 reject/block 的 inbound-scoped 编译和纯 C++ golden；`a3dee71` 通过隔离 ProfileManager/ConfigBuilder 生成并检查两跳辅助 chain；`9a328a5` 又启动同一路径生成的两条单跳辅助线路，验证不跨线、reject 和单上游故障隔离。当前仍缺完整 import C++ golden、生成两跳/front-proxy chain 的运行闭环、真实节点双线路运行和 DNS 泄漏观测，不能把这些窄约束表述为任意路由/DNS 配置均已严格证明。
 
 停止、重启、崩溃或退出过去会静默清空辅助端口 map，加载/UI 刷新也会修剪未知/损坏映射。接管工作树已改为仅显式映射操作可修改：字段类型错误、非字符串、损坏或重复项会让既有主配置原件保持不变并中止启动，同时生成可验证 quarantine 证据；显式启停/删除在原子保存失败时回滚内存且不 reload。仍缺可操作的修复 UI 与完整 ConfigBuilder C++ golden。
 
 ### 主入口与专用端口的生成配置已验证，真实节点运行仍待验证
 
-2026-07-28 已把原生 `2080` 恢复为普通 route 序列，并移除 `mixed-in -> proxy` 的无条件终结规则；定向配置导出回归由旧构建 14/15 失败转为重建后通过。随后专用端口改为 `sniff -> 仅该 inbound 的显式 reject/block -> 精确 chain terminal`；普通 direct、bypass、主线和其它 outbound 规则仍位于 terminal 之后。当前 18/18 配置 guard 已从隔离持久化 profile 生成主线路和辅助两跳 chain，并通过 core schema；双回环运行又确认单上游失败不影响另一端口。前者没有启动生成配置，后者使用手写 fixture，因此仍缺把两类证据合并为同一运行闭环、真实节点 profile 和 GUI 集成。
+2026-07-28 已把原生 `2080` 恢复为普通 route 序列，并移除 `mixed-in -> proxy` 的无条件终结规则；定向配置导出回归由旧构建 14/15 失败转为重建后通过。随后专用端口改为 `sniff -> 仅该 inbound 的显式 reject/block -> 精确 chain terminal`；普通 direct、bypass、主线和其它 outbound 规则仍位于 terminal 之后。当前 18/18 配置 guard 已从隔离持久化 profile 生成主线路和辅助两跳 chain，并通过 core schema；双回环运行也已改为启动 ProfileManager/ConfigBuilder 生成的两条单跳辅助线路，确认单上游失败不影响另一端口。仍缺两跳/front-proxy 生成配置的运行闭环、真实节点 profile 和普通 GUI 集成。
 
 ### desired state 与真实 listener 非事务
 

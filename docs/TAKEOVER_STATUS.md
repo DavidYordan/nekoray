@@ -21,7 +21,8 @@
 - 提交 `59b8cb3` 新增双专用端口回环运行测试：A/B 精确命中不同上游，terminal 后不跨线，reject 不触达上游；停止 A 上游后 B 继续工作，core 与两个 listener 未重绑或退出，系统代理不变且全部临时端口释放。
 - 提交 `a3dee71` 新增显式、无启动副作用的辅助线路审计导出。隔离 appdata 中的 ProfileManager/ConfigBuilder 现能生成主 profile 加辅助两跳 chain 的最终 JSON；回归检查 listener、detour 闭包、inbound-scoped reject、terminal、普通主入口路由，以及不存在 TUN、系统代理请求和 `auto_detect_interface`，并通过当前 core `check`。
 - 辅助生成用例在实现前为 15/16 且只在辅助 chain 断言失败；实现和边界用例补齐后为 18/18。普通导出仍省略辅助线路，`for_test` 与辅助审计组合会明确失败。
-- 本轮没有完整打包、真实 GUI 或真实线路。双端口运行仍使用手写脱敏 fixture；生成配置只执行了 `check`，尚未启动为同一闭环，Windows GUI 集成也未验证。
+- 提交 `9a328a5` 将双端口回环运行改为直接启动隔离 ProfileManager/ConfigBuilder 导出的配置，并删除已被替代的手写双线路 JSON。两条单跳 HTTP 辅助线路分别返回 210/211；跨线 `bypass` 位于 terminal 后而不能移动 A，reject 不触达上游；停止 A 上游后 B 与主/辅三个生成 listener 均存活，系统代理不变且五个临时端口全部释放。
+- 本轮没有完整打包、普通 GUI、真实线路或 Windows TUN。为避免占用外部 `2080`，生成运行测试只在隔离 appdata 中把主 listener 改为 `18119`；默认 `2080` 仍由 18/18 配置 guard 验证。两跳 detour 目前只通过生成/schema，Windows GUI 集成也未验证。
 
 ## 2026-07-24 当前整改与诊断
 

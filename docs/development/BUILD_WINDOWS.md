@@ -77,7 +77,7 @@ ctest --test-dir build-package-windows64 --output-on-failure
 
 直接运行增量 CMake 或 CTest 时必须让 MinGW `bin` 位于 `PATH`。否则 `cc1plus.exe` 或测试程序可能因找不到运行库以 `0xC0000135` 退出；Ninja 可能只显示无编译诊断的 `code=1`，CTest 在 Windows 错误对话框被抑制前也可能表现为超时。这不是源码编译或测试逻辑错误。完整打包脚本会设置该环境。
 
-CTest 当前包含 4 项。`config_recovery_test` 验证配置事务与目录身份边界；`runtime_transition_test` 验证 process-local transition、depth gate、crash-cleanup handoff、daemon/profile-request generation 和 finished tracker；`share_format_test` 验证无 fragment 原生链接及严格 `ip:port:user:pass` 转换；`resolver_policy_test` 验证 WD/NEX resolver 来源选择、DoH URL、domain/IP endpoint bootstrap 和 strict resolver group。四者都不启动真实 GUI/core，分享测试也不操作系统剪贴板。真实 core harness 故意不注册到 CTest，因为任意增量 CMake build 不能证明某个被忽略的 deployment core 来自当前源码；它只由完整无 Skip package 对刚构建的 package core 运行，不能直接作为日常 CTest 调用。
+CTest 当前包含 5 项。`config_recovery_test` 验证配置事务与目录身份边界；`runtime_transition_test` 验证 process-local transition、depth gate、crash-cleanup handoff、daemon/profile-request generation 和 finished tracker；`share_format_test` 验证无 fragment 原生链接及严格 `ip:port:user:pass` 转换；`auxiliary_route_compiler_test` 验证辅助 inbound 的 reject/terminal 编译不会复制 direct/bypass/其它 outbound；`resolver_policy_test` 验证 WD/NEX resolver 来源选择、DoH URL、domain/IP endpoint bootstrap 和 strict resolver group。五者都不启动真实 GUI/core，分享测试也不操作系统剪贴板。真实 core harness 故意不注册到 CTest，因为任意增量 CMake build 不能证明某个被忽略的 deployment core 来自当前源码；它只由完整无 Skip package 对刚构建的 package core 运行，不能直接作为日常 CTest 调用。
 
 raw harness 不调用产品 `NekoGui_rpc::Client::Exit` 或 MainWindow continuation 流程，所以不是 GUI→Client→core 端到端门禁。其配置没有 listener/TUN，WinINet 五键快照也不证明生产 PID/`2080`、适配器、路由、DNS、TUN 或 WFP 不变。它不能把产品从 Alpha 升级为可发布；完整边界见[测试矩阵](../testing/TEST_MATRIX.md)。
 
