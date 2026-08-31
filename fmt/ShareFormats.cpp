@@ -1,5 +1,7 @@
 #include "ShareFormats.hpp"
 
+#include "3rdparty/base64.h"
+
 #include <QStringList>
 
 namespace NekoGui_fmt {
@@ -13,6 +15,36 @@ namespace NekoGui_fmt {
             return {{}, ShareFormatError::EmptyNativeLink};
         }
         return {result, ShareFormatError::None};
+    }
+
+    SocksUserInfoResult DecodeLegacySocksBase64UserInfo(
+        const QString& username,
+        const QString& password) {
+        if (username.isEmpty() || !password.isEmpty()) {
+            return {username, password, false};
+        }
+
+        const auto decoded = Qt515Base64::QByteArray_fromBase64Encoding(
+            username.toUtf8(),
+            Qt515Base64::Base64Option::AbortOnBase64DecodingErrors);
+        if (!decoded) {
+            return {username, password, false};
+        }
+
+        const auto decodedText = QString::fromUtf8(decoded.decoded);
+        if (decodedText.toUtf8() != decoded.decoded) {
+            return {username, password, false};
+        }
+        const auto separator = decodedText.indexOf(':');
+        if (separator < 0) {
+            return {username, password, false};
+        }
+
+        return {
+            decodedText.left(separator),
+            decodedText.mid(separator + 1),
+            true,
+        };
     }
 
     ShareFormatResult ServerPortUserPass(

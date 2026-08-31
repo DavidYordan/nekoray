@@ -8,7 +8,7 @@
 | AnyTLS | 无 | Bean/UI/链接/Clash/core均有 | 提交 `f298d46`：Windows 回环中由 ProfileManager/ConfigBuilder 生成 Mihomo-client AnyTLS，经 Trojan group front proxy 到独立 HTTP origin 成功；停止 Trojan 后 AnyTLS server/origin 仍存活而该端口失败。2026-07-20 真实远端组合 EOF 仍待 preserve 重跑 | 三项扩展；继续验证真实组合与继承 |
 | Trojan | 有 | 有 | 提交 `f298d46` 已作为 Windows 回环 AnyTLS 前置代理实际承载流量并完成故障隔离；2026-07-20 OpenWrt 结果仅作历史背景，真实远端组合改在隔离 Windows 重测 | 保留 |
 | Shadowsocks | 有 | 有，但v2ray-plugin导入/UI回归 | 未复验 | 恢复兼容并测试 |
-| SOCKS/HTTP | 有 | 有，部分userinfo兼容回归 | Mixed入口协议fixture有基线 | 恢复兼容并测试 |
+| SOCKS/HTTP | 有 | 有；2026-08-31 已恢复 legacy SOCKS base64 `user:password` 解析，HTTP 路径未改 | 严格 base64/UTF-8/分隔符保留与规范链接 round-trip 纯测试、Mixed 入口协议 fixture 有基线；真实 GUI 导入未验收 | 保留并继续补 Windows GUI 证据 |
 | VMess/VLESS | 有 | 有，v2rayN分享格式回归 | 未复验 | 保留；不等于恢复Xray core |
 | Hysteria2/TUIC | 有 | sing-box路径有，外核选项被删 | 未复验 | 恢复上游外核能力 |
 | Naive | 有（外置 core） | 模型/UI/执行被误删 | loader 已保留旧文件并防止 ID 复用；schema/UI/执行未恢复 | P0恢复 |

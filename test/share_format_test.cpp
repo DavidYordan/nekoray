@@ -2,6 +2,7 @@
 
 #include <QCoreApplication>
 #include <QDebug>
+#include <QUrl>
 
 namespace {
     bool expect(bool condition, const char* message) {
@@ -29,6 +30,69 @@ int main(int argc, char** argv) {
                  "a link without a fragment must remain byte-for-byte unchanged");
     ok &= expect(ShareLinkWithoutRemark({}).error == ShareFormatError::EmptyNativeLink,
                  "an absent native link must fail explicitly");
+
+    const auto legacySocksUserInfo = DecodeLegacySocksBase64UserInfo(
+        QStringLiteral("bGVnYWN5LXVzZXI6bGVnYWN5LXBhc3M="),
+        {});
+    ok &= expect(legacySocksUserInfo.decodedLegacyBase64 &&
+                     legacySocksUserInfo.username == QStringLiteral("legacy-user") &&
+                     legacySocksUserInfo.password == QStringLiteral("legacy-pass"),
+                 "legacy SOCKS base64 userinfo must decode into username and password");
+
+    const auto colonPassword = DecodeLegacySocksBase64UserInfo(
+        QStringLiteral("dXNlcjpwOmE="),
+        {});
+    ok &= expect(colonPassword.decodedLegacyBase64 &&
+                     colonPassword.username == QStringLiteral("user") &&
+                     colonPassword.password == QStringLiteral("p:a"),
+                 "only the first decoded colon separates SOCKS username and password");
+
+    const auto invalidBase64 = DecodeLegacySocksBase64UserInfo(QStringLiteral("%%%"), {});
+    const auto noSeparator = DecodeLegacySocksBase64UserInfo(QStringLiteral("bm9zZXBhcmF0b3I="), {});
+    const auto explicitPassword = DecodeLegacySocksBase64UserInfo(
+        QStringLiteral("bGVnYWN5LXVzZXI6bGVnYWN5LXBhc3M="),
+        QStringLiteral("explicit-pass"));
+    for (const auto& preserved : {invalidBase64, noSeparator, explicitPassword}) {
+        ok &= expect(!preserved.decodedLegacyBase64,
+                     "invalid, separator-free, or explicit SOCKS userinfo must not be reinterpreted");
+    }
+    ok &= expect(invalidBase64.username == QStringLiteral("%%%") && invalidBase64.password.isEmpty(),
+                 "invalid base64 SOCKS userinfo must remain unchanged");
+    ok &= expect(noSeparator.username == QStringLiteral("bm9zZXBhcmF0b3I=") && noSeparator.password.isEmpty(),
+                 "separator-free decoded SOCKS userinfo must remain unchanged");
+    ok &= expect(explicitPassword.username == QStringLiteral("bGVnYWN5LXVzZXI6bGVnYWN5LXBhc3M=") &&
+                     explicitPassword.password == QStringLiteral("explicit-pass"),
+                 "an explicit SOCKS password must take precedence over legacy detection");
+
+    const auto invalidUtf8 = DecodeLegacySocksBase64UserInfo(
+        QString::fromLatin1(QByteArray("\xff:\xfe", 3).toBase64()),
+        {});
+    ok &= expect(!invalidUtf8.decodedLegacyBase64,
+                 "legacy SOCKS userinfo with invalid UTF-8 must remain unchanged");
+
+    const QUrl legacySocksLink(
+        QStringLiteral("socks://bGVnYWN5LXVzZXI6bGVnYWN5LXBhc3M=@proxy.example:1080#legacy"));
+    const auto parsedLegacy = DecodeLegacySocksBase64UserInfo(
+        legacySocksLink.userName(),
+        legacySocksLink.password());
+    QUrl canonicalSocksLink;
+    canonicalSocksLink.setScheme(QStringLiteral("socks5"));
+    canonicalSocksLink.setUserName(parsedLegacy.username);
+    canonicalSocksLink.setPassword(parsedLegacy.password);
+    canonicalSocksLink.setHost(legacySocksLink.host());
+    canonicalSocksLink.setPort(legacySocksLink.port());
+    canonicalSocksLink.setFragment(legacySocksLink.fragment());
+    const auto canonicalSocksText = canonicalSocksLink.toString(QUrl::FullyEncoded);
+    const QUrl reparsedCanonical(canonicalSocksText);
+    ok &= expect(parsedLegacy.decodedLegacyBase64 &&
+                     canonicalSocksText == QStringLiteral(
+                         "socks5://legacy-user:legacy-pass@proxy.example:1080#legacy") &&
+                     reparsedCanonical.userName() == QStringLiteral("legacy-user") &&
+                     reparsedCanonical.password() == QStringLiteral("legacy-pass") &&
+                     reparsedCanonical.host() == QStringLiteral("proxy.example") &&
+                     reparsedCanonical.port() == 1080 &&
+                     reparsedCanonical.fragment() == QStringLiteral("legacy"),
+                 "legacy SOCKS userinfo must survive parse, canonical export, and reparse");
 
     const auto socks = ServerPortUserPass(
         CredentialProxyKind::Socks5,

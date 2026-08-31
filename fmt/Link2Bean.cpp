@@ -1,5 +1,6 @@
 #include "db/ProxyEntity.hpp"
 #include "fmt/includes.h"
+#include "fmt/ShareFormats.hpp"
 
 #include <QUrlQuery>
 
@@ -18,6 +19,10 @@ namespace NekoGui_fmt {
         username = url.userName();
         password = url.password();
         if (serverPort == -1) serverPort = socks_http_type == type_HTTP ? 443 : 1080;
+
+        const auto normalizedUserInfo = DecodeLegacySocksBase64UserInfo(username, password);
+        username = normalizedUserInfo.username;
+        password = normalizedUserInfo.password;
 
         stream->security = GetQueryValue(query, "security", "");
         stream->sni = GetQueryValue(query, "sni");

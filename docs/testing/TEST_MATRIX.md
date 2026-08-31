@@ -11,6 +11,17 @@ Windows x64 是唯一后续验收平台。本机 Clash TUN 必须始终运行，
 
 历史一次性 Mixed/AnyTLS 调查只在矩阵中作为明确标注日期的诊断背景保留；原始证据见 [2026-07-20 接管基线](../archive/audits/2026-07-20-takeover-baseline.md)。历史中的单次成功不能升级为当前通过结论。
 
+## 2026-08-31 SOCKS base64 userinfo 上游兼容恢复
+
+| 检查 | 结果 | 证明范围 |
+|---|---:|---|
+| `adef6cd` 对照 | 确认回归 | 上游在无显式 password 时识别 base64 `user:password`；`11ba168` 删除 legacy Xray 代码时一并删除该非 Xray 格式兼容 |
+| 定向红绿回归 | 修复前失败、修复后通过 | 脱敏 `socks://<base64(user:password)>@proxy.example:1080#legacy` 解码并规范导出为 `socks5://user:password@...`，再次解析字段不丢失；不访问网络 |
+| 错误输入保留 | 通过 | 显式 password 优先；非法 base64、解码后无冒号、非法 UTF-8 不被猜测或改写；password 中第二个及后续冒号保留 |
+| `nekobox` 增量构建、完整 CTest | 通过、5/5 | 生产 `SocksHttpBean::TryParseLink()` 已接入同一严格 helper；证明编译链接和纯测试，不等于 GUI 剪贴板/持久化验收 |
+
+该恢复不引入 Xray runtime，不改变 SOCKS core outbound、resolver、路由、TUN 或系统网络。
+
 ## 2026-08-31 分享 server 与 TCP Ping 过度阻止整改
 
 | 检查 | 结果 | 证明范围 |

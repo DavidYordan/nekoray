@@ -29,9 +29,22 @@ namespace NekoGui_fmt {
         }
     };
 
+    struct SocksUserInfoResult {
+        QString username;
+        QString password;
+        bool decodedLegacyBase64 = false;
+    };
+
     // Native links are already FullyEncoded. A literal '#' can therefore only
     // begin the URI fragment; percent-encoded data such as "%23" is preserved.
     [[nodiscard]] ShareFormatResult ShareLinkWithoutRemark(const QString& nativeLink);
+
+    // v2rayN-compatible SOCKS links may store the complete `user:password`
+    // pair as standard base64 in the URI username field. Explicit URI
+    // passwords and ambiguous/invalid inputs are preserved verbatim.
+    [[nodiscard]] SocksUserInfoResult DecodeLegacySocksBase64UserInfo(
+        const QString& username,
+        const QString& password);
 
     // This deliberately narrow credential-list format preserves the server
     // field verbatim and never performs DNS or percent-encodes delimiters.

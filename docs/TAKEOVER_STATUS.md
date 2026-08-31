@@ -56,12 +56,16 @@
 
 本轮已恢复上游语义并明确标注边界：TCP Ping 不创建临时代理 Box，不声称测试所选 outbound；域名可能由当前系统网络环境解析；活动 TUN 可能影响实际 OS 路径。它只保存诊断时延，不自动切入口或线路。Go 回环测试和 GUI 增量构建已通过，真实 GUI 菜单/远端 server 尚未验收。
 
+### SOCKS base64 userinfo
+
+上游 `adef6cd` 会在 SOCKS URI 没有显式 password 时尝试把 username 当作 base64 `user:password` 解码；提交 `11ba168` 删除 Xray 遗留时一并删掉了这段非 Xray 格式兼容。本轮恢复该入口，但避免上游对“合法 base64、无冒号”输入的错误猜测：只有严格 base64、可逆 UTF-8 且包含冒号时才拆分，首个冒号后的内容全部属于 password；显式 password、非法 base64、无冒号或非法 UTF-8 均保留原值。脱敏规范链接的解析→标准 SOCKS5 导出→重解析纯测试和 GUI 增量构建已通过，真实 GUI 导入/保存仍未执行。
+
 ## 上游兼容现状
 
 相对 `adef6cd`，下列回归仍明确存在：
 
 - external-core、Naive、custom external 以及 TUIC/Hysteria2 外核选择被删除或禁用；
-- VMess/v2rayN、SOCKS base64 userinfo、Shadowsocks v2rayN/v2ray-plugin 等导入分享兼容退化；
+- VMess/v2rayN、Shadowsocks v2rayN/v2ray-plugin 等导入分享兼容仍退化；SOCKS base64 userinfo 已恢复；
 - GeoSite 自动完成失去数据源；
 - Windows 手工系统代理被整体禁用；
 - 在线更新被整体禁用；

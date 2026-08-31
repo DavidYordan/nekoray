@@ -31,6 +31,7 @@
 - 2026-07-28 已移除原生 `2080` 到主 outbound 的无条件终结绑定，并加入导出回归断言；专用并发端口继续承担严格线路选择。
 - 旧 **Resolve domain** 使用 Windows 系统 DNS 并永久覆盖域名，暂时禁用是合理止损；但来源可见、保留原域名/SNI、由用户固定入口的多入口管理仍然缺失。
 - 2026-08-31 已纠正两项过度阻止：未解析 server 可原样导出四字段凭据格式；上游 TCP Ping 恢复为当前 Windows 网络路径的 server 可达性诊断，并明确不等同于 proxy outbound URL Test。
+- 2026-08-31 已恢复 SOCKS legacy 分享链接的 base64 `user:password` 兼容；严格保留显式密码和无法无歧义解码的输入，不恢复 Xray runtime。
 - 上一阶段误删了 external-core、Naive、部分分享/插件兼容、GeoSite 自动完成等上游能力，必须以 4.0.1 为对照选择性恢复。
 - 大规模配置事务、RPC 生命周期、persistent Runtime/WFP 等改造并非三项核心需求；已有代码只按实际必要性审计，不能继续被当作发布前提扩建。
 - MultiMapper 与 RouteFluent 只提供思想和测试材料：前者可参考来源/候选/固定入口，后者可参考显式端口/chain/fail-close；两者的完整产品架构都不移植。

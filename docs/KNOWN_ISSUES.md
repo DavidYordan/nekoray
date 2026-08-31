@@ -37,6 +37,7 @@
 |---|---|---|---|---|
 | G-001 | `server:port:user:pass` 被误写成 `ip:...` 并只接受字面 IPv4，错误拒绝未解析 server | 成功输出只取 profile `serverAddress`，原样保留 IPv4/域名/主机名，不取 `DisplayName()`，不调用 DNS；菜单与函数统一改名 | ipiptest.org 对假 `.invalid` hostname 进入 DNS lookup；`share_format_test` 定向构建与 CTest 通过；`nekobox` 增量构建通过 | 真实 GUI 多选、剪贴板全有或全无 |
 | G-002 | TCP Ping 因“不经过所选 outbound”被 GUI/core 双层禁用 | 恢复上游 direct server reachability 语义；明确它走当前 Windows 网络路径，不等价于 URL Test；不再为它构建临时代理配置 | core 回环 listener Go 测试通过；`nekobox` 增量构建通过 | 真实 GUI、域名解析提示、活动 TUN 下结果展示、远端节点 |
+| U-001a | SOCKS legacy 分享链接的 base64 `user:password` 解析被删除 | 恢复上游识别点；只在 URI 没有显式 password、base64 严格合法、UTF-8 可逆且解码结果含冒号时拆分，首个冒号之后完整保留为 password；其它输入原样保留 | 定向回归修复前失败、修复后通过；覆盖规范导出/重解析、显式 password、非法 base64、无分隔符、非法 UTF-8；`nekobox` 增量构建和完整 CTest 5/5 通过 | 普通 GUI 剪贴板导入、保存后从真实 profile 再导出 |
 
 上述两项不是放宽 provider resolver 或专用端口的 fail-close。分享导出不产生网络访问；TCP Ping 是用户显式触发的只读诊断，其结果不得自动改入口或线路。
 
@@ -44,7 +45,7 @@
 
 ### U-001 导入和分享兼容
 
-已确认相对 `adef6cd` 回归：VMess v2rayN base64、SOCKS base64 userinfo、Shadowsocks v2rayN 格式和 v2ray-plugin 识别。名称包含 `v2ray` 不能作为删除依据。
+已确认相对 `adef6cd` 的 VMess v2rayN base64、Shadowsocks v2rayN 格式和 v2ray-plugin 识别回归仍未修复。SOCKS base64 userinfo 已在 U-001a 恢复。名称包含 `v2ray` 不能作为删除依据。
 
 整改安排：
 
@@ -181,7 +182,7 @@ route/settings/hotkey 和部分 UI 状态仍可能在磁盘保存失败后保留
 | 顺序 | 工作包 | 目标与证据 | 明确不做 |
 |---|---|---|---|
 | C0 | 当前审计检查点 | 固化 G-001/G-002、产品/文档纠偏、Clash no-touch 约束和当前验证结果，并推送远端任务分支 | 不执行 GUI/TUN/系统网络测试 |
-| W1（建议下一项） | U-001a：SOCKS base64 userinfo 兼容 | 先用 `adef6cd` 脱敏样本证明当前失败，再只恢复 SOCKS parser/serializer 的最短 round-trip；纯本地测试 | 不同时恢复 VMess、Shadowsocks、external-core，不访问网络 |
+| W1（已完成） | U-001a：SOCKS base64 userinfo 兼容 | 已用 `adef6cd` 脱敏语义建立红绿回归并恢复最短 parser/规范链接 round-trip；纯 Windows 本地测试 | 未同时恢复 VMess、Shadowsocks、external-core，未访问网络 |
 | W2 | U-001b/c：VMess v2rayN 与 Shadowsocks/v2ray-plugin | 两种格式各自建立失败 fixture、字段保真和错误输入测试，各自独立提交 | 不因名称含 `v2ray` 恢复 Xray runtime |
 | W3 | R-001a：人工多入口字段契约 | 只冻结原始 domain、SNI、resolver 来源、候选、诊断、固定入口的单一所有权和旧数据行为，先写 round-trip 测试 | 不做自动择优、DNS fallback 或 UI 大改 |
 | W4 | E-001：隔离 Windows 环境 | 只读能力盘点后直接创建无需重启、不会改变宿主网络的 Windows 沙盒/VM；若前置条件不满足则提供手工安装步骤 | 不停止/改写 Clash，不改变宿主网络，不执行 Linux 验证 |
@@ -189,6 +190,6 @@ route/settings/hotkey 和部分 UI 状态仍可能在磁盘保存失败后保留
 | W6 | 三项核心闭环 | 依次推进 R-001/R-002、A-001、P-001/P-002；涉及 Windows TUN 的 U-005/U-006 必须等 E-001 可用 | 不引入第二 runtime、persistent service/WFP 或全局 fallback |
 | W7 | 数据、并发与交付 | D-001..D-003、C-001/C-002，最后做同轮完整 package、旧配置迁移、真实 GUI/线路和分层网络矩阵 | 不用旧二进制或低层测试代替交付证据 |
 
-推荐先执行 W1：它与本轮分享格式审计同域、改动面最小、可完全离线验证，也不会受本机 Clash/TUN 环境影响。用户已批准 W4 在不重启、不改变宿主网络和 Clash 的边界内直接创建；超出该边界时停止并给出手工步骤。
+W1 已完成。下一步先执行用户明确要求的 W4 隔离 Windows 环境；随后进入 W2，并把 VMess v2rayN 与 Shadowsocks/v2ray-plugin 继续拆成独立检查点。用户已批准 W4 在不重启、不改变宿主网络和 Clash 的边界内直接创建；超出该边界时停止并给出手工步骤。
 
 任何步骤若需要自动择优、全局 fallback、persistent service/WFP、第二数据模型或不可逆迁移，必须停止并请求用户决定。

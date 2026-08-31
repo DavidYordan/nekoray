@@ -330,6 +330,7 @@ if (BUILD_TESTING)
     add_executable(share_format_test
             test/share_format_test.cpp
             fmt/ShareFormats.cpp
+            3rdparty/base64.cpp
     )
     target_link_libraries(share_format_test PRIVATE
             Qt${QT_VERSION_MAJOR}::Core
