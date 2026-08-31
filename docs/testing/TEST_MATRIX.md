@@ -1,15 +1,28 @@
 # 测试矩阵
 
 状态：现行证据台账；产品断言服从 [产品方向与开发契约](../PRODUCT.md)
-最后更新：2026-07-28
+最后更新：2026-08-31
 
 ## 证据要求
 
 每次发布候选至少记录：提交号、GUI/core 文件哈希、Windows 版本、命令、预期结果、实际结果和脱敏报告路径。日志、导出配置和报告可能含节点名、服务器地址、路由、进程及本地路径，不得提交真实凭据。
 
-Windows x64 是当前首要验收平台。OpenWrt 是相同 core 的诊断环境，不是产品兼容目标，也不能代替 Windows 验收。
+Windows x64 是当前首要验收平台。本机 Clash TUN 必须始终运行，因此当前主机只执行无侵入证据；项目 TUN 和 Windows 网络状态验收转到独立 Windows 隔离环境。WSL/OpenWrt 是相同或对应 core 的诊断环境，不是产品兼容目标，也不能代替 Windows 验收。
 
 历史一次性 Mixed/AnyTLS 调查只在矩阵中作为明确标注日期的诊断背景保留；原始证据见 [2026-07-20 接管基线](../archive/audits/2026-07-20-takeover-baseline.md)。历史中的单次成功不能升级为当前通过结论。
+
+## 2026-08-31 分享 server 与 TCP Ping 过度阻止整改
+
+| 检查 | 结果 | 证明范围 |
+|---|---:|---|
+| ipiptest.org 假数据格式探测 | 通过 server/hostname 语义核验 | 仅提交 `proxy-host.invalid:1080:user:pass`：站点接受格式并进入 hostname DNS lookup；带/不带方括号的文档 IPv6 样本返回 HTTP 400。未提交真实线路或凭据。站点当前同一入口分别报告 SOCKS5/HTTP，VLESS 使用另一链接入口；网页历史标签 `ip:...` 不改变本项目经用户确认的 `server:...` 契约 |
+| `share_format_test` 定向构建与 CTest | 通过 | 纯函数证明 `proxy.example`、`proxy-host` 原样形成 `server:port:user:pass`，不触发 DNS；`%N` 凭据不会被 Qt 占位符二次解释；空白/冒号/IPv6 等歧义 server 仍拒绝。未创建 MainWindow，未操作真实剪贴板 |
+| `go test ./...`、`go vet ./...`（`go/cmd/nekobox_core`） | 通过 | 新回归在随机 loopback listener 上验证 TCP Ping 真实建立系统 TCP 连接；URL/Full Test 仍要求显式有界配置。未访问外网，不证明 Windows TUN 下的实际路径 |
+| 完整本地 CTest | 5/5 | 配置恢复、runtime transition、分享格式、辅助路由编译和 resolver policy 均通过；都是纯/隔离测试，不证明 GUI 或真实网络 |
+| `nekobox` 增量构建 | 通过 | 当前 `ShareFormats`、TCP Ping GUI job/tooltip 和中文翻译可由既有 Qt/MinGW 构建目录编译链接；不是 clean build 或完整 package |
+| 真实 GUI/剪贴板/远端节点 | 未执行 | 不把纯函数、loopback 和增量构建冒充用户验收 |
+
+本轮没有启动 GUI/core 产品实例，没有修改系统代理、TUN、WFP、路由或 DNS，也没有停止/改写本机 Clash TUN。
 
 ## 2026-07-28 主入口与专用端口路由整改
 
@@ -57,7 +70,7 @@ Windows x64 是当前首要验收平台。OpenWrt 是相同 core 的诊断环境
 | `test_verify_mixed_openwrt.py` | 19/19 | 远端 helper 收紧与命令安全单测；未执行真实远端协议重测 |
 | `test_mixed_probe.ps1` | 7/7 | loopback Mixed、拒绝项、额外 listener/系统代理/日志/origin 清理 |
 | `test_runtime_connectivity.ps1` | 正例通过、反例正确拒绝 | expected 204 时 HTTP/SOCKS5h 均 204；expected 200 时报告 2 项 mismatch；系统代理、端口与 origin 清理通过 |
-| 批量分享格式 | C++ 实现/纯测试通过 | 右键多选保留含 remark 原生链接；新增无 fragment 链接与严格 `ip:port:user:pass`。纯函数覆盖字面 IPv4 SOCKS5/非 TLS HTTP 正例，及域名/IPv6/其它协议/TLS/缺凭据/非法端口/冒号换行负例，只用假凭据；GUI 代码为全有或全无，但真实剪贴板不变仍缺 GUI 自动化 |
+| 批量分享格式（当时契约，已于 2026-08-31 修正） | C++ 实现/纯测试当时通过 | 当时错误命名为 `ip:port:user:pass` 并把域名列为负例；这只证明旧实现遵守了旧断言，不再代表现行产品结果。现行 `server:port:user:pass` 证据见本文件顶部 2026-08-31 矩阵 |
 | CTest | 4/4 | 在项目 MinGW `bin` 已加入 `PATH` 的环境中通过：配置恢复、runtime transition/finished tracker、分享格式纯函数，以及 WD/NEX resolver 来源、DoH URL/bootstrap/strict group 纯测试。CTest 不创建 QProcess/GUI/core，也不操作系统剪贴板或执行真实 HTTP/2；这些纯测试不代表完整 ProfileManager 刷新、真实 DNS 网络行为或 Windows TUN/WFP 已验收 |
 | raw core Exit integration | 完整无 Skip package gate PASS | 用随机 loopback control port、无 listener/无 TUN 配置和刚构建 core，验证 lifecycle v3 握手/deadline、错误 UUID 为 gRPC 16、Exit non-admission 对账 fence/迟到命令拒绝、active Exit 为 gRPC 9、显式 Stop、结构化 `EXITING` ACK、同一 QProcess `NormalExit/0` 和常见 WinINet 五键不变。它不调用产品 `Client::Exit`/MainWindow，不验证生产 PID/`2080`、适配器、路由、DNS、TUN 或 WFP |
 | Windows quality CI | 通过 | 仓库卫生、固定子模块、受控 core 源构建、Go 普通测试和 verifier 安全契约；不覆盖 GUI/TUN/WFP |
@@ -66,7 +79,7 @@ Windows x64 是当前首要验收平台。OpenWrt 是相同 core 的诊断环境
 
 历史的 2026-07-22 打包/Exit gate 前后快照记录了当时外部 NekoRay 占用 `2080`；该环境已被 2026-07-24 的 Clash TUN 基础网络替代，只保留为历史证据，不再约束当前产品端口。
 
-## 三级验证矩阵
+## 分层验证矩阵
 
 | 级别 | 范围 | 必测项目 | 当前结论 | 发布要求 |
 |---|---|---|---|---|
@@ -74,12 +87,13 @@ Windows x64 是当前首要验收平台。OpenWrt 是相同 core 的诊断环境
 | L1 本地无侵入 | Mixed contract | HTTP absolute-form、HTTPS CONNECT、SOCKS5h、认证正反例、端口占用、非 loopback/TUN 拒绝 | 正向及安全收紧有证据，反例不完整 | 必须全部通过 |
 | L1 本地无侵入 | 端口映射/OS 副作用 | 主 `2080` 保持上游路由语义；每个专用端口命中其绑定完整 chain；显式 reject/block 可生效；顶层 custom 不得改变专用 listener/outbound 绑定；无明确操作不得改变系统代理/TUN | 2026-07-28 已用导出红绿回归关闭主入口无条件绑定；辅助 reject/terminal 已有纯 C++ golden、显式两跳 chain schema，以及生成 AnyTLS + Trojan group front proxy 与独立 HTTP 单跳线路的回环运行证据。仍缺显式 chain profile 与真实供应商节点验证 | 必须通过 |
 | L1 本地无侵入 | 工具安全 | 不改系统代理/TUN/路由/DNS；拒绝 TUN、系统 NTP 写入和非空 endpoints；只保留目标 outbound detour 闭包并只结束精确 PID；不停止或改写 Clash TUN | 启动 GUI/core、写审计报告及构建/临时目录的脚本参数继续使用固定磁盘、非生产/非 reparse 路径护栏；本地/远端收紧器已有 fixture，OpenWrt Python 单测 19/19 | 必须保持 |
+| L2 WSL/Linux 隔离 | core/配置/协议 | parser、schema、协议 loopback 和无 Windows 副作用的故障路径；报告宿主网络依赖 | 尚未形成当前 commit 的 WSL 专项证据 | 可补充 Linux/core 证据，不替代 L3 |
 | L2 OpenWrt 探针 | core/工具安全 | 相同 `1.13.12-routefluent-anytls-client.7` core 的 schema、loopback Mixed、监听 PID 与远端基线保护 | 2026-07-20 历史执行：既有 PID/命令行、配置/manifest 哈希和监听均不变，临时目录已清理；旧探针对临时副本强制 `auto_detect_interface=true`，尚未按默认 preserve 重跑 | 必须重跑并保持 |
 | L2 OpenWrt 探针 | 远端链路 | Trojan、AnyTLS、DNS、detour 有/无的对照；HTTP/CONNECT/SOCKS5h | 2026-07-20 历史诊断：AnyTLS mihomo 无 detour 与独立 profile 2 Trojan 均三协议 204；真实远端 AnyTLS + `g-2` detour 失败。`f298d46` 的 Windows 回环产品生成组合成功，说明不能全局拒绝该协议组合，但不覆盖服务器实现、网络和旧探针强制 `auto_detect_interface=true` 的远端场景 | 真实远端组合仍阻断发布，按 preserve 重跑 |
 | L1 本地无侵入 | 遥测一致性 | worker 更新 counter/rate 时 UI/JsonStore 只能读取同一代不可变快照，或由统一锁/原子协议保护；Reset 与持久化也必须纳入 | `last_update=0` 已消除未初始化读取；`TrafficBinding` 只隔离 profile/tag 身份。共享 `TrafficData` 的 counter/rate 仍存在无锁跨线程访问，尚无并发测试 | P2，稳定版前关闭 |
-| L3 Windows 集成 | 生命周期 | GUI 退出/重启、线路重启、core 崩溃；与 4.0.1 对照无额外限制或数据丢失 | 当前已有 UUID/executor/对账改造，但缺完整 GUI 证据，且复杂度可能超过需求 | 按上游回归审计 |
-| L3 Windows 集成 | 网络控制 | 系统代理、TUN、IPv4/IPv6、DNS 的手工操作与上游回归 | 当前加入了多项额外 guard；persistent WFP 不属于现行核心要求 | 不得比上游退化 |
-| L3 Windows 集成 | GUI/安装更新 | clean build、干净用户目录、安装/更新失败与回滚 | 无 Skip package 先 clean reset GUI build tree、强制 `BUILD_TESTING=ON`，在同轮 GUI tests 与刚构建 core 上依次运行 tracker 和 raw Exit，只有通过才写正式 zip；任一 Skip 只产诊断目录且不创建/覆盖 zip。独立 clean-room 环境、安装/更新失败与回滚矩阵仍未完成 | 阻断稳定版 |
+| L3 隔离 Windows 集成 | 生命周期 | GUI 退出/重启、线路重启、core 崩溃；与 4.0.1 对照无额外限制、误杀或数据丢失 | 当前已有 UUID/executor/对账改造，但缺完整 GUI 证据，且复杂度可能超过需求 | 按上游回归审计 |
+| L3 隔离 Windows 集成 | 网络控制 | 系统代理、项目 TUN、IPv4/IPv6、DNS 的手工操作与上游回归；状态区分 requested/observed | 当前加入了多项额外 guard；persistent service/WFP 不属于现行核心要求 | 不得比上游退化；不在当前主机执行 |
+| L3 隔离 Windows 集成 | GUI/安装更新 | clean build、干净用户目录、安装/更新失败与回滚 | 无 Skip package 先 clean reset GUI build tree、强制 `BUILD_TESTING=ON`，在同轮 GUI tests 与刚构建 core 上依次运行 tracker 和 raw Exit，只有通过才写正式 zip；任一 Skip 只产诊断目录且不创建/覆盖 zip。独立 clean-room 环境、安装/更新失败与回滚矩阵仍未完成 | 阻断稳定版 |
 | L1/L3 | C++/Go/脚本自动测试 | CTest、自有 Go 模块与隔离导出 fixture | CTest 为 5 项纯测试，覆盖 tracker、分享格式、辅助 route 编译和 resolver policy；Go 单测覆盖协议 v3 deadline、Start 取消/发布、Exit/对账/finished 顺序，完整 package 另有真实 core raw QProcess/HTTP2 gate。尚无 GUI→Client crash→commit、真实 timeout/ACK 丢失、分享剪贴板、TrafficData 并发或 ProfileManager/订阅完整 harness。两个 Go 模块普通测试通过，core module 的重复/race/vet 通过；PowerShell 已覆盖 ConfigBuilder 的 AnyTLS + Trojan group front proxy 与 HTTP 单跳辅助线路运行，但完整 import、显式 chain profile、真实供应商组合和 DNS 泄漏观测仍缺 C++/Windows 集成矩阵 | 阻断稳定版 |
 
 共享路径护栏只是 fail-closed 的路径前置筛选：它没有通过最终文件句柄验证 final-file identity，不能声称已解决所有 hardlink 或其它同文件别名。报告/导出工具 `export_profile_core_config.ps1`、`verify_runtime_connectivity.ps1` 和 `verify_fail_closed_restart.ps1` 会拒绝覆盖已存在的目标文件；此项必须与路径护栏分开测试，且不得当作完整文件身份保证。
@@ -96,17 +110,17 @@ L2 历史诊断细节见[已验证基线](OPENWRT_REMOTE_LAB.md#已验证基线)
 
 ## 发布前最小矩阵
 
-1. 在干净的 Windows 用户目录启动，不复用唯一真实配置，不停止或改写 Clash TUN。
+1. 普通无网络副作用的 GUI/数据测试使用干净 Windows 用户目录且不复用唯一真实配置；凡涉及项目 TUN、系统代理、网卡、路由或 DNS 的测试只在独立 Windows 隔离环境执行。本机 Clash 始终保持运行且不被改写。
 2. 覆盖空配置、旧配置迁移、损坏配置和恢复流程。
 3. 完成 Mixed 三种协议、认证正反例、端口占用、非法端口与主/辅端口映射。
 4. 完成 Trojan、AnyTLS 及有/无 front proxy；L2 只能补充远端归因，最终仍需 L3 Windows 证据。
-5. 验证只有用户手动操作才能启停系统代理/TUN；GUI 退出、重启和线路切换不改变它们。
-6. 分别核对 TUN requested、worker-observed 和 Windows 实际状态；core 崩溃后当前只恢复空控制 core的行为必须被识别为未通过，而不是把 requested 误判为 TUN 已恢复。
-7. 在保护持续生效时完成线路重启和故障注入，证明不会 direct 泄漏；提交后故障必须进入阻断，不得自动切回旧线路。只有用户明确选择、旧 generation 重新验证后才测试显式回滚。
-8. 覆盖 worker 无 instance、worker kill、service/BFE restart，确认 TCP、UDP、HTTP helper 和物理 IPv4/IPv6/DNS 均无系统 fallback。
+5. 在隔离 Windows 中对照 `adef6cd` 验证手工系统代理/项目 TUN、GUI 退出、重启和线路切换；不得把旧 persistent 数据面语义当成上游要求。
+6. 分别核对 TUN requested、worker-observed 和 Windows 实际状态；任何显示或 RPC 结果都不能冒充接口/路由已经成立。
+7. 对 U-005/U-006 的每个额外 guard 建独立四象限回归，只移除或缩窄被证明超出上游/产品的阻止；不以一次“大撤 guard”处理。
+8. 覆盖本项目实际拥有的 worker 正常/异常退出、精确 PID/路径清理和旧配置保留；不得结束 Clash 或其它安装。Runtime Service、BFE restart、persistent WFP 和全机防泄漏不是现行发布门。
 9. 覆盖空订阅、HTML 错页、超时、解析失败和正常更新；失败时旧组原样保留。
 10. 覆盖更新失败、校验失败和回滚；修复更新器前不得进行真实更新测试。
-11. 对 GUI→Client→core 注入 Exit ACK 丢失、finished 先到/后到、在途 handler 卡住、异常进程退出和重复关闭请求；仅 exact non-admission 可恢复，其余必须保持 continuation fence，且全过程核对 Windows 实际路由/DNS/TUN/WFP。
+11. 对 GUI→Client→core 覆盖正常退出、异常进程退出、重复关闭及当前保留机制对应的 ACK/finished 顺序；要求不误杀其它进程、不损坏数据且状态可解释。若简化现有 continuation fence，应以同一失败回归证明收益，不把具体 RPC 结构写成永久产品要求。
 
 ## 工具入口
 
@@ -119,7 +133,7 @@ L2 历史诊断细节见[已验证基线](OPENWRT_REMOTE_LAB.md#已验证基线)
 - `test/test_runtime_connectivity.ps1`：在临时 package 和 loopback HTTP 204 origin 中验证运行快照脚本的 PID 归属、精确 HTTP 状态、错误期望拒绝及清理；2026-07-20 的 204 正例通过，错误期望 200 正确失败。
 - `test/config_recovery_test.cpp`：覆盖单/多文件恢复基础设施、`VerifiedBefore`/`VerifiedAfter`/`Indeterminate`、退役、hidden/unexpected/exact-case/staging，以及 terminal startup/report 分层校验。路径用例 `routes_box/ROUTE~1` 只证明 `~` 被词法规则拒绝，不表示测试构造了真实 Windows 8.3 alias；选定配置根本身的 junction/别名仍需操作者确认。
 - `test/runtime_transition_test.cpp`：覆盖 GUI process-local transition/queue/crash generation 竞态、daemon generation 与 UUID 同锁快照，以及 `{generation, UUID, PID}` finished tracker 的错误身份/PID拒绝、异常完成、重复 finished 和 finished-before/after-wait；它不创建 QProcess、GUI、core 进程，不执行真实 HTTP/2，也不覆盖 `TrafficData` 并发或 Windows TUN/WFP。
-- `test/share_format_test.cpp`：只用假凭据覆盖原生链接 fragment 精确删除、字面 IPv4、端口、SOCKS5/HTTP、TLS、认证与分隔符正负例；不创建 MainWindow 或操作真实剪贴板。
+- `test/share_format_test.cpp`：只用假凭据覆盖原生链接 fragment 精确删除、IPv4/域名/主机名 server 原样输出、端口、SOCKS5/HTTP、TLS、认证与分隔符正负例；纯函数不解析 DNS，不创建 MainWindow 或操作真实剪贴板。
 - `test/core_exit_integration_test.cpp`：只由完整无 Skip package 授权运行；再次校验 fresh package core 的规范路径/SHA-256/非生产 identity，以 `NoProxy` raw Qt HTTP/2 client 和 test-owned QProcess 验证协议 v3 deadline/non-admission 对账 fence、迟到 Exit 拒绝和正常退出。配置无 listener、无 TUN；失败清理先尝试已鉴权 Stop/Exit，最后才可 terminate/kill 精确 test-owned PID。它不是 GUI→Client E2E，只比较 WinINet 的 `ProxyEnable`、`ProxyServer`、`AutoConfigURL`、`ProxyOverride`、`AutoDetect` 五键。
 - `go/cmd/nekobox_core/core_lifecycle_test.go`：覆盖失败/取消 candidate、blocked Close、旧 reference、dial/stats/Stop 互斥、并发 Start、deadline 准入 fence、Exit STOPPED 前置与终态 `EXITING`；另覆盖 reconcile barrier 先挡迟到 Start/Exit、等待阻塞 Start/Stop、精确 active/failed-clean/blocked target、config hash 与 ordering watermark。`grpc_box_test.go` 覆盖 deadline/Exit/对账映射；`grpc_exit_integration_test.go` 通过真实 localhost gRPC 验证排队 Stop deadline 和 ACK 交付后 GracefulStop。`go/grpc_server/auth` 和 `grpc_identity_test.go` 覆盖 token + daemon UUID、协议 v3、one-shot shutdown controller、metadata 清除和握手回显。
 - `go/cmd/nekobox_core/internal/boxapi/boxapi_test.go`：除无 instance fail-closed 外，覆盖 generation-bound HTTP transport 禁用 keep-alive，防止连接跨代复用。

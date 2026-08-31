@@ -1,6 +1,6 @@
 # ADR 0011：daemon 实例身份、生命周期对账与 Exit ACK
 
-状态：已接受（进程内 P0 止损）
+状态：已接受（进程内竞态止损；不授权 persistent Runtime/WFP）
 日期：2026-07-22
 
 ## 背景
@@ -33,7 +33,7 @@ GUI 会在同一 localhost 端口、token 和 HTTP/2 client 上重建 `nekobox_c
 - 服务端 deadline 可取消未准入命令和未发布 Start；若 Start 已发布或 Stop 已准入，client abort 不能回滚该提交。对账本身超时后，服务端屏障仍可能稍后生效，GUI 必须保留 unknown。
 - Exit ACK/finished 只在当前 GUI-owned daemon 内闭环；ACK 不确定且无法证明未接纳时，GUI 会无限保持退出 fence 并按间隔提示。这是有意的 fail-closed continuation，不是通用可回滚事务。
 - `GracefulStop` 会等待其它已在途 RPC。context-aware command executor 能取消未准入命令和未发布 Start，但不能中断已经准入的 Stop/Close；长时间不返回的 handler 仍可能使进程长期停在 `EXITING`。
-- 没有持久 Runtime Service、stable anchor、WFP、desired/observed/owner/health 状态机或 Windows OS 事实源，产品仍为 Alpha/不可发布。
+- 没有持久 Runtime Service、stable anchor、WFP、desired/observed/owner/health 状态机或 Windows OS 事实源；因此本 ADR 不能证明这些 OS 行为，但现行产品契约也不把这些候选组件列为发布前提。
 
 ## 验证
 

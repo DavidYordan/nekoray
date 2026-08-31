@@ -1,142 +1,194 @@
-# 已知问题
+# 已知问题与整改安排
 
-状态：实现缺陷清单；优先级须服从 [产品方向与开发契约](PRODUCT.md)
-最后更新：2026-07-28
+状态：现行整改队列；优先级服从[产品方向与开发契约](PRODUCT.md)
 
-> 本文件中历史的 `P0`、persistent Runtime/WFP 和主 `2080` 严格绑定结论不再自动构成发布要求。现行重点是恢复上游回归，并完成多入口、AnyTLS 与专用并发端口的最小闭环。
+审计基线：`agent/takeover-remediation@c7e91f2`
 
-## P0：范围与数据兼容
+最后更新：2026-08-31（证据以本文件所在检查点 commit 为准）
 
-### external-core/Naive 被错误删除
+> 本文件是唯一现行整改队列。[历史路线](ROADMAP.md)中的复选框、旧 ADR 的 persistent Runtime/WFP 方案和过往 `P0` 命名不再决定开发顺序。每次只领取一个能独立验证的切片；恢复上游与实现新能力尽量分开。
 
-提交 `d385a17`、`844d9b2`、`4d68e93`、`96f1166` 删除了 external-core 抽象、Naive、ExtraCore、custom external、TUIC/Hysteria2 外核与生命周期。这超出“删除 Xray”。接管工作树已停止删除无法识别/加载失败的 profile，并防止新 ID 覆盖其原文件；模型与 UI 能力仍未恢复。
+## 优先级定义
 
-修复门：先停止删除和 ID 静默复用；恢复 schema/Bean/UI/导入导出；再把执行能力接回当前架构。暂不支持并发的组合必须明确报错而非丢数据。
+- **P0**：当前产品范围内、阻止任何交付候选的缺口，包括明确上游回归、数据丢失风险和三项核心能力的最小闭环。
+- **P1**：不阻止继续开发，但稳定版前必须关闭的兼容、生命周期、测试和恢复问题。
+- **P2**：已有局部止损、可在核心闭环后处理的并发或工程质量问题。
+- **待决定**：会改变用户体验且产品契约没有冻结的内容，只记录到[待确认决策](DECISIONS_NEEDED.md)，不自行实现。
 
-### 非 Xray 格式兼容误删
+问题证据同时分级：`已确认` 表示已有用户契约、上游 diff、失败回归或可重复运行证据；`源码疑点` 只表示调用链显示有风险，必须先补失败回归；`待实机` 表示纯测试不能替代 Windows/真实线路结论。优先级不提升证据等级。
 
-v2rayN VMess 分享格式、SOCKS userinfo、Shadowsocks v2ray-plugin Clash解析和旧分享选项被一并删除。这些是格式/插件能力，不是 Xray 核心。需要选择性恢复并做 round-trip 测试。
+## 测试环境前置：E-001 隔离 Windows 验证环境
 
-### 文件保存和加载仍未形成完整恢复体系
+当前开发主机依赖不可中断的 Clash TUN，禁止停止、重启、结束或改写它。后续所有项目 TUN、Wintun、系统代理、Windows 路由/DNS/网卡故障注入和双 TUN 归因都不得在当前主机执行。
 
-已完成单文件止损：`JsonStore::Save()` 使用禁止 direct-write fallback 的 `QSaveFile` 原子替换，与多文件事务共享参与 mutation 路径的提交串行化 mutex 和跨进程磁盘锁；覆盖已有文件前会把旧内容写入 `recovery/backups/` 的内容寻址备份并回读校验，备份失败即拒绝覆盖。每次实际内容变化还会在 commit 前发布短生命周期 durable before/after intent：精确验证为 before/after 后分别写成 `aborted`/`committed`，移到 `recovery/retired-single-file-transactions/` 并尽力删除；无法判定或无法写终态则保留 `prepared` 并阻断。store 记录加载时“存在/不存在”状态，人工修改或删除目标都不能被旧进程当作新文件重建。已有但无效的关键配置会保留并中止启动；损坏/未知 profile、文件名 ID 不一致和已识别的悬空引用会在 `recovery/quarantine/` 生成原文 snapshot 与原因元数据，GUI 只提示而不自动修复。未知/损坏 profile/group 的 ID 不复用；进程内删除的 ID 也保留为 high-water，危险 legacy reorder 被 fail-closed 禁止。
+整改安排（尚未开始，先由用户审核）：
 
-显式删除单 profile 或空 group 现在也要求磁盘原文与加载快照一致，并先向 `recovery/deletions/` 写入内容寻址、回读校验的删除前快照；被 front proxy/chain 引用的 profile 拒绝删除，删除 remembered profile 会在同一事务清理该引用，core 运行时也拒绝删除当前 auxiliary。group 创建、主配置/group order/删除目标以及 profile 跨组移动涉及的多文件操作，已接入 `recovery/transactions/`：共享提交串行化 mutex 和跨进程锁，先持久化 before/after，再逐项提交；普通失败会逆序回滚。删除对象先 tombstone 再移出 manager，后台测试的迟到 `Save()` 不能复活文件。
+1. 只读盘点本机可用的 WSL/虚拟化能力，不安装组件、不改变 Hyper-V/vSwitch、路由、DNS、系统代理或 Clash；
+2. 把待测断言按平台拆分：WSL 只承接 Linux core、配置、协议和 loopback；OpenWrt 只承接相同 core 的远端链路；Windows 专有断言进入独立 Windows 环境；
+3. 优先设计可快照回滚的独立 Windows VM；Windows 沙盒仅在能安装所需驱动且无需重启时作为短生命周期候选。方案须写明 Windows 版本、NAT/隔离网络、测试包哈希、管理员权限、允许创建的进程/接口、凭据隔离和清理复核；
+4. 用户确认方案后才创建环境和执行测试。若创建会改变宿主虚拟交换机或网络状态，则停止并另选平台；
+5. 测试报告分开标注 `host-loopback`、`WSL/Linux`、`OpenWrt`、`isolated-Windows`，不允许用前三级替代 Windows TUN 结论。
 
-未完成状态会禁止当前进程继续保存并阻断下次启动，不会自动猜测恢复方向。启动扫描还会枚举隐藏/系统条目，并对活动锁、意外条目、manifest 缺失/无法解析、schema/id 不匹配和非终态状态失败关闭；精确协议 `.staging-<小写 UUID>` 除外。终态目录在启动路径只校验 JSON 与 schema/id/state header，维护 report 才深解析 operation、entries、snapshot 和当前目标：合法 terminal header 即使 entries 损坏或为空也不阻断 startup，但 report 必须标为 `valid=false`；非法 terminal schema 仍阻断。维护命令可由用户明确选择完整 `before` 或 `after`，方向一旦开始即锁定；它只恢复结构正确的事务，不会自动修复 unknown/quarantine 模型。仍没有图形恢复 UI；目标发生第三种变化、manifest/snapshot 损坏时必须在隔离副本中人工分析。
+完成门：隔离环境可从干净快照重复创建/回滚；不依赖或改变宿主 Clash；测试只清理自身精确资源；至少能承载 Wintun 创建/销毁和项目 TUN 基本生命周期。E-001 是 Windows 专属验收的前置工作，不是三项产品能力本身，也不授权新增 persistent service/WFP。
 
-旧的非空 group 删除会忽略子项失败并继续删 group，现仍整体拒绝；直接放开还会遇到未知文件引用、运行中 auxiliary、测速/编辑窗口旧对象和订阅竞态。订阅清理/回滚会检查删除结果并保留失败对象，但订阅成功候选和非空 group 尚未接入事务层。
+## 最近关闭：错误阻止项
 
-路由管理器原先直接删除文件且接受文本框中的路径片段；现只接受安全的 Windows 单文件名，主配置中的非法 `active_routing` 会保持原件并中止加载。非活动 route 使用同一事务层删除；活动 route 必须先由用户加载并确认另一个 route，禁止“先删后切换”。
+| 编号 | 问题 | 处理 | 当前证据 | 尚未验证 |
+|---|---|---|---|---|
+| G-001 | `server:port:user:pass` 被误写成 `ip:...` 并只接受字面 IPv4，错误拒绝未解析 server | 成功输出只取 profile `serverAddress`，原样保留 IPv4/域名/主机名，不取 `DisplayName()`，不调用 DNS；菜单与函数统一改名 | ipiptest.org 对假 `.invalid` hostname 进入 DNS lookup；`share_format_test` 定向构建与 CTest 通过；`nekobox` 增量构建通过 | 真实 GUI 多选、剪贴板全有或全无 |
+| G-002 | TCP Ping 因“不经过所选 outbound”被 GUI/core 双层禁用 | 恢复上游 direct server reachability 语义；明确它走当前 Windows 网络路径，不等价于 URL Test；不再为它构建临时代理配置 | core 回环 listener Go 测试通过；`nekobox` 增量构建通过 | 真实 GUI、域名解析提示、活动 TUN 下结果展示、远端节点 |
 
-仍缺：可选择恢复来源和明确提交/回滚方向的 GUI、订阅/非空 group 的事务接入、保存失败的强类型结果、显式悬空引用修复、备份保留/清理策略及真实进程终止/磁盘故障注入。命令行可恢复结构完整且目标未偏离的事务，但这还不是面向普通用户的完整恢复体系。已验证的单文件终态 intent 会自动退役并尽力删除；内容寻址证据、多文件终态事务和删除失败的退役目录仍可能持续增长，尚无统一保留策略。
+上述两项不是放宽 provider resolver 或专用端口的 fail-close。分享导出不产生网络访问；TCP Ping 是用户显式触发的只读诊断，其结果不得自动改入口或线路。
 
-提交串行化 mutex 不是完整模型读写同步。本批已消除两类明确的构建期 live-model 写入：outbound 统计的 profile id/tag 改为 generation 内按值 `TrafficBinding`，VLESS 的 `-udp443`/`none` flow 规范化改用局部副本，不再回写 bean。group speedtest 也改为在 UI 线程捕获 profile/bean/最终 test config fingerprint 和 RPC 请求，worker 只执行 RPC，结果回 UI 后先以对象身份与 fingerprint 做 CAS 式重验再保存；迟到结果不能写回已经编辑、替换或改变有效配置的 profile。普通保存失败会回滚内存测速结果，不确定保存会保留 intended state 并要求恢复。
+## P0：上游能力恢复
 
-这仍不是完整 `BuildModelSnapshot`：ConfigBuilder 尚未在整个读取期持有全模型不可变快照，订阅和其它跨线程读模型路径也未统一。final Start gate 只串行参与 mutation 的路径并复核 recovery、当前 ticket 和已捕获 daemon readiness；它不会重建 candidate 或比较完整 model revision，不能证明构建期间所有读取仍与最终模型一致。部分 route/settings/hotkey 保存调用仍没有一致处理失败或回滚内存。完整不可变快照/读写同步，以及所有设置保存失败时的磁盘—内存一致性，均是 Alpha/P0 债务。
+### U-001 导入和分享兼容
 
-## P0：订阅与 DoH
+已确认相对 `adef6cd` 回归：VMess v2rayN base64、SOCKS base64 userinfo、Shadowsocks v2rayN 格式和 v2ray-plugin 识别。名称包含 `v2ray` 不能作为删除依据。
 
-### 订阅刷新不是事务
+整改安排：
 
-接管工作树已恢复刷新并实现 parse/stage-before-mutate：空响应、HTML、坏 YAML、无效 Clash 结构或零支持节点不会创建组或修改旧 group/order/profile。
+1. 为每种格式建立脱敏 round-trip fixture，先在当前分支证明失败；
+2. 从上游恢复最短 parser/serializer 路径，不恢复 Xray runtime；
+3. 覆盖旧链接读取、复制、编辑后再导出和错误输入保留；
+4. 每种格式独立提交/验证，不和 external-core 或 AnyTLS 修改混合。
 
-残余风险在成功候选提交阶段：多个 `AddProfile`、group 保存与旧 profile 删除仍是独立提交，不能覆盖整个刷新；崩溃/磁盘故障仍可能留下新增、重复、残留节点或陈旧引用。当前已让下载/解析并行，联网前按值快照不可变 HTTP 选项，并记录目标 group 及全部成员的身份、顺序、tombstone 和序列化状态；模型提交调度到 UI 线程并用提交串行化 mutex 串行，网络间隔后逐项重验这些快照。新建 group 也会把 `groups/<id>.json` 和 `groups/pm.json` 一次提交。这些前置止损解决容器竞态、ID 并发和 manager 漏写，不等于成功候选已经原子化。
+完成门：上游合法样本在当前 sing-box 模型下可无损读取或得到精确“不支持运行”提示，不能静默丢字段或删除 profile。
 
-另一个独立边界是订阅下载控制面：继承的默认值 `sub_use_proxy=false` 会由 Qt `QNetworkAccessManager` 直接请求订阅 URL，并使用 Windows 正常解析路径；选择“使用代理”后才经主 Mixed。它不是受管 Mixed 数据面的线路 fallback，也没有由本轮 agent 新增，但确实是一条可直连的控制面路径。若“绝不直连”也覆盖订阅下载，发布前必须改成显式策略（例如强制经已启动主线路，线路不可用即失败），不能悄悄在两者之间回落。
+### U-002 external-core、Naive 与外核选择
 
-### DoH 语义已纠正，仍缺真实泄漏观测与 core 能力收口
+Naive Bean/UI/执行、custom external core、TUIC/Hysteria2 外核选择被整体删除。旧 loader 现在会保留 unknown 文件并防止 ID 复用，但这只是止损，不是能力恢复。
 
-旧实现没有正确区分 Clash 字段是否存在，曾把普通 `dns.nameserver` 一概猜成 proxy resolver、为无 DoH 节点强制创建自定义 local-only group，并提供本机 fallback/公共探测域名；随后又过度修正为只接受专用字段、拒绝所有域名 DoH endpoint，直接导致 NEX/WD 行为均偏离需求。
+整改安排：先恢复 schema/Bean/旧配置读取和编辑，再恢复进程执行与精确 PID/路径所有权；最后验证普通运行。暂不能参与专用并发端口的组合只在该新模式启动前精确拒绝，不得删除 profile。
 
-当前实现按三态处理：专用 `proxy-server-nameserver` 显式存在时权威且不借普通 nameserver；专用字段完全缺失时才提取 `dns.nameserver` 的 HTTPS DoH；最终没有 provider DoH 时走 NekoRay 原生解析。所选来源的非法 HTTPS 项会中止刷新，非 HTTPS 项只计数。group 保存来源和策略版本，旧策略留下的非空订阅 DoH 在成功刷新前拒绝使用，防止旧 WD 污染值复活。
+完成门：`adef6cd` 的脱敏旧配置可见、可编辑、可复制、可导出；普通上游运行路径恢复；Xray 仍不出现在运行 core 选择中。
 
-域名 DoH endpoint 现在由生成的原生 `dns-local` bootstrap，保留 SNI 且不强制地址族。该解析仅用于建立 DoH 传输；线路 server 已绑定 strict provider resolver，provider DoH 全部失败时仍不会改用本机 DNS。标准生成器与最终 custom validator 已把受管 outbound、strict resolver group、DoH server 和 bootstrap 锁成完整链，并拒绝 RouteFluent `fallback`/`local_only` 字段。
+### U-003 GeoSite 自动完成、在线更新和手工系统代理
 
-仍需：清理仅为旧数据兼容保留的 fallback/health 字段及第三方 core 中仍能表达旧实验语义的实现；建立完整 ProfileManager 订阅导入/刷新持久化 golden，以及真实断网、DNS 抓取和 Windows/OpenWrt 对照，证明 provider DoH 失败时没有线路 server 本机 DNS 请求。旧的复杂批量 resolver/change-IP 实现已移除，但人工多入口管理现为核心缺失项：必须保留原始域名/SNI，区分 resolver 来源，并由用户手工固定入口。
+- GeoSite 自动完成 UI 仍在，但 reader/数据源被删；
+- CheckUpdate 被替换为“私人版本禁用”；
+- Windows 手工系统代理因旧 helper 所有权不足被整体禁用。
 
-## P0：Mixed、并发线路与最终配置
+证据等级：前三项都是相对 `adef6cd` 的源码差异；本轮尚未做真实 UI/Windows 行为复现。整改时把三项拆开：GeoSite 与在线更新先建立最小失败回归，再恢复仍适用于当前数据格式的上游路径；系统代理先在隔离 Windows 环境记录上游启用、禁用、已有 PAC/proxy 三类前后状态，再决定最小兼容修法。现阶段不能把某个 broker、service 或 compare-and-restore 方案预写成既定需求。
 
-### 最终受管绑定 guard 已实现，规则语义与自动回归仍不完整
+完成门：无关上游功能不再无理由消失；系统代理只由用户显式操作，失败保持原 Windows 状态可解释。
 
-标准生成路径现为主 `2080` 保留 NekoRay 正常路由、每个辅助 port -> 对应辅助 chain。空链/失效映射/重复端口已改为构建失败；辅助入口不在精确绑定前借默认 DNS `resolve`，主入口则恢复正常 sniff/resolve/route 序列。
+## P0：核心能力闭环
 
-标准生成完成、顶层 `custom_config` 合并前，builder 会快照每个专用辅助 Mixed 的完整 listener 以及沿 detour 可达的每个 outbound 完整对象；合并后要求对象逐项相同，并检查 tag/port 唯一、精确无条件 route 绑定、辅助 Mixed 的提前 resolve、目标 outbound 类型和 detour 闭环。profile 级 `custom_outbound` 可在快照前修改普通字段，但不得新增/改变 detour。server-domain outbound → strict resolver group → 精确 DoH server → 原生 bootstrap 也按生成对象锁定。冲突、缺失、循环、direct/bypass/block/selector/urltest、resolver 篡改和 RouteFluent fallback 字段会构建失败。提交 `3f7ff19` 已加入显式 reject/block 的 inbound-scoped 编译和纯 C++ golden；`a3dee71` 通过隔离 ProfileManager/ConfigBuilder 生成并检查两跳辅助 chain；`9a328a5` 启动同一路径生成的两条单跳辅助线路；`55bb799` 加入生成 group front proxy 运行；`f298d46` 又以真实回环协议把 A 线提升为 Mihomo-client AnyTLS → Trojan detour，并在 Trojan 失效而 AnyTLS server/origin 仍存活时验证不绕过、不跨线。当前仍缺完整 import C++ golden、显式 chain profile 的运行闭环、真实远端双线路和 DNS 泄漏观测，不能把这些回环窄约束表述为任意节点、路由或 DNS 配置均已严格证明。
+### R-001 人工多入口数据模型与 UI（当前基本缺失）
 
-停止、重启、崩溃或退出过去会静默清空辅助端口 map，加载/UI 刷新也会修剪未知/损坏映射。接管工作树已改为仅显式映射操作可修改：字段类型错误、非字符串、损坏或重复项会让既有主配置原件保持不变并中止启动，同时生成可验证 quarantine 证据；显式启停/删除在原子保存失败时回滚内存且不 reload。仍缺可操作的修复 UI 与完整 ConfigBuilder C++ golden。
+现有 resolver 只保存 group 级 DoH 来源和 strict 生成策略，没有候选 IP、地址族、TTL、发现时间、诊断证据、用户固定入口和 active entry。
 
-### 主入口与专用端口的生成配置已验证，真实节点运行仍待验证
+整改安排：
 
-2026-07-28 已把原生 `2080` 恢复为普通 route 序列，并移除 `mixed-in -> proxy` 的无条件终结规则；定向配置导出回归由旧构建 14/15 失败转为重建后通过。随后专用端口改为 `sniff -> 仅该 inbound 的显式 reject/block -> 精确 chain terminal`；普通 direct、bypass、主线和其它 outbound 规则仍位于 terminal 之后。当前 18/18 配置 guard 已从隔离持久化 profile 生成主线路和辅助两跳 chain，并通过 core schema；双回环运行已启动 ProfileManager/ConfigBuilder 生成的 A AnyTLS + Trojan group front proxy 与 B HTTP 单跳，确认前置代理失败不绕过存活的 AnyTLS terminal/origin，且不影响另一端口。仍缺显式 chain profile、真实远端节点和普通 GUI 集成。
+1. 先冻结单一权威字段所有权及旧数据默认值；原始 domain、SNI、候选、诊断和固定入口分离；
+2. 增加序列化/复制/订阅刷新/删除 round-trip 测试；
+3. 实现只读候选刷新和分层诊断，证明不改变 active entry；
+4. 实现用户明确固定/解除，固定 IP 连接时保留原 SNI；
+5. 最后接 UI，显示 resolver 来源、endpoint、A/AAAA、时间和失败层级。
 
-### desired state 与真实 listener 非事务
+完成门：`PRODUCT.md` 4.3 六项操作闭环；断开 provider DoH 时无系统/公共 DNS fallback；刷新和诊断不改选择。
 
-辅助端口 map 目前可能在 reload 成功前保存；reload因锁、端口或 core 失败后，UI 与旧 listener 可能相反。需要 generation 的 desired/observed 状态与提交/回滚。
+### R-002 Resolver 端到端证据与订阅事务
 
-## P0：AnyTLS 组合兼容
+已确认源码事实：标准 GUI 生成路径会拒绝 legacy fallback/local-only 等非产品字段；受控 core 仍能从显式 raw config 表达其中一部分，而高级 `run/check` 是独立 CLI，不等同于普通 GUI 可绕过。订阅刷新虽已 parse/stage/validate，成功提交仍是多次文件写。尚未取得 provider outage 下的 DNS 抓取证据。
 
-2026-07-20 的历史 OpenWrt 对照中，AnyTLS（Mihomo client）单跳和相同 Trojan 单跳在三种 Mixed 协议均成功，但二者真实远端 detour 组合稳定 EOF。该轮旧探针为所有变体临时强制了 `auto_detect_interface=true`，所以只能支持“该共同条件下的远端组合问题”诊断，不能代表产品导出策略。提交 `f298d46` 已在 Windows 回环中用同版 core、产品生成的 Mihomo-client AnyTLS + Trojan group front proxy、两个独立 TLS server 和独立 origin 完成请求，并证明停止 Trojan 后不会绕过到仍存活的 AnyTLS server/origin。因此不能再把协议组合整体判为不兼容或做全局 validator 拒绝；真实远端仍须按 preserve 重跑，并继续对照服务器实现、TLS/SNI/ALPN、client broadcast、接口与 Clash Fake-IP 条件。任何特定失败都不得通过静默删除 detour 规避。
+整改安排：先补标准 GUI 生成配置的字段矩阵、provider outage 和 DNS 抓取；只有发现产品启动链确能带入非产品字段时，才在最窄入口补第二层校验。不要仅因高级 CLI 可读 raw config 就删除 fork 能力。订阅提交复用现有事务工具，形成 group + order + profiles 的一次原子结果；失败保留旧 group。
 
-AnyTLS client 继承还有保真缺口：显式 native、订阅继承和非法 custom 值可在链接/刷新间混淆。任意 1–128 ASCII custom client 也超出已验证范围。
+完成门：字段矩阵、provider outage、DNS 抓取和提交故障注入通过。
 
-## 历史候选：TUN 下重启/切线与 persistent Runtime（不再是核心发布门）
+### A-001 AnyTLS 全生命周期保真
 
-当前 `Start` 要求旧 instance 为空，`Stop` 会关闭整个 sing-box Box；内部 TUN、Mixed、DNS 和 outbounds 同时消失。上一阶段据此把 persistent Windows kill-switch 设为 P0，并禁止部分上游操作。该产品要求并未得到用户确认；现在应比较 NekoRay 4.0.1 行为，保留必要的所有权修复，审计并撤销额外限制。
+源码疑点：`ToShareLink()` 没有序列化 `inheritSubscriptionClient`，因此显式 native 与继承组默认可能生成同样链接；`TryParseLink()` 可把 `anytls_client_mode=subscription` 留在 Bean mode 中，而 `BuildCoreObjSingBox()` 只接受 native/mihomo/custom。上述尚缺专门失败回归。另有带日期的历史证据：真实远端 AnyTLS + Trojan 曾 EOF，而当前 Windows 回环同组合成功；两者只说明需要按同一配置重测，不能宣布协议组合天然不兼容。
 
-源码审计已确认当前没有真正的原地 reload：gRPC 的数据面变更仍只有 Start/Stop；`GetDaemonInfo` 只做精确实例握手，`ReconcileLifecycle` 是推进 ordering watermark 的进程内对账屏障，都不是 reload。Stop 会关闭整个 Box；Wintun、路由、DNS 与动态 WFP session 随 worker 消失，core 还会在 GUI 父进程退出后主动结束。标准内部 TUN 现强制 `strict_route=true` 并同时覆盖 IPv4/IPv6，旧 UI 字段只作为兼容数据保留；这只能收紧 worker 活动期，不能覆盖切换、崩溃或 GUI 退出空窗。
+整改安排：先补 native/Mihomo/继承三态的 Bean/JSON/链接/Clash round-trip 失败测试，再修序列化顺序和非法值处理；随后按默认 interface preserve 重跑真实单跳、group front proxy、显式 chain 和专用端口。
 
-本批修复了现有进程内生命周期的直接竞态：GUI 用 generation ticket 串行 Start/Stop/CrashCleanup，替代了“UI 线程加锁、worker 线程解锁”的非法 mutex 所有权；coordinator 在同一临界区同步 participating-mutation depth gate，旧 completion/失败获取不能清除新 owner 或 pending cleanup 的 fence。pending crash cleanup 由当前 transition 连续 handoff，不暴露普通操作可抢占的 idle 窗口，旧 Stop 未明确成功时也不再继续 Start。legacy gRPC `Call` 的完成通知原先还把 `QMutex` 当信号量，由一个线程 lock、另一个线程 unlock；现已改用 `QSemaphore` release/acquire，消除该跨线程同步未定义行为并保证响应写入在等待方可见。Start/Stop/Exit 还携带 GUI session 内单调 command sequence；Go lifecycle 在 phase 检查前推进最高序号，使同一 daemon 中较新的 Stop/Exit 能拒绝后来才取得 executor 的旧 Start。启动 candidate 的序列化配置、SHA-256 和受管 TUN 标志在最终 validator 后冻结，成功后不再从可能已变化的 UI 设置反推 worker 状态。daemon UUID/generation 与 profile-request generation 会拒绝旧 crash timer/ready event 操作新进程；queue 与 ready 判断现已原子化，daemon 已 ready 时直接生成 one-shot request，不再在 check→queue 窗口永久搁置。UI 先保留 ready 请求，busy 时等待 transition 排空，只有取得 Start ticket 后才一次消费；显式 Stop/退出、新的直接 user/reload Start 或 daemon stop 都会撤销旧排队/已发未消费请求。Go core 以 context-aware single-owner executor 串行 candidate 发布、Stop、dial、stats 和 Exit；等待准入的 RPC 可按服务端 deadline 退出，Start candidate 的取消与发布原子仲裁，旧 generation 或 Close 不确定形成的 blocked generation 均 fail closed。lifecycle protocol v3 又把精确 stopped Exit 收敛为结构化 `EXITING` ACK + `GracefulStop`，C++ 以 generation/UUID/PID 跟踪同一 QProcess finished。详见 [ADR 0010](architecture/decisions/0010-process-local-lifecycle-generation-fencing.md) 与 [ADR 0011](architecture/decisions/0011-daemon-identity-and-lifecycle-reconciliation.md)。
+完成门：新建、保存、编辑、复制、导入、订阅、分享和运行均可逆；组合失败不删除 chain 或静默降级。
 
-这些 fence 全都位于 GUI/core 进程内，没有建立独立 `RuntimeStateMachine`、Windows service、stable anchor 或 persistent WFP。GUI/父进程死亡仍会带走 core 与当前数据面；它们不能证明 TUN 下重启/切线合格。
+### P-001 专用端口分配体验与冲突语义
 
-旧 GUI 把日志文本直接当 ready，而且只检查 stdout；Go `log.Printf` 默认写 stderr，所以真实 GUI 启动可能一直不发送 profile Start，表现为主 Mixed 从未监听。现行实现同时读取 stdout/stderr，但日志只作为 `GetDaemonInfo` 探测提示；只有 UUID/协议版本 3 精确回显才发布 ready，并对同一实例去重为一条有界重试链。完整 package 新增的 raw QProcess/Qt HTTP/2 gate 直接验证 core 握手与 Exit 协议，但不调用 GUI 的 `Client`/ready 状态机；因此该控制面修复仍缺真实 GUI→Client 握手证据，也不证明 profile 线路健康。
+源码事实：首次建立映射时，UI 扫描配置池，池耗尽后最多随机尝试 32 个当前空闲端口；用户不能直接编辑目标端口。这里还没有“用户已选端口”，因此不能把首次建议直接判定为冲突后的 `try-next`。端口范围、建议方式和 UI 布局本来就在 `PRODUCT.md` 第 13 节待定。
 
-当前 UI 已把 `spmode_vpn`（用户期望）与 `running_internal_tun`/外置 worker PID（worker 观测）分开显示，并记录成功或不确定 candidate 的 transition generation、QProcess daemon generation、精确 UUID 与 config SHA-256；可明确暴露“requested; inactive”“ACTIVE; stop incomplete”和 indeterminate。受管 TUN observed 值来自最终通过校验的 candidate，而不是 RPC 完成后重新读取 mutable UI。每次 RPC 都冻结并携带目标 daemon UUID；新 daemon 会在 handler 前拒绝旧身份，不再用本地 generation 上界猜测接收者。Start/Stop 应用错误或 transport 失败后，GUI 只向同一 UUID 发出更高 sequence 的 `ReconcileLifecycle` 屏障；只有精确 target outcome、config hash、phase 与 active sequence 一致时才收敛，否则保留 indeterminate。这里的 `ACTIVE`/`STOPPED` 只描述该 daemon 内存中的 `managedCore`，不证明 Windows 接口、路由、Mixed、TUN 或 WFP 事实。Start 已应答但 readiness 在最终 UI commit 前丢失时也显式进入 indeterminate。TrafficLooper binding 只在成功 UI commit 后发布。core 崩溃只重启空控制 core，并保留期望值但不自动恢复 profile/TUN；这避免隐式启用，却会让实际 TUN/保护随 worker 消失，仍是 P0。
+整改安排：用户确认体验前不改分配策略。先建立两个不变量回归：已持久化的端口被占用时必须精确失败且不得换号；首次分配的结果必须在保存前显示并通过 range/duplicate/in-use 检查。是否保留随机建议、是否改为可编辑或仅限配置池，见 `DECISIONS_NEEDED.md`。
 
-`DataStore::core_running` 与 `prepare_exit` 的跨线程访问现已改为 atomic bool；CoreProcess 也不再跨线程读取 `spmode_vpn` 来决定恢复，异常退出统一记录“empty core，不恢复 profile/system proxy/TUN”。退出/重启链会等待同一 UUID 的 Stop completion 或精确 stopped 对账：失败、blocked、superseded、字段不一致或 unknown 时不发送 Exit/quit GUI，而是在 UI 线程撤销 `prepare_exit`/save freeze、恢复 hotkey/control 并保留 observed runtime。Stop 已确定后，协议 v3 Exit 只允许精确 `STOPPED` 原子进入 `EXITING`，返回同一 UUID/sequence/watermark 的 `EXIT/SUCCEEDED` ACK，再由 handler 外 one-shot `GracefulStop` 结束 server；active/blocked 不会隐式 Stop。GUI 发送前冻结 `{QProcess generation, UUID, PID}`，ACK 后按 10 秒报告间隔持续等待同一进程的 `NormalExit/0`，等待期间不 kill/replacement；重复退出由 continuation fence 拦截。ACK 不可用时只在更高序号对账精确证明 `STOPPED/FENCED_NOT_ADMITTED` 后恢复控制，否则即使 server 已不可连接也保持 fence 并继续等 finished，避免把已提交的 Exit 当成失败。协议 v3 让 GUI 发送的 `grpc-timeout` 比本地 abort 提前 250 ms，并让 Go single-owner executor 在准入前感知 context；Start candidate 也能在发布前被取消并清理。它仍不能中断已准入的 Stop/Close，且对账再次超时或 `GracefulStop` 等待在途 handler 时仍为 unknown。tracker 单测覆盖 finished-before/after-wait；完整无 Skip package 还运行安全 raw QProcess/Qt HTTP/2 gate，但它不调用产品 Client/MainWindow、无 listener/TUN，只快照常见 WinINet 五键，不能证明 GUI crash→commit、ACK 丢失、Windows 路由/DNS/TUN/WFP 或生产资源退出。
+完成门：保存与启动前使用同一校验；冲突不写映射、不启动、不换端口。
 
-Windows GUI 已忽略 CRT `SIGTERM`/`SIGINT`，不再让这两个控制台信号调用不安全的 Qt 回调并绕过退出 guard。该修复只关闭一个窄入口：任务管理器/`TerminateProcess`、崩溃、系统关机、父 GUI 消失导致 core 自退和动态 WFP 消失仍未解决，因此不能据此声称退出语义合格。
+### P-002 listener 启动失败隔离与可解释状态
 
-Go helper 过去在 instance 为空时回落系统 TCP/HTTP，UDP 永远使用系统网络；接管工作树已把这些路径改为明确失败。本批又把普通 core reference/HTTP client 绑定到 generation，禁用跨代 HTTP keep-alive，并在 candidate 清理或 active Close 失败时保留 blocked 状态、拒绝后续 Start/dial/stats/Exit。该补丁只消除进程内 fail-open/竞态，不替代持久保护层。
+新增/删除映射会先在内存中构建候选；候选 chain 构建失败时会回滚且不保存。候选通过后才保存 desired mapping，再用整 Box Stop/Start 生效。端口预检与实际 bind 之间仍有竞态；若 bind 或启动阶段失败，旧 Box 已可能停止，磁盘 desired state 与实际 running state 也可能不一致。
 
-Windows legacy 外置 TUN launcher 过去只把 `vpn_pid` 设为占位值，停止时按映像名批量 `taskkill nekobox_core.exe`，可能误杀其它安装。接管工作树已禁止该 Windows 启停路径且不删除其配置数据；当前只能使用默认内部 TUN，直到 Runtime Service 能持有精确句柄、PID、路径与 generation。
+整改安排：先增加“两条已运行 + 第三端口冲突”的失败回归，固定旧 listener 必须继续工作的产品结果；再调查 sing-box 能否在当前 wrapper 内安全 reload。若不能，不得自行引入第二 runtime/service，应提出最小可逆方案和明确限制供用户决定。
 
-无令牌的 `-flag_restart_tun_on` 解析、生成和启动时自动启用均已删除。非管理员进程只会提示用户自行以管理员身份重启并再次手动启用，不再把自动连续流程伪装成精准手动操作。
+完成门：listener 启动失败只影响该变更，既有端口绑定和运行线路保持；状态能区分 desired、validated、running 和 failure。
 
-sing-box 的 Mixed/HTTP inbound 原生支持 `set_system_proxy=true`，并会在 listener Start/Close 时自动写入/清理 Windows 代理。最终配置现全局拒绝该字段为 true；受管 TUN 必须与完整生成对象相同，并保留上游 `auto_detect_interface=dataStore->spmode_vpn`，不得出现 `route.default_interface`，也不得由 outbound/endpoint/DNS/NTP 或嵌套 route `action=direct` dialer 覆盖 bind-address/interface。validator 还拒绝系统 WireGuard/Tailscale endpoint 与 NTP 写系统时钟。test 路径同样遵循上游 TUN 意图，文件 export 删除接口自动检测字段；没有本机双 TUN 特例。`internal-full` 在产品 TUN 或辅助并发运行时拒绝、在 latency/full-test 中拒绝；文件导出只有通过同一 OS 副作用 guard 才允许。`test/test_final_config_guards.ps1` 已覆盖其中一部分导出拒绝分支，但仍缺 live/test 的 TUN on/off 四象限、export 删除边界和上述 dialer 路径的完整 C++ golden；并应在受控 core fork 中编译期禁用 Windows 自动系统代理副作用。
+## P1：过度阻止项专项审计
 
-没有独立 WFP 过滤层时不能证明“全机永不直连”，但本项目并未确认需要承担这一全局承诺。持久 Windows Runtime Service、稳定 TUN/Mixed anchor 与 WFP kill-switch 只保留为历史候选；未经用户另行确认不得继续作为 P0 扩建。已有 UUID、executor 和对账代码只按实际竞态收益与上游兼容性决定保留、简化或回退。
+### 审计原则
 
-## P0：Windows 系统代理所有权未实现
+每个 guard 必须记录：引入 commit、上游行为、真实风险复现、产品条目、最小替代和回归测试。仅有“可能直连”“更安全”或“当前架构不好处理”不足以永久禁用上游功能。
 
-legacy WinINet helper 不返回可靠结果，也没有保存完整 PAC/proxy/bypass 快照、compare-and-restore、SID owner 或启动后真实状态回读；其 Clear 还会把既有代理设置直接改成 `DIRECT`。接管工作树因此已让 Windows UI 在任何系统代理状态变化前明确拒绝，不调用该 helper。该功能当前不可用但不会误写 OS；只有按 SID 的 broker、原子快照、当前值所有权比较和写后回读完成后才能重新启用。
+### 已确认应保留的局部 guard
 
-## P1：NekoRay 功能回归
+| 作用域 | 保留原因 |
+|---|---|
+| provider resolver 禁止本机/公共 DNS fallback | `PRODUCT.md` 3.2、4.1 明确要求 |
+| 专用并发端口禁止跨线、direct/bypass fallback | `PRODUCT.md` 3.2、6.2 明确要求 |
+| 已持久化端口的范围、重复和占用冲突失败 | 产品要求明确；不得在启动/重载失败后自动换号。首次端口建议方式仍待决定 |
+| 未知/损坏数据不覆盖、事务 pending 时阻止 mutation | 防止真实数据损坏，且保留显式恢复路径 |
+| 不精确的 legacy Windows 按进程名批量 kill | 可能结束其它安装；只能恢复精确所有权路径 |
+| core instance 为空时内部 helper 不回落系统网络 | 防止本应走已选 outbound 的内部调用 fail-open |
 
-- GeoSite/GeoIP 自动完成控件仍在，但数据源被清空；需对现用 `.db` 重建读取或明确移除空 UI。
-- URL Test 已恢复为通过显式有界临时配置测试所选线路；产品 TUN 已 requested 或内部 worker 活动时都会拒绝新测试，测试未结束时也拒绝启 TUN，避免异步转换窗口把测试流量捕获到错误线路。超时/取消只发请求，直到实际 worker/RPC 退出前仍保持测试活动标记。TCP Ping 因直接打开系统 socket、不能证明所选线路而在 GUI/core 两层禁用。
-- sniffing 的旧 destination/routing 模式差异被压成同一动作。
-- 上游文档/帮助入口被隐藏；私人分支应指向本地文档，而不是消失。
-- MultiMapper 专用平台不进入产品，但其来源/候选/固定入口思想是明确参考。旧 **Resolve domain** 当前只显示禁用原因；后续要实现的是 provider-aware、保留原始域名/SNI、诊断不自动改选的人工多入口闭环。
+### 已确认错误或待恢复
 
-## P1：构建与测试可信度
+| 编号 | 当前阻止 | 判断 | 下一步 |
+|---|---|---|---|
+| G-001 | 域名不能导出 `server:port:user:pass` | 已修复 | 补 GUI 剪贴板测试 |
+| G-002 | TCP Ping 全局禁用 | 已修复 | 补真实 GUI/网络路径说明 |
+| U-002 | external-core/Naive/custom external 全局禁用 | 明确上游回归 | 分层恢复数据模型与普通运行 |
+| U-003 | GeoSite 自动完成、在线更新和手工系统代理被禁用/删除 | 源码差异已确认，实际行为待分项复现 | 分开建立回归，不预设新 broker/service 架构 |
+| U-004 | profile reorder、非空 group 删除 | 功能回归但旧实现确有半删除风险 | 复用现有事务做局部安全实现 |
+| U-005 | internal TUN 活动时禁止切线、删除、辅助端口变更、退出 | 基于已取消的 persistent WFP 产品前提，是否全部错误尚待逐项复现 | 对照 `adef6cd` 建四象限测试后逐条移除或缩窄 |
+| U-006 | TUN requested/active 时禁止 URL/Full Test，`internal-full` 多处拒绝 | 可能有测错线路/OS 副作用风险，但当前限制面大于产品契约 | 区分“结果标签不准确”和“真实 OS 副作用”，建立最小测试后决定 |
+| U-007 | 旧 Resolve Domain 全局禁用 | 暂停永久改写域名是合理止损，但不能长期替代 R-001 | 不恢复破坏性旧动作，完成新人工多入口闭环 |
 
-- 首个 Windows-only CI 已建立，覆盖仓库卫生、固定子模块、受控 RouteFluent core 源构建、两个 Go 模块普通测试和 OpenWrt verifier 的无侵入安全契约；它尚不构建 GUI，也不验证 TUN/WFP、系统代理 broker 或切线。本地 CTest 现为 5 项纯测试，包含配置恢复、runtime tracker、分享格式、辅助路由编译和 resolver policy。真实 core gate 故意不注册到 CTest，而由完整无 Skip package 运行。直接运行测试必须把项目 MinGW `bin` 加入 `PATH`，否则缺失运行库可能以 `0xC0000135` 或 CTest 超时呈现。Go 除 nil-config、system-fallback 和 FullTest 窄回归外，覆盖 lifecycle candidate 发布/取消/清理、deadline 准入 fence、blocked Close、跨代 reference/HTTP client、dial/stats 与 Stop 串行、并发 Start、Exit v3/对账和真实 localhost gRPC ACK→GracefulStop 测试；generation-bound HTTP transport 另覆盖禁用 keep-alive。core 的 count=20/race/vet 与 `grpc_server` 的普通/race/vet 均通过。仍没有完整 ProfileManager/import C++ golden。PowerShell 最终配置 guard 为 18/18，并覆盖隔离 ProfileManager/ConfigBuilder 辅助 chain 生成；它不是完整 C++ golden 或 Windows 运行矩阵，整体覆盖仍有限。
-- Go modules 已改为引用固定提交的 `third_party/libneko` 子模块，仓库外源码不再能无 diff 改变产物。该依赖仍公开 system dial API，虽当前无调用且 setup 已 fail-closed 覆盖，发布前仍需静态禁止危险 API并记录依赖许可证/SBOM。
-- core 的 `Start`/`Stop`/stats/dial/Exit 现已有 Go 侧 context-aware single-owner executor 与 generation-bound reference，GUI Start/Stop 也有单一 transition ticket。每代 daemon 的 UUID、协议 v3 握手和全 RPC identity header 封住跨重启误投；session-local command sequence 与对账 barrier 封住 handler 反超，并记录 target outcome/config hash。Exit 另有结构化 `EXITING` ACK、`GracefulStop`、generation/UUID/PID finished tracker 和 continuation fence。服务端 deadline 可让等待准入的命令退出，Start 的取消/发布也已原子化；但已准入 Stop/Close、对账再次超时和 Exit 不确定等待仍不是通用可回滚事务。系统仍没有 desired/observed/owner/health RuntimeStateMachine、持久 journal、stable anchor、独立 OS 事实源或 GUI/父进程死亡与真实 TUN/WFP 集成测试。
-- 普通 GUI 使用 localhost、每个 GUI session 随机令牌的 gRPC，不能无令牌任意调用；token 在该会话内 daemon 重启时沿用，而每次启动的新 UUID 只提供实例 fence，并非配置授权或持久 runtime owner。旧 GUI/core 协议组合会 fail closed。Go `Start` 尚未重复 C++ ConfigBuilder 的 Mixed/TUN/系统代理/resolver 产品策略。`nekobox_core run/check` 又是显式高级 CLI，可直接读取 sing-box 配置并被测试工具使用。两者应准确视为 core 信任边界与纵深防御缺口，不应误写成普通 GUI 功能可任意绕过，也不能把 `check` 成功当成产品策略通过。
-- 打包 manifest 由独立 sing-box 构建生成，不能单独证明最终 `nekobox_core.exe` wrapper。`-SkipGoBuild`/`-SkipGuiBuild` 仍可能产生混合版本的诊断 package 目录，所以脚本会跳过真实 core Exit gate，且不会创建或覆盖正式 zip；只有无 Skip 流程才允许生成 archive。
-- 干净构建仍依赖仓库外 Qt/MinGW/预构建库；libneko 已锁定为仓内子模块。
-- 本机增量构建和 OpenWrt协议测试不能替代 Windows TUN/WFP验收。
+禁止通过一个“大撤 guard”提交处理 U-004 至 U-007；每项都必须有独立前后证据。
 
-当前接管验证已完成一次不带 Skip 参数、先受保护地清空并重建 GUI build tree 的本地完整打包，tracker、分享格式、resolver policy 与 raw real-core Exit gate 均通过，且没有遗留手工诊断产物。`build-package-windows64/nekobox.exe` 与 `deployment/windows64/nekobox.exe` 的 SHA-256 均为 `3E918885EBB20D0A00FF04FD43E16841E5C0453CCD324C6F5EDE2BB3C3EBB43D`；core 只输出到 `deployment/windows64/nekobox_core.exe`，SHA-256 为 `F545DC44627B83DAF49786F3403ED9E464783D71E6917CE06FDFFC0E147D09E5`，clean build tree 中没有另一份 core。zip SHA-256 为 `86F3CD775DFF03B13FF6A66DC225FFA1BDDA0B919D504542384C0D743CFBC306`，package RouteFluent manifest SHA-256 为 `28100CC9F77DE340A3B76A873E476B8EA9D4ECB115B1BA347FFF57345184760A`。这些值仅是本地审计快照；deployment/zip 被忽略，且尚无独立干净工具链、release manifest 或 Windows 集成验收，不能作为交付证据。
+## P1：数据与恢复
 
-其它无侵入回归为：配置保留/隔离/显式恢复/事务阻断 10/10、OpenWrt helper Python 单测 19/19、本地 Mixed fixture 7/7；runtime connectivity 的 204 正例通过，错误期望 200 被正确拒绝。它们不覆盖真实 Windows TUN/WFP/退出/切线。
+### D-001 订阅/批量操作原子提交
 
-已修复：打包不再自动关闭/强杀运行实例，`ReferenceDir` 默认空，空 fallback 路径异常已修复。共享护栏只接受本地固定磁盘盘符路径，拒绝生产根、UNC/设备命名空间、网络映射/可移动盘、SUBST/DOS 重定向、8.3/ADS 与 ReparsePoint/junction，并比对与 `D:` 相同物理卷的盘符别名；持久写入树还会扫描 reparse descendants。它仍未通过最终句柄证明 final-file identity，不能识别所有 hardlink 等同文件别名。陈旧 package preserve 目录会在任何 package 修改前 fail-closed 并保留，只恢复本次运行拥有的备份；完整打包前仍需手动停止目标 deployment 实例，因为脚本会 fail-fast。
+单文件保存、部分创建/删除/移动已有 durable intent 和回滚，但订阅、非空 group 删除、批量 reorder 尚未形成一次可恢复提交。优先复用现有 `ConfigTransaction`，避免再建第二事务框架。
 
-## P2：遥测快照与并发一致性
+### D-002 GUI 恢复与未知数据可见性
 
-`TrafficData::last_update` 过去未初始化，现已显式设为 `0`，消除了首次速率计算读取不确定值的未定义行为。generation-local `TrafficBinding` 也已把 profile id/outbound tag 从共享对象中移出，避免 ConfigBuilder 改写运行中路由身份。
+unknown/quarantine 文件被保留且 ID 不复用，但用户在 GUI 中看不到内容和恢复动作。应提供只读报告、导出原件和用户明确恢复/删除入口；不得自动猜测类型。
 
-这不等于统计并发已经解决：`TrafficLooper` worker 仍会写 `downlink`、`uplink`、rate 与 `last_update`，而 UI 的 `DisplaySpeed`/`DisplayTraffic`、Reset 和 JsonStore 路径可无同一锁读取或写入这些字段。当前共享 `TrafficData` 没有完整不可变快照、原子字段集合或统一锁，仍存在真实 C++ 数据竞态与撕裂读风险。后续应在 UI 发布按值遥测快照，或定义覆盖 worker/UI/持久化访问的明确同步协议，并增加 ThreadSanitizer/并发单测；这是 P2 后续项，不得因 `TrafficBinding` 已落地而写成完成。
+### D-003 保存失败一致性
+
+route/settings/hotkey 和部分 UI 状态仍可能在磁盘保存失败后保留新的内存值。逐路径建立失败注入，要求内存回滚或明确 indeterminate，不做全局重写。
+
+## P2：并发与工程质量
+
+- **C-001 TrafficData**：counter/rate/`last_update` 在 worker、UI、Reset 和 JsonStore 之间无统一同步；采用按值快照或明确锁协议并补并发测试。
+- **C-002 BuildModelSnapshot**：ConfigBuilder 与订阅已有局部 CAS/冻结，但没有完整模型 revision；先收集真实竞态再决定最小同步范围。
+- **C-003 core 边界复核**：先证明普通 GUI Start 存在可绕过 C++ 最终配置 guard 的路径；只有该复现成立，才在 Go 侧重复对应的窄不变量。高级 CLI 保持显式 raw-config 工具边界，不扩张成全局策略平台。
+- **C-004 构建 provenance**：建立同一版本源、当前源码的完整无 Skip package、二进制 manifest、许可证/SBOM 和干净 Windows 重建。
+
+## 待用户审核的下一阶段工作包
+
+以下只是安排，不代表已获准开始；每个工作包单独验证、提交并推送当前任务分支，不跨包混改：
+
+| 顺序 | 工作包 | 目标与证据 | 明确不做 |
+|---|---|---|---|
+| C0 | 当前审计检查点 | 固化 G-001/G-002、产品/文档纠偏、Clash no-touch 约束和当前验证结果，并推送远端任务分支 | 不执行 GUI/TUN/系统网络测试 |
+| W1（建议下一项） | U-001a：SOCKS base64 userinfo 兼容 | 先用 `adef6cd` 脱敏样本证明当前失败，再只恢复 SOCKS parser/serializer 的最短 round-trip；纯本地测试 | 不同时恢复 VMess、Shadowsocks、external-core，不访问网络 |
+| W2 | U-001b/c：VMess v2rayN 与 Shadowsocks/v2ray-plugin | 两种格式各自建立失败 fixture、字段保真和错误输入测试，各自独立提交 | 不因名称含 `v2ray` 恢复 Xray runtime |
+| W3 | R-001a：人工多入口字段契约 | 只冻结原始 domain、SNI、resolver 来源、候选、诊断、固定入口的单一所有权和旧数据行为，先写 round-trip 测试 | 不做自动择优、DNS fallback 或 UI 大改 |
+| W4 | E-001：隔离环境方案 | 只读能力盘点并形成 Windows VM/沙盒方案；用户二次审核后才创建 | 不停止/改写 Clash，不改变宿主网络，不用 WSL 冒充 Windows TUN |
+| W5 | 逐项恢复 U-002/U-003 | external-core/Naive/schema 与普通上游能力按数据→UI→执行分层恢复；GeoSite、更新、系统代理拆成独立工作包 | 不与 AnyTLS/resolver/端口生命周期混改 |
+| W6 | 三项核心闭环 | 依次推进 R-001/R-002、A-001、P-001/P-002；涉及 Windows TUN 的 U-005/U-006 必须等 E-001 可用 | 不引入第二 runtime、persistent service/WFP 或全局 fallback |
+| W7 | 数据、并发与交付 | D-001..D-003、C-001/C-002，最后做同轮完整 package、旧配置迁移、真实 GUI/线路和分层网络矩阵 | 不用旧二进制或低层测试代替交付证据 |
+
+推荐先执行 W1：它与本轮分享格式审计同域、改动面最小、可完全离线验证，也不会受本机 Clash/TUN 环境影响。W4 可在后续作为独立的只读规划包推进，但隔离环境创建和任何 Windows 网络测试必须再次经过用户审核。
+
+任何步骤若需要自动择优、全局 fallback、persistent service/WFP、第二数据模型或不可逆迁移，必须停止并请求用户决定。

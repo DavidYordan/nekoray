@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -126,6 +127,43 @@ func TestIsolatedTestsRequireExplicitBoundedConfig(t *testing.T) {
 				t.Fatalf("expected %q, got %#v", test.want, response)
 			}
 		})
+	}
+}
+
+func TestTcpPingUsesExplicitSystemReachabilityDiagnostic(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen on loopback: %v", err)
+	}
+	defer listener.Close()
+
+	accepted := make(chan error, 1)
+	go func() {
+		connection, acceptErr := listener.Accept()
+		if acceptErr == nil {
+			acceptErr = connection.Close()
+		}
+		accepted <- acceptErr
+	}()
+
+	response, rpcErr := (&server{}).Test(context.Background(), &gen.TestReq{
+		Mode:    gen.TestMode_TcpPing,
+		Address: listener.Addr().String(),
+		Timeout: 1000,
+	})
+	if rpcErr != nil {
+		t.Fatalf("unexpected RPC error: %v", rpcErr)
+	}
+	if response == nil || response.Error != "" || response.Ms < 0 {
+		t.Fatalf("unexpected TCP Ping response: %#v", response)
+	}
+	select {
+	case acceptErr := <-accepted:
+		if acceptErr != nil {
+			t.Fatalf("accept loopback TCP Ping: %v", acceptErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("TCP Ping did not reach the loopback listener")
 	}
 }
 

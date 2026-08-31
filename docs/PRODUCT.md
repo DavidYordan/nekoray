@@ -1,7 +1,7 @@
 # NekoRay 私人分支：产品方向与开发契约
 
 状态：**现行，后续开发的唯一产品范围源**
-最后更新：2026-07-27
+最后更新：2026-08-31
 上游比较基线：NekoRay 4.0.1，commit `adef6cd`
 
 ## 0. 文档权威性
@@ -58,6 +58,7 @@
 
 - 不根据延迟、地理位置、晚高峰表现、单次失败或所谓健康评分自动换入口、换线路或换 resolver 类别。
 - 诊断只提供证据；最终选择由用户明确操作。
+- TCP Ping 保留为上游的 server 直连可达性诊断：它通过当前操作系统网络路径连接 profile 的 server，域名可能由当前系统网络环境解析；它不代表所选代理 outbound 的 URL Test。UI 和文档必须明确两者差异，结果只作为诊断证据，不得自动改入口或线路。
 - 专线入口并不恒定优于公网入口，公网入口也不能被永久视为降级项。
 - 自动回退、自动轮询、自动负载均衡和“最佳 IP”不是默认行为。
 
@@ -85,6 +86,15 @@ NekoRay 4.0.1 的协议、profile/group 数据、导入导出、分享、路由�
 - 名称中含 `v2ray` 的数据结构、文件或辅助函数。
 
 旧能力与新需求真实冲突时，先给出复现、兼容方案和数据迁移方案，再做最小修改。暂不能支持某一组合时，保留数据并给出精确错误。
+
+### 3.4 本机基础网络与 TUN 验证边界
+
+- 当前开发主机依赖 Clash TUN 联网。它是不属于本项目、不可中断的外部基础网络，必须始终保持运行。
+- 本项目、agent、构建和测试不得停止、重启、结束或接管 Clash 进程，也不得改写其配置、接口、Fake-IP、DNS、路由或其它 Windows 网络状态。不能把“申请维护窗口停掉 Clash”当作补证据方案。
+- 当前主机只执行不改变网络状态的静态检查、构建、纯逻辑、loopback 和只读快照。若项目 TUN 与 Clash 的叠加使结果无法归因，应明确记录环境限制并转移验证，不得把本机特例写入产品默认。
+- WSL 可用于 Linux core、配置生成、协议和隔离 loopback 证据，但不能证明 Windows Wintun、系统代理、WFP、驱动、GUI 生命周期或双 TUN 行为。OpenWrt 证据有同样的 Windows 边界。
+- 需要启停本项目 TUN、注入网卡/路由/DNS 故障或验证 Windows 专属行为时，应使用独立 Windows VM、Windows 沙盒或其它与本机 Clash 解耦的 Windows 测试环境，并分别记录快照、网络拓扑、进程所有权和恢复结果。
+- 没有合格隔离环境时，相应层级保持“未验证”；低层 fixture、WSL、OpenWrt 或本机 Clash 叠加环境的成功不能替代 Windows TUN 验收。
 
 ## 4. 核心能力一：订阅 resolver 与多入口管理
 
@@ -191,9 +201,9 @@ DoH endpoint 自身为域名时，可以由 NekoRay 原生 bootstrap resolver �
 
 - 多选复制原生链接；
 - 只移除 URI fragment/remark 的原生链接；
-- 对可无歧义表达的 SOCKS5/非 TLS HTTP profile 导出严格的 `ip:port:user:pass`。
+- 对可无歧义表达的 SOCKS5/非 TLS HTTP profile 导出 `server:port:user:pass` 四字段文本。`server` 必须直接取 profile 的原始 `serverAddress`，不能取 profile 名称/remark，也不能替换成诊断得到的候选 IP；它可为字面 IPv4、域名或不含分隔符的主机名，导出不得调用 DNS。IPv6 因冒号与字段分隔符冲突，在没有另行确认转义规则前明确拒绝。
 
-批量转换全有或全无；失败不改变剪贴板。不得为分享调用 DNS，也不得把凭据写入日志、测试快照或错误详情。
+批量转换全有或全无；失败不改变剪贴板。server 为空或包含冒号/空白字符时拒绝；username/password 缺失或包含冒号/换行时拒绝。不得为分享调用 DNS，也不得把凭据写入日志、测试快照或错误详情。
 
 其它便利功能必须同样满足：需求明确、实现局部、不会改变线路运行语义。
 
@@ -287,7 +297,7 @@ MultiMapper 是过渡性探索项目。它证明了问题真实存在，也提�
 
 ### D. 明确回归，应恢复或修正
 
-- 删除/禁用 external-core、Naive、非 Xray 分享与插件兼容、GeoSite/URL Test 等上游能力；
+- 删除/禁用 external-core、Naive、非 Xray 分享与插件兼容、GeoSite 自动完成、在线更新、手工系统代理等上游能力；URL Test 与 TCP Ping 当前均应保留，但二者的路径语义必须明确区分；
 - 仅因名字含 `v2ray` 而删除格式或组件；
 - 用无条件 `2080 -> main outbound` 规则遮蔽 NekoRay 原生路由；
 - 把诊断、测试机网络或 Clash TUN 特例写入产品默认；

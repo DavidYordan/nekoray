@@ -1,6 +1,6 @@
 #include "ShareFormats.hpp"
 
-#include <QHostAddress>
+#include <QStringList>
 
 namespace NekoGui_fmt {
     ShareFormatResult ShareLinkWithoutRemark(const QString& nativeLink) {
@@ -15,7 +15,7 @@ namespace NekoGui_fmt {
         return {result, ShareFormatError::None};
     }
 
-    ShareFormatResult IpPortUserPass(
+    ShareFormatResult ServerPortUserPass(
         CredentialProxyKind kind,
         const QString& serverAddress,
         int serverPort,
@@ -28,10 +28,15 @@ namespace NekoGui_fmt {
         if (transportUsesTls) {
             return {{}, ShareFormatError::TlsWouldBeLost};
         }
-        QHostAddress address;
-        if (!address.setAddress(serverAddress) ||
-            address.protocol() != QAbstractSocket::IPv4Protocol) {
-            return {{}, ShareFormatError::AddressIsNotLiteralIpv4};
+        auto ambiguousServer = serverAddress.isEmpty() || serverAddress.contains(':');
+        for (const auto character: serverAddress) {
+            if (character.isSpace()) {
+                ambiguousServer = true;
+                break;
+            }
+        }
+        if (ambiguousServer) {
+            return {{}, ShareFormatError::AmbiguousServerAddress};
         }
         if (serverPort < 1 || serverPort > 65535) {
             return {{}, ShareFormatError::InvalidPort};
@@ -46,11 +51,12 @@ namespace NekoGui_fmt {
             return {{}, ShareFormatError::AmbiguousCredentials};
         }
         return {
-            QStringLiteral("%1:%2:%3:%4")
-                .arg(address.toString())
-                .arg(serverPort)
-                .arg(username)
-                .arg(password),
+            QStringList{
+                serverAddress,
+                QString::number(serverPort),
+                username,
+                password,
+            }.join(':'),
             ShareFormatError::None,
         };
     }
@@ -65,8 +71,8 @@ namespace NekoGui_fmt {
             return QStringLiteral("only SOCKS5 and HTTP profiles support this format");
         case ShareFormatError::TlsWouldBeLost:
             return QStringLiteral("the profile uses TLS, which this format cannot represent");
-        case ShareFormatError::AddressIsNotLiteralIpv4:
-            return QStringLiteral("the server is not a literal IPv4 address; DNS and IPv6 conversion are forbidden");
+        case ShareFormatError::AmbiguousServerAddress:
+            return QStringLiteral("the server field is empty or contains whitespace, a colon, or a line break; IPv6 cannot be represented unambiguously by this format");
         case ShareFormatError::InvalidPort:
             return QStringLiteral("the server port is outside 1-65535");
         case ShareFormatError::MissingCredentials:

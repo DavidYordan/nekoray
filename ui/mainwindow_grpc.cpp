@@ -199,12 +199,14 @@ namespace {
             QByteArray profileFingerprint_,
             QByteArray beanFingerprint_,
             QByteArray generatedConfigFingerprint_,
+            bool validatesGeneratedConfig_,
             libcore::TestReq request_)
             : profileId(profileId_),
               profileIdentity(std::move(profileIdentity_)),
               profileFingerprint(std::move(profileFingerprint_)),
               beanFingerprint(std::move(beanFingerprint_)),
               generatedConfigFingerprint(std::move(generatedConfigFingerprint_)),
+              validatesGeneratedConfig(validatesGeneratedConfig_),
               request(std::move(request_)) {}
 
         const int profileId;
@@ -212,6 +214,7 @@ namespace {
         const QByteArray profileFingerprint;
         const QByteArray beanFingerprint;
         const QByteArray generatedConfigFingerprint;
+        const bool validatesGeneratedConfig;
         const libcore::TestReq request;
     };
 
@@ -269,12 +272,14 @@ namespace {
             return mismatch(QStringLiteral("profile configuration changed"));
         }
 
-        const auto currentConfig = NekoGui::BuildConfig(current, true, false);
-        if (currentConfig == nullptr || !currentConfig->error.isEmpty()) {
-            return mismatch(QStringLiteral("effective test configuration is no longer valid"));
-        }
-        if (speedtestJsonFingerprint(currentConfig->coreConfig) != job->generatedConfigFingerprint) {
-            return mismatch(QStringLiteral("effective test configuration changed"));
+        if (job->validatesGeneratedConfig) {
+            const auto currentConfig = NekoGui::BuildConfig(current, true, false);
+            if (currentConfig == nullptr || !currentConfig->error.isEmpty()) {
+                return mismatch(QStringLiteral("effective test configuration is no longer valid"));
+            }
+            if (speedtestJsonFingerprint(currentConfig->coreConfig) != job->generatedConfigFingerprint) {
+                return mismatch(QStringLiteral("effective test configuration changed"));
+            }
         }
         return current;
     }
@@ -349,24 +354,23 @@ void MainWindow::speedtest_current_group(int mode, bool test_group) {
     if (profiles.isEmpty()) return;
     auto group = NekoGui::profileManager->CurrentGroup();
     if (group->archive) return;
-    if (NekoGui::dataStore->spmode_vpn || isInternalTunActive()) {
+#ifndef NKR_NO_GRPC
+    const auto usesIsolatedCore = mode == libcore::UrlTest || mode == libcore::FullTest;
+    if (usesIsolatedCore &&
+        (NekoGui::dataStore->spmode_vpn || isInternalTunActive())) {
         MessageBoxWarning(
             software_name,
             tr("Isolated profile tests are disabled while this project's Tun is requested or its worker is active because the temporary test socket could be captured and measured through the wrong line."));
-        return;
-    }
-
-#ifndef NKR_NO_GRPC
-    if (mode == libcore::TcpPing) {
-        MessageBoxWarning(
-            software_name,
-            tr("TCP Ping is disabled because it uses a direct system socket and does not test the selected proxy line. Use URL Test instead."));
         return;
     }
 #endif
 
 #ifndef NKR_NO_GRPC
     QStringList full_test_flags;
+    if (mode == libcore::TcpPing) {
+        MW_show_log(tr(
+            "TCP Ping tests direct server reachability through the current Windows network path; it does not use the selected proxy outbound."));
+    }
     if (mode == libcore::FullTest) {
         auto w = new QDialog(this);
         auto layout = new QVBoxLayout(w);
@@ -408,7 +412,8 @@ void MainWindow::speedtest_current_group(int mode, bool test_group) {
         MessageBoxWarning(software_name, tr("Wait for the current core transition to finish before starting an isolated test."));
         return;
     }
-    if (NekoGui::dataStore->spmode_vpn || isInternalTunActive()) {
+    if (usesIsolatedCore &&
+        (NekoGui::dataStore->spmode_vpn || isInternalTunActive())) {
         MessageBoxWarning(
             software_name,
             tr("Isolated profile tests are disabled while this project's Tun is requested or its worker is active."));
@@ -444,31 +449,42 @@ void MainWindow::speedtest_current_group(int mode, bool test_group) {
             continue;
         }
 
-        const auto testConfig = BuildConfig(current, true, false);
-        if (testConfig == nullptr || !testConfig->error.isEmpty()) {
-            persistSpeedtestResult(
-                this,
-                current,
-                false,
-                0,
-                testConfig == nullptr ? tr("Unknown test config error.") : testConfig->error);
-            continue;
+        QJsonObject generatedConfig;
+        if (usesIsolatedCore) {
+            const auto testConfig = BuildConfig(current, true, false);
+            if (testConfig == nullptr || !testConfig->error.isEmpty()) {
+                persistSpeedtestResult(
+                    this,
+                    current,
+                    false,
+                    0,
+                    testConfig == nullptr ? tr("Unknown test config error.") : testConfig->error);
+                continue;
+            }
+            generatedConfig = testConfig->coreConfig;
         }
 
         libcore::TestReq request;
         request.set_mode(static_cast<libcore::TestMode>(mode));
         request.set_timeout(10 * 1000);
-        request.set_url(latencyUrl);
-        auto requestConfig = new libcore::LoadConfigReq;
-        requestConfig->set_core_config(QJsonObject2QString(testConfig->coreConfig, false).toStdString());
-        request.set_allocated_config(requestConfig);
-        request.set_in_address(current->bean->serverAddress.toStdString());
-        request.set_full_latency(fullLatency);
-        request.set_full_udp_latency(fullUdpLatency);
-        request.set_full_speed(fullSpeed);
-        request.set_full_in_out(fullInOut);
-        request.set_full_speed_url(downloadUrl);
-        request.set_full_speed_timeout(downloadTimeout);
+        if (mode == libcore::TcpPing) {
+            // This is the upstream direct server-reachability diagnostic. It
+            // intentionally follows the current Windows network path and does
+            // not claim to test the selected proxy outbound.
+            request.set_address(current->bean->DisplayAddress().toStdString());
+        } else {
+            request.set_url(latencyUrl);
+            auto requestConfig = new libcore::LoadConfigReq;
+            requestConfig->set_core_config(QJsonObject2QString(generatedConfig, false).toStdString());
+            request.set_allocated_config(requestConfig);
+            request.set_in_address(current->bean->serverAddress.toStdString());
+            request.set_full_latency(fullLatency);
+            request.set_full_udp_latency(fullUdpLatency);
+            request.set_full_speed(fullSpeed);
+            request.set_full_in_out(fullInOut);
+            request.set_full_speed_url(downloadUrl);
+            request.set_full_speed_timeout(downloadTimeout);
+        }
 
         const auto beanSnapshot = current->bean->ToJson();
         jobs.append(std::make_shared<const ImmutableSpeedtestJob>(
@@ -476,7 +492,8 @@ void MainWindow::speedtest_current_group(int mode, bool test_group) {
             current,
             speedtestProfileFingerprint(current, beanSnapshot),
             speedtestJsonFingerprint(beanSnapshot),
-            speedtestJsonFingerprint(testConfig->coreConfig),
+            usesIsolatedCore ? speedtestJsonFingerprint(generatedConfig) : QByteArray{},
+            usesIsolatedCore,
             std::move(request)));
     }
 

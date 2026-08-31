@@ -8,7 +8,7 @@
 
 ## 背景
 
-[ADR 0004](0004-runtime-safety-policy.md) 已冻结：只有精准的用户手动操作可以启停系统代理或 TUN；GUI 退出、重启和线路切换不得改变 OS 模式；任何故障都不得退回物理直连。
+当时的 [ADR 0004](0004-runtime-safety-policy.md) 曾把 GUI 退出后持续数据面和全机无直连解释为冻结要求；该扩展解释现已被产品契约取代。以下内容只记录当时为何提出候选架构，不是现行需求。
 
 源码审计确认当前实现不能满足该契约：
 
@@ -78,25 +78,27 @@ Runtime Service 的职责：
 - 安装/更新服务时一次性提权；GUI 保持普通用户。worker 使用受限 token 与精确 Job Object。
 - 恢复工具只能处理本项目 provider GUID 和资源，不得触碰本机 Clash TUN 或其它外部网络软件。
 
-## 测试边界
+## 历史候选方案的测试边界（非现行发布门）
 
-OpenWrt 只适合验证显式目标链下的 AnyTLS、DoH 和无协议级 fallback；当前临时 `52080` 探针会重写入口到目标 outbound，不能验证产品 `2080`/辅助端口映射。Wintun、WFP、SCM、Windows DNS/IPv6、GUI/worker/service 崩溃必须在隔离 Windows 10/11 环境验证。
+如果用户未来重新授权本候选方向，OpenWrt 仍只适合验证显式目标链下的 AnyTLS、DoH 和无协议级 fallback；Wintun、WFP、SCM、Windows DNS/IPv6、GUI/worker/service 崩溃必须在隔离 Windows 环境验证。该事实不把这些项目升级为当前发布要求。
 
 最低故障矩阵包括 candidate 无效、端口占用、DoH/AnyTLS 失败、worker kill、GUI exit/crash/restart、service crash、BFE restart、NIC 切换与休眠恢复；必须在物理接口和 Wintun 抓包中同时断言没有未授权 IPv4、IPv6 或 DNS 包。
 
-## 仍待确认
+## 当时未冻结的问题（当前无需决定）
 
 1. 线路切换是否接受短暂全阻断和既有 TCP/UDP 连接重置，还是第一版就必须保持连接。
 2. kill-switch 保护全机还是本项目/指定进程；DHCP、NDP、LAN、RDP、打印机等例外范围。
 
-DoH endpoint 域名的配置语义已在 ADR 0003 冻结为 NekoRay 原生 `dns-local` bootstrap；本 ADR 仍需在 WFP 设计中把该 underlay 纳入精确放行和泄漏观测，但不再把解析来源留作产品需求问题。
+DoH endpoint 域名的配置语义仍由 ADR 0003 与产品契约约束；是否把 underlay 纳入 WFP 只属于本历史候选，不是 resolver 当前任务。
 
-在威胁模型、实现和 Windows 故障注入完成前，本 ADR 保持 Proposed。无论这些体验细节如何选择，都不得削弱 ADR 0004 的手动模式控制、固定线路映射和绝不直连约束。
+本 ADR 当前状态是 **Superseded / 未获产品授权**，不是 Proposed。上述问题不得进入 `DECISIONS_NEEDED.md` 或现行发布矩阵；只有用户重新授权全机持久保护方向后才重新起草契约。
 
-## 迁移顺序
+## 历史提案顺序（禁止按此继续实施）
 
 1. 保留当前 guard 作为“尚不支持”的临时发布阻断，不把它当解决方案。
 2. 建立单线程 RuntimeStateMachine 和精确资源所有权。
 3. 引入 Runtime Service、认证控制通道与稳定 Mixed/TUN anchor。
 4. 实现 persistent WFP、故障恢复和显式模式命令。
 5. 实现受保护的 generation 切换，再评估低中断 A/B worker。
+
+这份顺序只解释上一阶段为何产生相关代码，不是现行路线。当前已有 guard、状态机和 RPC 机制必须按真实复现与上游兼容逐项保留、简化或移除，不能因为本列表“尚未完成”而继续扩建。

@@ -30,7 +30,7 @@ int main(int argc, char** argv) {
     ok &= expect(ShareLinkWithoutRemark({}).error == ShareFormatError::EmptyNativeLink,
                  "an absent native link must fail explicitly");
 
-    const auto socks = IpPortUserPass(
+    const auto socks = ServerPortUserPass(
         CredentialProxyKind::Socks5,
         QStringLiteral("192.0.2.10"),
         1080,
@@ -41,7 +41,7 @@ int main(int argc, char** argv) {
                      socks.text == QStringLiteral(
                          "192.0.2.10:1080:demo-user:demo-pass"),
                  "SOCKS5 credentials must use the requested field order");
-    ok &= expect(IpPortUserPass(
+    ok &= expect(ServerPortUserPass(
                      CredentialProxyKind::Http,
                      QStringLiteral("192.0.2.10"),
                      8080,
@@ -50,7 +50,16 @@ int main(int argc, char** argv) {
                      false)
                      .ok(),
                  "plain HTTP credentials must be representable");
-    ok &= expect(IpPortUserPass(
+    ok &= expect(ServerPortUserPass(
+                     CredentialProxyKind::Socks5,
+                     QStringLiteral("proxy.example"),
+                     1080,
+                     QStringLiteral("user%3"),
+                     QStringLiteral("pass%1"),
+                     false)
+                         .text == QStringLiteral("proxy.example:1080:user%3:pass%1"),
+                 "percent sequences in credentials must be preserved verbatim");
+    ok &= expect(ServerPortUserPass(
                      CredentialProxyKind::Http,
                      QStringLiteral("192.0.2.10"),
                      443,
@@ -59,7 +68,7 @@ int main(int argc, char** argv) {
                      true)
                          .error == ShareFormatError::TlsWouldBeLost,
                  "TLS HTTP must be rejected because the flat format loses TLS");
-    ok &= expect(IpPortUserPass(
+    ok &= expect(ServerPortUserPass(
                      CredentialProxyKind::Unsupported,
                      QStringLiteral("192.0.2.10"),
                      443,
@@ -68,19 +77,33 @@ int main(int argc, char** argv) {
                      false)
                          .error == ShareFormatError::UnsupportedProtocol,
                  "unrelated protocols must not be flattened as proxy credentials");
-    for (const auto& address : {QStringLiteral("proxy.example"), QStringLiteral("2001:db8::1")}) {
-        ok &= expect(IpPortUserPass(
+    for (const auto& address : {QStringLiteral("proxy.example"), QStringLiteral("proxy-host")}) {
+        const auto domain = ServerPortUserPass(
+            CredentialProxyKind::Socks5,
+            address,
+            1080,
+            QStringLiteral("user"),
+            QStringLiteral("pass"),
+            false);
+        ok &= expect(domain.ok() &&
+                         domain.text == QStringLiteral("%1:1080:user:pass").arg(address),
+                     "an unresolved server name must be preserved without DNS conversion");
+    }
+    for (const auto& address : {QString{}, QStringLiteral(" proxy.example"),
+                                QStringLiteral("proxy host"), QStringLiteral("2001:db8::1"),
+                                QStringLiteral("proxy.example\nnext")}) {
+        ok &= expect(ServerPortUserPass(
                          CredentialProxyKind::Socks5,
                          address,
                          1080,
                          QStringLiteral("user"),
                          QStringLiteral("pass"),
                          false)
-                             .error == ShareFormatError::AddressIsNotLiteralIpv4,
-                     "domains and IPv6 must not trigger DNS or ambiguous flattening");
+                             .error == ShareFormatError::AmbiguousServerAddress,
+                     "ambiguous server fields must be rejected without DNS conversion");
     }
     for (const auto port : {0, 65536}) {
-        ok &= expect(IpPortUserPass(
+        ok &= expect(ServerPortUserPass(
                          CredentialProxyKind::Socks5,
                          QStringLiteral("192.0.2.10"),
                          port,
@@ -90,7 +113,7 @@ int main(int argc, char** argv) {
                              .error == ShareFormatError::InvalidPort,
                      "invalid ports must be rejected");
     }
-    ok &= expect(IpPortUserPass(
+    ok &= expect(ServerPortUserPass(
                      CredentialProxyKind::Socks5,
                      QStringLiteral("192.0.2.10"),
                      1080,
@@ -100,7 +123,7 @@ int main(int argc, char** argv) {
                          .error == ShareFormatError::MissingCredentials,
                  "missing credentials must be rejected");
     for (const auto& value : {QStringLiteral("user:name"), QStringLiteral("line\nbreak")}) {
-        ok &= expect(IpPortUserPass(
+        ok &= expect(ServerPortUserPass(
                          CredentialProxyKind::Socks5,
                          QStringLiteral("192.0.2.10"),
                          1080,

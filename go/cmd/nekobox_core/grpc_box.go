@@ -333,7 +333,10 @@ func (s *server) Test(ctx context.Context, in *gen.TestReq) (out *gen.TestResp, 
 		// Latency
 		out.Ms, err = speedtest.UrlTest(boxapi.CreateProxyHttpClient(i, nil), in.Url, in.Timeout, speedtest.UrlTestStandard_RTT)
 	} else if in.Mode == gen.TestMode_TcpPing {
-		err = errors.New("TCP Ping is disabled because it opens a direct system socket instead of using the selected outbound")
+		// TCP Ping is intentionally a direct reachability diagnostic for the
+		// profile server through the current operating-system network path. It
+		// does not claim to exercise the selected proxy outbound.
+		out.Ms, err = speedtest.TcpPing(in.Address, in.Timeout)
 	} else if in.Mode == gen.TestMode_FullTest {
 		if in.Config == nil {
 			err = errors.New("Full Test requires an explicit bounded test configuration")

@@ -1,9 +1,11 @@
-# 推进路线
+# 历史推进路线
 
 状态：**历史执行台账；自 2026-07-27 起不再作为现行需求或开发顺序**
 最后更新：2026-07-27
 
 > 本文件保留上一阶段已经做过什么、当时如何判断的证据。后续开发必须重新按 [产品方向与开发契约](PRODUCT.md) 排序，不能根据这里的复选框继续扩建。特别是以下旧结论已经失效：把原生 `2080` 变成无条件主线路入口；把 persistent Runtime/WFP 当作发布前提；把人工多入口管理视为越界功能。MultiMapper 和 RouteFluent 现在是受限参考材料，具体实现仍不可盲目移植。
+
+> 2026-08-31 起，唯一现行整改顺序见[已知问题与整改安排](KNOWN_ISSUES.md)。本文件中的未完成复选框也只表示历史方案当时未完成，不得作为待办领取。下文第 8 项“禁用 TCP Ping”和第 15 项“只允许字面 IPv4 的 `ip:...`”已确认是错误历史结论；现行行为分别见 `PRODUCT.md` 第 3.1 节与第 7 节。
 
 原历史原则：先止损和恢复 NekoRay，再收敛当时理解的三项扩展，最后解决 Windows fail-closed 运行时。该排序和范围判断已被 2026-07-27 产品契约取代。
 
@@ -28,14 +30,14 @@
 5. [ ] 建立可选择原件/快照的恢复 UI、显式悬空引用修复和跨 profile/group/主配置的多文件事务。事务基础层已落地：group 创建、单 profile/空 group/非活动 route 删除和 profile 跨组移动会记录 before/after 清单、串行提交、失败逆序回滚，未完成状态会阻断保存和下次启动；启动扫描到完整配置加载也由同一可重入磁盘锁覆盖。扫描会拒绝隐藏/意外条目、身份/header 错误和非终态状态，但终态只做 schema/id/state header 校验；合法 terminal header + 损坏/空 entries 不阻断 startup，report 必须深解析并标为 `valid=false`，非法 terminal schema 仍阻断。命令行已能先报告再由用户明确选择结构化事务的完整 before/after，且恢复开始后锁定方向；它不自动修复 unknown/quarantine。尚未提供图形 UI，也尚未覆盖非空 group 和订阅成功候选。
 6. [ ] 选择性恢复 external-core、Naive、ExtraCore、custom external、TUIC/Hysteria2外核；Xray保持删除。
 7. [ ] 恢复 VMess/v2rayN、SOCKS userinfo、SS v2ray-plugin等非 Xray 兼容。
-8. [x] URL Test 已恢复为显式有界生成配置；TCP Ping 因系统直连 socket 已在 GUI/core 两层禁用。
+8. [x] （历史错误结论，2026-08-31 已纠正）当时因 TCP Ping 使用系统直连 socket而在 GUI/core 两层禁用；现已恢复为与 URL Test 明确区分的 server 可达性诊断。
 9. [ ] 为现用 geosite/geoip `.db` 重建自动完成或明确替代。
 10. [x] 订阅改成内存 parse/stage/validate 后提交；空/HTML/坏 YAML/零节点失败旧组零变化；清理/回滚删除失败会保留对象并报告。
 11. [ ] 把订阅成功候选与非空 group 删除接入现有事务层，并覆盖真实磁盘失败、并发刷新、进程中断、显式恢复、版本回退和旧 profile。前置止损已完成一部分：联网前按值快照不可变 HTTP 选项，记录 group 与全部成员的身份/顺序/tombstone/序列化状态，提交转回 UI 线程并在提交串行化 mutex 下逐项重验；group 创建同步提交 `pm.json`，删除对象 tombstone，运行中 auxiliary 拒删。下一步必须一次性预检 running/front/chain/remember/活动 auxiliary/未知文件并构造最终新增与删除集合，禁止继续逐个 `AddProfile/Save/DeleteProfile`。
 12. [ ] 为 ConfigBuilder、订阅和其它跨线程读模型操作建立完整 immutable snapshot 或显式模型读写同步。本批只完成第一段止损：ConfigBuilder 不再回写 live `TrafficData.id/tag`，VLESS core 对象生成不再改写 bean `flow`；group speedtest 改为 UI 线程构建 immutable job，结果回到 UI 后以对象身份、bean/profile/config fingerprint 做 CAS 式复核并保存。当前 mutex 仍只串行化参与的 mutation 提交；final Start gate 只复核 recovery、当前 ticket 和已捕获 daemon readiness，不会重建 candidate 或比较完整 model revision。完整 `BuildModelSnapshot`、订阅与其它跨线程读模型同步均未完成，不能宣称整个模型已有读写锁。
 13. [ ] 统一 route/settings/hotkey 等保存失败的强类型传播、用户提示和内存回滚；任何磁盘失败后都必须保持磁盘—内存一致，并纳入故障注入。
 14. [ ] （P2）为 `TrafficData` 建立不可变遥测快照或明确的锁/原子方案，使 counter/rate 的 worker 写入与 UI/JsonStore 读取同步。本批仅把未初始化的 `last_update` 固定为 `0`，消除了该字段的未定义行为；generation-local `TrafficBinding` 只隔离路由身份，不解决共享计数器的数据竞态。
-15. [x] 实现用户于 2026-07-22 明确追加的右键多选分享格式：保留含 remark 原生链接，新增仅删除 URI fragment 的无 remark 链接，以及严格、全有或全无的 `ip:port:user:pass`。后者只接受字面 IPv4、完整凭据的 SOCKS5/非 TLS HTTP，禁止 DNS 解析和凭据日志；`share_format_test` 使用假凭据覆盖纯转换正负例，GUI 菜单已通过 Windows Qt/MinGW 构建。真实剪贴板交互自动化仍列在阶段 4，不把纯函数测试冒充 GUI E2E。
+15. [x] （历史错误命名/约束，2026-08-31 已纠正）当时实现为只接受字面 IPv4 的 `ip:port:user:pass`；现行契约为直接取 profile 原始 server 的 `server:port:user:pass`，域名/主机名原样导出且不调用 DNS。真实剪贴板交互自动化仍未完成。
 
 完成门：旧配置不会因本分支首次启动或任一失败路径丢失；已有订阅可以安全刷新。
 
@@ -99,7 +101,7 @@
 - [x] 建立首个 Windows-only CI：校验仓库卫生、固定子模块、受控 RouteFluent core 源构建、Go 单测和无侵入 Python 安全契约；不得将其表述为 GUI/TUN/WFP 验收。
 - [ ] 收口干净 Qt/MinGW/C++ 工具链、GUI 自动构建与测试、交付 wrapper 真实 hash/manifest、许可证和 SBOM；libneko 仓内固定已完成。
 - [ ] 先用 OpenWrt复测 patched core协议；再在独立 Windows完成 Mixed、多辅助、Wintun、WFP、IPv4/IPv6/DNS故障注入。
-- [ ] 只有确实依赖本机 Windows/Clash TUN 环境且独立测试无效时，提交维护窗口方案给用户；agent不自行停止 Clash TUN。
+- [ ] （已被 2026-08-31 用户指令取代）当前主机不再安排停用 Clash 的维护窗口；Windows 专属验证转到独立 Windows VM、Windows 沙盒或其它测试机。
 
 ## 阶段 5：私人预览版
 

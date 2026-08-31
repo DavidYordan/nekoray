@@ -1,7 +1,7 @@
 # 待确认决策
 
 状态：只列无法由 [产品方向与开发契约](PRODUCT.md) 和 NekoRay 上游行为直接推出的问题
-最后更新：2026-07-27
+最后更新：2026-08-31
 
 ## 已冻结，不再作为选项
 
@@ -14,6 +14,9 @@
 - NekoRay 旧能力默认保留；只删除 Xray 运行核心及真正专属路径。
 - MultiMapper、RouteFluent 是设计与 fixture 来源，不是可直接移植的产品架构。
 - persistent Runtime、Windows service 和 WFP kill-switch 不是当前核心需求或发布前提。
+- `server:port:user:pass` 导出直接使用 profile 原始 server（不是 profile 名称或诊断 IP），原样保留 IPv4、域名或主机名且不调用 DNS；没有转义规则前不导出含冒号的 IPv6。
+- TCP Ping 保留为当前 Windows 网络路径的 server 可达性诊断，不冒充所选 proxy outbound 的 URL Test。
+- 当前开发主机的 Clash TUN 必须始终运行；任何开发、测试和自动化都不得停止、重启、结束或改写它。Windows 专属 TUN 证据转移到隔离 Windows 环境，不能申请自动化停网窗口。
 
 ## 仍需用户体验层决定
 
@@ -23,6 +26,7 @@
 | P1 | 同一 provider 集合中多个 DoH endpoint 如何展示 | 按订阅顺序列出并记录实际使用者；不跨 resolver 来源 |
 | P1 | “命名入口集合”是否需要多 IP 运行策略 | 先只用于整理候选；运行时必须由用户固定单一入口 |
 | P1 | 第一阶段允许哪些外置 core 参与并发托管 | 保留 profile；不支持的组合启动前精确拒绝 |
+| P1 | Windows TUN 验收采用独立 VM、Windows 沙盒还是其它测试机，以及具体网络拓扑 | 未确认前只做静态/loopback/WSL/OpenWrt 分层证据并标记 Windows 未验证；推荐优先评估可快照回滚的独立 Windows VM，不创建环境、不改变宿主网络 |
 | P2 | Windows 最低版本、ARM64、安装器 | 继续以当前 x64 便携环境验收，不作正式兼容承诺 |
 
 ## 工程问题，不再转嫁为需求问题

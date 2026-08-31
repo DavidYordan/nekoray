@@ -1080,8 +1080,16 @@ This needs to be run NekoBox with administrator privileges.</source>
         <translation>批量复制选中线路的分享链接（不含备注）</translation>
     </message>
     <message>
-        <source>Copy selected as ip:port:user:pass</source>
-        <translation>复制选中线路为 ip:port:user:pass</translation>
+        <source>Copy selected as server:port:user:pass</source>
+        <translation>复制选中线路为 server:port:user:pass</translation>
+    </message>
+    <message>
+        <source>Test direct TCP reachability of the server through the current Windows network path; this does not test the selected proxy outbound.</source>
+        <translation>通过当前 Windows 网络路径测试服务器的直接 TCP 可达性；这不是对所选代理出站的测试。</translation>
+    </message>
+    <message>
+        <source>TCP Ping tests direct server reachability through the current Windows network path; it does not use the selected proxy outbound.</source>
+        <translation>TCP Ping 通过当前 Windows 网络路径测试服务器的直接可达性；它不使用所选代理出站。</translation>
     </message>
     <message>
         <source>Copy failed</source>

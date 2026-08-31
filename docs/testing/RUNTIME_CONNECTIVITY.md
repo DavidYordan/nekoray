@@ -1,13 +1,13 @@
 # Windows 运行时连通性验证
 
 状态：现行测试说明；线路断言已按产品契约更正
-最后更新：2026-07-28
+最后更新：2026-08-31
 
 ## 环境硬约束
 
 - 本项目默认 Mixed 端口是 `2080`。验证结果必须同时记录监听 PID 与可执行文件路径，不能只凭端口成功认定属于本项目。
-- 本机 Clash TUN 是外部底层网络，测试必须保持其运行，不得停止、重启或改写。
-- Clash TUN 会影响默认路由、Fake-IP DNS 和出站归因。无法用进程级临时对照得出结论时，转到独立 Windows 环境或 [OpenWrt 远程实验室](OPENWRT_REMOTE_LAB.md)。
+- 本机 Clash TUN 是不可中断的外部底层网络，测试必须保持其运行；不得停止、重启、结束其进程，也不得改写配置、接口、DNS 或路由。当前主机不存在“停 Clash 维护窗口”这条验证路径。
+- Clash TUN 会影响默认路由、Fake-IP DNS 和出站归因。无法用进程级临时对照得出结论时，停止本机实验并转到独立 Windows 环境、WSL 或 [OpenWrt 远程实验室](OPENWRT_REMOTE_LAB.md)，同时遵守各环境的证据边界。
 
 ## 先分清两层语义
 
@@ -15,15 +15,16 @@
 
 `route.auto_detect_interface` 只让 sing-box 在操作系统路由层选择合格的底层接口，主要用于避免 TUN 回环。它不读取 Mixed 端口，也不在主线路和辅助线路之间做选择。测试报告必须分别记录“命中了哪个逻辑 outbound”和“底层套接字走了哪个接口”；不能用接口自动检测来修正端口映射。
 
-## 三级验证
+## 分层验证
 
 1. **本地无侵入验证**：配置导出与 `check`、direct fixture、Mixed HTTP/CONNECT/SOCKS5 contract、监听 PID 和端口映射。此级不得修改系统代理、TUN、路由或 DNS。
-2. **OpenWrt 临时探针**：本机 Clash TUN 使真实出站归因不清时，在 `192.168.1.7` 用相同版本 core 验证 schema、DNS、detour 和远端协议。具体边界见 [OpenWrt 远程实验室](OPENWRT_REMOTE_LAB.md)。
-3. **Windows 集成验收**：真实 GUI、Mixed、系统代理/TUN 的上游回归、线路重启和 Windows 接口选择只能在 Windows 验证。WFP/persistent Runtime 不是当前核心发布门。优先使用独立 Windows 测试环境；只有必须停止 Clash TUN 才能取得有效证据时，才申请用户安排维护窗口。
+2. **WSL/Linux 隔离验证**：可验证 Linux core、配置、schema、协议 loopback 和无 Windows 副作用的故障路径。WSL2 仍借宿主网络出站，不能据此证明物理出站归属，也不能替代 Windows Wintun、系统代理、WFP、驱动和 GUI 生命周期。
+3. **OpenWrt 临时探针**：本机 Clash TUN 使真实出站归因不清时，在授权且可达的隔离实验机用相同版本 core 验证 schema、DNS、detour 和远端协议。具体边界见 [OpenWrt 远程实验室](OPENWRT_REMOTE_LAB.md)。
+4. **独立 Windows 集成验收**：真实 GUI、Mixed、系统代理/TUN 的上游回归、线路重启和 Windows 接口选择只能在 Windows 验证。WFP/persistent Runtime 不是当前核心发布门。应使用带快照和精确资源所有权的独立 Windows VM、Windows 沙盒或其它测试机；不得为取得证据停止或改写本机 Clash。
 
-第二级成功只说明配置/出站链能在相同 core 上闭环；第二级成功而第三级失败，优先调查 Windows 路由、接口和生命周期。两级都以同一临时配置失败时，再调查节点、DNS、detour 或配置生成。
+WSL/OpenWrt 成功只说明相应 core/配置/出站链在该环境闭环；独立 Windows 失败时，优先调查 Windows 路由、接口和生命周期。各环境以同一脱敏临时配置失败时，再调查节点、DNS、detour 或配置生成。任何低层成功都不能上推为未执行层级已经通过。
 
-第二级的标准入口是先 dry-run、再真实运行；它固定使用 `127.0.0.1:52080`，并复核远端现有服务基线不变：
+OpenWrt 层的标准入口是先 dry-run、再真实运行；它固定使用 `127.0.0.1:52080`，并复核远端现有服务基线不变：
 
 ```powershell
 & 'D:\complex\RouteFluent\.venv\Scripts\python.exe' `

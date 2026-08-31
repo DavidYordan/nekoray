@@ -117,8 +117,8 @@ AnyTLS 对照每次单独运行，不能把多个变量合并成一个结论：
 - **只有组合失败、两个组成出站分别成功**：优先检查 detour 连接语义、配置生成和协议组合兼容；不能继续把故障归到 Mixed，也不能用任一单独成功宣称主配置已通过。
 - **AnyTLS 原生 client 返回服务端 internal error，而 mihomo client 成功**：保留当前服务端所需的 client 兼容语义，不能通过删除 client 字段掩盖 detour 问题。
 
-## 何时停止并申请维护窗口
+## 何时停止本机推断并转移环境
 
-OpenWrt 无法回答 Windows Wintun、系统代理、WFP、GUI 退出/重启和线路重启问题。应先使用独立 Windows 测试环境；只有问题必须依赖本机 Windows 的真实接口/驱动，且 Clash TUN 的接口或默认路由使测试无法成立时，才停止继续推断并请用户安排维护窗口。
+OpenWrt 无法回答 Windows Wintun、系统代理、WFP、GUI 退出/重启和线路重启问题。这些断言应在带快照和精确资源所有权的独立 Windows VM、Windows 沙盒或其它测试机验证。若当前主机的 Clash TUN 使证据无法成立，必须停止本机推断并转移环境；不得停用或改写 Clash。
 
-维护窗口申请必须列出：要验证的 Windows 专有断言、为何 OpenWrt/独立 Windows 不足、需要暂停生产网络的最短阶段、无直连泄漏的保护措施、精确恢复与复核步骤。任何 agent 或自动化都不得自行开启该窗口。
+隔离环境方案必须列出：要验证的 Windows 专有断言、为何 WSL/OpenWrt 不足、Windows 版本与网络拓扑、快照/回滚、宿主与外部资源保护、精确进程/接口所有权和清理复核。任何 agent 或自动化都不得通过修改宿主 Clash、Hyper-V/vSwitch、默认路由、DNS 或系统代理来制造测试条件。

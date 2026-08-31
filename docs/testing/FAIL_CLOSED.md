@@ -1,7 +1,7 @@
 # Windows fail-closed 验证（历史扩展方案）
 
 状态：非当前核心发布门；只保留为历史审计与可选研究材料
-最后更新：2026-07-27
+最后更新：2026-08-31
 
 > 现行产品只对 provider resolver 和专用线路端口要求范围明确的 fail-close。全机 persistent WFP、GUI 退出后维持数据面和无缝 TUN 切换并未被用户确认为本项目需求，不能据此继续扩建或阻断其它核心能力。详见 [产品方向与开发契约](../PRODUCT.md)。
 
@@ -12,14 +12,14 @@
 - TUN 开启时必须允许线路重启；不得要求用户先关闭 TUN。若切换期无法保持代理通路，必须 fail-closed 阻断而不能直连；是否允许短暂黑洞和既有连接重置仍待确认。
 - 停止操作只能作用于本项目拥有且身份已核对的对象。本机 Clash TUN 永远不在测试或清理范围内。
 
-当前实现还不能声称满足这些要求。标准内部 TUN 已不再采用旧 `vpn_strict_route`/`vpn_ipv6` 开关决定保护范围，而是强制 `strict_route=true` 并生成 IPv4/IPv6 地址；最终配置还锁定完整 TUN 对象和已知接口/OS 副作用字段。但 GUI 生命周期与 core/TUN 生命周期仍耦合，现有 WFP dynamic session 会随 worker 消失，因此这些配置时止损不能证明物理 IPv6、多宿主 DNS 或崩溃窗口安全。无 instance 时的 system TCP/UDP/HTTP helper fallback 已封死，也只消除一个直连路径。
+按上一阶段的扩展语义，当前实现不能声称满足这些要求；这不构成现行产品发布门。标准内部 TUN 已不再采用旧 `vpn_strict_route`/`vpn_ipv6` 开关决定保护范围，而是强制 `strict_route=true` 并生成 IPv4/IPv6 地址；最终配置还锁定完整 TUN 对象和已知接口/OS 副作用字段。但 GUI 生命周期与 core/TUN 生命周期仍耦合，现有 WFP dynamic session 会随 worker 消失，因此这些配置时止损不能证明物理 IPv6、多宿主 DNS 或崩溃窗口安全。无 instance 时的 system TCP/UDP/HTTP helper fallback 已封死，也只消除一个直连路径。
 
 ## requested 与 observed 状态
 
 - `spmode_vpn` 是用户请求的期望状态；复选框是否勾选不能证明 TUN 已创建。
 - `running_internal_tun` 或外置 worker PID 是当前 worker 的观测。UI 会区分 **worker active**、**requested; inactive** 和 **ACTIVE; stop incomplete**，但这仍不是 Windows 接口、路由、DNS 或 WFP 的事实源。
-- core 崩溃清理会把 worker 观测置为 inactive，只重启空控制 core，并保留 requested 意图而不自动恢复 profile/TUN。这符合“不得隐式启用”，但实际 TUN/动态保护会随 worker 消失，故仍不合格。
-- 正常退出、重启、切线和辅助端口变更在内部 TUN worker 活动时仍被 UI guard 阻止。2026-07-24 已删除“先手动关闭 TUN”的错误引导；guard 现在明确说明 persistent Windows kill-switch 尚未实现。它避免主动制造已知直连窗口，却仍违反“开 TUN 时可顺利切线/退出且 OS 模式不变”的最终需求。
+- core 崩溃清理会把 worker 观测置为 inactive，只重启空控制 core，并保留 requested 意图而不自动恢复 profile/TUN。实际 TUN/动态保护会随 worker 消失；这是当前行为事实，不自动推出持久保护层需求。
+- 正常退出、重启、切线和辅助端口变更在内部 TUN worker 活动时仍被 UI guard 阻止。2026-07-24 已删除“先手动关闭 TUN”的引导；这些 guard 是否符合上游和现行产品范围，必须逐项复现，不能由本历史文档判定为最终需求。
 - Windows GUI 已忽略 CRT `SIGTERM`/`SIGINT`，这两个控制台信号不会再绕过 UI guard；该行为不覆盖任务管理器/`TerminateProcess`、崩溃、系统关机或 core 自退，不能据此减少故障注入矩阵。
 
 ## 只读快照
@@ -31,7 +31,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\verify_fail_closed_r
 
 脚本默认只做一次只读快照；只有显式设置非零 `-MonitorSeconds` 才会连续监控。它不会修改系统状态。即使输出“未检测到 fail-open”，也只表示采样窗口内没有观察到有限规则覆盖的变化，不能证明 WFP、IPv6、适配器、外置 TUN 接管或崩溃恢复正确。
 
-## 验收场景
+## 历史扩展方案的验收场景（非现行任务）
 
 每个场景都必须同时采集 Windows API/注册表、路由表、DNS、适配器、监听 PID/可执行路径和真实联网结果：
 
@@ -43,14 +43,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\verify_fail_closed_r
 6. 用户手动关闭某项网络能力时，只精准撤销本项目仍拥有的状态；检测到外部修改时不得覆盖第三方当前设置。
 7. 任意停止、回滚和清理只能命中本次测试创建、且 PID/路径/创建时间均已核对的进程与资源。
 
-线路重启是否允许短暂黑洞、是否必须保留既有 TCP/UDP 会话，以及 Windows 重启后如何维持保护并等待用户手动重新启用 TUN，仍需作为单独产品决策记录；不得提供预授权自动启用 TUN。这些体验问题不改变“不得 direct 泄漏”和“不得隐式切换系统网络”的硬要求。
+这些场景只在用户未来明确启用全机持久保护方向时才重新评审；当前不得据此创建 Runtime Service/WFP 任务或阻止三项核心能力交付。
 
-## 测试环境与维护窗口
+## 测试环境边界
 
 本机 Clash TUN 必须保持运行，因此日常自动测试只允许执行无侵入快照和隔离 contract。OpenWrt 可验证相同 core 的配置、DNS 和远端出站，但不能验证 Windows Wintun、系统代理、WFP、GUI 退出或线路重启；边界见 [OpenWrt 远程实验室](OPENWRT_REMOTE_LAB.md)。
 
 2026-07-20 的历史 OpenWrt 探针每次都保持既有 RouteFluent PID `24565`、命令行、配置/manifest 哈希和监听集合完全不变，并清理了每个临时目录；但旧探针对临时配置强制 `auto_detect_interface=true`。这些结果只能证明资源所有权/清理约束以及同一接口变体下的组合诊断，必须按默认 preserve 重跑，且不能证明 Windows 产品已经 fail-closed；尤其不能替代 TUN 开启时的线路重启、core 崩溃、WFP 或 IPv4/IPv6 泄漏测试。
 
-只有同时满足以下条件才申请维护窗口：问题属于 Windows 专有行为；独立 Windows 测试环境无法复现或不可用；Clash TUN 的接口或默认路由使证据无效；并且已准备好精确步骤、预期阻断行为和人工恢复方案。工具和 agent 不得自行停止 Clash TUN。
+当前主机不再把停用 Clash 的维护窗口作为验证选项。Windows 专有场景只能转移到带快照、精确资源所有权和恢复步骤的独立 Windows VM、Windows 沙盒或其它测试机；WSL/OpenWrt 只能保留为 Linux/core 层证据。没有合格环境时标记未验证，工具和 agent 不得自行停止 Clash TUN。
 
-这些条件全部实现并在受控 Windows 环境完成故障注入前，脚本输出只能作为审计证据，不能作为 fail-closed 通过证明。
+任何时候，脚本输出都只能证明其实际采样范围；若用户未来重新批准该扩展方向，再另立验收门，不能用本历史清单反向创造现行需求。

@@ -1,7 +1,7 @@
 # Mixed 入口排障
 
 状态：现行
-最后更新：2026-07-24
+最后更新：2026-08-31
 
 Mixed 同时接受 HTTP proxy 和 SOCKS5。排障必须区分“监听/入口协议”“逻辑线路映射”“DNS”“远端 outbound”和“底层接口”五层。
 
@@ -30,7 +30,7 @@ GUI 与 `nekobox_core.exe` 必须来自同一轮构建。每次 core 启动后�
 
 ## 2. 核对端口到逻辑线路
 
-- 主 Mixed `2080` 应进入当前主 profile 构建出的 `proxy` 链。
+- 主 Mixed `2080` 必须先遵守 NekoRay 原生路由、reject、DNS 和协议处理；当前主 profile 构建出的 `proxy` 只是默认出站。只有请求最终按这些规则命中 `proxy` 时，才应进入当前主 profile 的完整 chain。
 - 每个辅助 Mixed 端口应进入与该端口绑定的辅助 profile 链。
 - 当前生成器在顶层 `custom_config` 合并前捕获完整受管 Mixed listener 和沿 detour 可达的每个 outbound 对象；合并后要求对象逐项一致、tag/port 唯一，并拒绝精确 terminal binding 前的改投/提前 resolve、direct/block/selector/urltest 目标及缺失/循环 detour。profile 级 custom outbound 可在捕获前修改普通字段，但不能新增/改变 detour。若仍观察到改道，应保留最终配置和构建错误作为回归缺陷；该 validator 也不能被外推为所有自定义路由/DNS 已经安全。
 - `route.auto_detect_interface` 只决定 outbound 套接字使用哪个底层 OS 接口，不负责按端口选择主/辅助线路。
@@ -120,9 +120,9 @@ powershell -NoProfile -ExecutionPolicy Bypass `
 
 早期本机接管实验已归档到 [2026-07-20 接管基线](../archive/audits/2026-07-20-takeover-baseline.md)，不得用其中单次成功覆盖新的可重复 OpenWrt 对照。
 
-## 6. 何时需要 Windows 维护窗口
+## 6. 何时转移到隔离 Windows 环境
 
-OpenWrt 能验证 schema、Mixed、Trojan/AnyTLS、DNS 和 detour，不能验证 Wintun、系统代理、WFP、GUI 退出/重启或线路热重启。先在独立 Windows 测试环境验证这些行为；只有 Windows 专有问题无法在独立环境复现，且 Clash TUN 的接口或路由使本机证据无效时，才请求用户安排维护窗口。agent 和测试工具不得自行停止 Clash TUN。
+WSL/OpenWrt 能验证相应 Linux core 的 schema、Mixed、Trojan/AnyTLS、DNS 和 detour，不能验证 Wintun、系统代理、WFP、GUI 退出/重启或线路热重启。Windows 专有行为必须转移到带快照和精确资源所有权的独立 Windows VM、Windows 沙盒或其它测试机；若暂时没有合格环境则标记未验证。当前主机的 Clash TUN 不得因排障而停止或改写。
 
 ## 7. 无私人节点的工具回归
 

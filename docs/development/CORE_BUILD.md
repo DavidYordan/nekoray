@@ -1,9 +1,9 @@
 # RouteFluent core 构建
 
 状态：现行；尚无可交付产物
-最后更新：2026-07-22
+最后更新：2026-08-31
 
-当前代码和 Windows 构建链只集成 RouteFluent patched sing-box；这是现状，单核心是否作为长期产品约束仍由 ADR 0002 决定。
+当前标准 GUI/core 构建链只集成 RouteFluent patched sing-box，这是代码现状，不是删除全部 external-core 能力的产品授权。Xray runtime 保持删除；NekoRay 4.0.1 的 Naive、custom external、TUIC/Hysteria2 外核等普通兼容路径属于待选择性恢复的上游能力，是否能参加新专用并发端口需另行验证。
 
 ## 组成
 

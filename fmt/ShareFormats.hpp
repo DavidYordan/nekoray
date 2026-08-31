@@ -14,7 +14,7 @@ namespace NekoGui_fmt {
         EmptyNativeLink,
         UnsupportedProtocol,
         TlsWouldBeLost,
-        AddressIsNotLiteralIpv4,
+        AmbiguousServerAddress,
         InvalidPort,
         MissingCredentials,
         AmbiguousCredentials,
@@ -33,10 +33,11 @@ namespace NekoGui_fmt {
     // begin the URI fragment; percent-encoded data such as "%23" is preserved.
     [[nodiscard]] ShareFormatResult ShareLinkWithoutRemark(const QString& nativeLink);
 
-    // This deliberately narrow credential-list format never performs DNS and
-    // never percent-encodes delimiters. Inputs that cannot be represented
-    // unambiguously are rejected rather than silently changed.
-    [[nodiscard]] ShareFormatResult IpPortUserPass(
+    // This deliberately narrow credential-list format preserves the server
+    // field verbatim and never performs DNS or percent-encodes delimiters.
+    // Inputs that cannot be represented unambiguously are rejected rather than
+    // silently changed.
+    [[nodiscard]] ShareFormatResult ServerPortUserPass(
         CredentialProxyKind kind,
         const QString& serverAddress,
         int serverPort,

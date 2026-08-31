@@ -492,7 +492,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), ui(new Ui::MainWi
         ui->menu_export_config->setText(tr("Export %1 config").arg(name));
         ui->menu_copy_links->setEnabled(!selected.isEmpty());
         ui->menu_copy_links_without_remarks->setEnabled(!selected.isEmpty());
-        ui->menu_copy_ip_port_user_pass->setEnabled(!selected.isEmpty());
+        ui->menu_copy_server_port_user_pass->setEnabled(!selected.isEmpty());
         ui->menu_copy_links_nkr->setEnabled(!selected.isEmpty());
     });
     connect(ui->menu_server, &QMenu::aboutToShow, this, [=] {
@@ -1818,7 +1818,7 @@ void MainWindow::on_menu_copy_links_without_remarks_triggered() {
     show_log_impl(tr("Copied %1 item(s)").arg(links.length()));
 }
 
-void MainWindow::on_menu_copy_ip_port_user_pass_triggered() {
+void MainWindow::on_menu_copy_server_port_user_pass_triggered() {
     const auto ents = get_now_selected_list();
     QStringList lines;
     QStringList failures;
@@ -1831,7 +1831,7 @@ void MainWindow::on_menu_copy_ip_port_user_pass_triggered() {
                    bean->socks_http_type == NekoGui_fmt::SocksHttpBean::type_HTTP) {
             kind = NekoGui_fmt::CredentialProxyKind::Http;
         }
-        const auto result = NekoGui_fmt::IpPortUserPass(
+        const auto result = NekoGui_fmt::ServerPortUserPass(
             kind,
             ent->bean->serverAddress,
             ent->bean->serverPort,

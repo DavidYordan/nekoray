@@ -527,7 +527,7 @@
       <addaction name="separator"/>
       <addaction name="menu_copy_links"/>
       <addaction name="menu_copy_links_without_remarks"/>
-      <addaction name="menu_copy_ip_port_user_pass"/>
+      <addaction name="menu_copy_server_port_user_pass"/>
       <addaction name="menu_copy_links_nkr"/>
     </widget>
     <widget class="QMenu" name="menuCurrent_Group">
@@ -683,6 +683,9 @@
   <action name="menu_tcp_ping">
    <property name="text">
     <string notr="true">Tcp Ping</string>
+   </property>
+   <property name="toolTip">
+    <string>Test direct TCP reachability of the server through the current Windows network path; this does not test the selected proxy outbound.</string>
    </property>
    <property name="shortcut">
     <string notr="true">Ctrl+Alt+T</string>
@@ -855,9 +858,9 @@
     <string>Copy links of selected (without remarks)</string>
    </property>
   </action>
-  <action name="menu_copy_ip_port_user_pass">
+  <action name="menu_copy_server_port_user_pass">
    <property name="text">
-    <string>Copy selected as ip:port:user:pass</string>
+    <string>Copy selected as server:port:user:pass</string>
    </property>
   </action>
   <action name="menu_spmode_vpn">
