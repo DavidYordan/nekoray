@@ -92,9 +92,9 @@ NekoRay 4.0.1 的协议、profile/group 数据、导入导出、分享、路由�
 - 当前开发主机依赖 Clash TUN 联网。它是不属于本项目、不可中断的外部基础网络，必须始终保持运行。
 - 本项目、agent、构建和测试不得停止、重启、结束或接管 Clash 进程，也不得改写其配置、接口、Fake-IP、DNS、路由或其它 Windows 网络状态。不能把“申请维护窗口停掉 Clash”当作补证据方案。
 - 当前主机只执行不改变网络状态的静态检查、构建、纯逻辑、loopback 和只读快照。若项目 TUN 与 Clash 的叠加使结果无法归因，应明确记录环境限制并转移验证，不得把本机特例写入产品默认。
-- WSL 可用于 Linux core、配置生成、协议和隔离 loopback 证据，但不能证明 Windows Wintun、系统代理、WFP、驱动、GUI 生命周期或双 TUN 行为。OpenWrt 证据有同样的 Windows 边界。
-- 需要启停本项目 TUN、注入网卡/路由/DNS 故障或验证 Windows 专属行为时，应使用独立 Windows VM、Windows 沙盒或其它与本机 Clash 解耦的 Windows 测试环境，并分别记录快照、网络拓扑、进程所有权和恢复结果。
-- 没有合格隔离环境时，相应层级保持“未验证”；低层 fixture、WSL、OpenWrt 或本机 Clash 叠加环境的成功不能替代 Windows TUN 验收。
+- 后续验证只使用 Windows，不再安排 Linux、WSL 或 OpenWrt 验证。已有 Linux/OpenWrt 结果只保留为带日期的历史诊断，不能作为当前 commit 的完成证据。
+- 需要启停本项目 TUN、注入网卡/路由/DNS 故障或验证 Windows 专属行为时，应使用本机创建的独立 Windows VM、Windows 沙盒或其它与本机 Clash 解耦的 Windows 测试环境，并分别记录快照、网络拓扑、进程所有权和恢复结果。
+- 没有合格隔离 Windows 环境时，相应层级保持“未验证”；低层 fixture 或本机 Clash 叠加环境的成功不能替代 Windows TUN 验收。
 
 ## 4. 核心能力一：订阅 resolver 与多入口管理
 

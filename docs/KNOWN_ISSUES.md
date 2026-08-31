@@ -21,13 +21,13 @@
 
 当前开发主机依赖不可中断的 Clash TUN，禁止停止、重启、结束或改写它。后续所有项目 TUN、Wintun、系统代理、Windows 路由/DNS/网卡故障注入和双 TUN 归因都不得在当前主机执行。
 
-整改安排（尚未开始，先由用户审核）：
+整改安排（用户已批准由 agent 在本机创建；不得重启主机或改变 Clash/宿主网络）：
 
-1. 只读盘点本机可用的 WSL/虚拟化能力，不安装组件、不改变 Hyper-V/vSwitch、路由、DNS、系统代理或 Clash；
-2. 把待测断言按平台拆分：WSL 只承接 Linux core、配置、协议和 loopback；OpenWrt 只承接相同 core 的远端链路；Windows 专有断言进入独立 Windows 环境；
-3. 优先设计可快照回滚的独立 Windows VM；Windows 沙盒仅在能安装所需驱动且无需重启时作为短生命周期候选。方案须写明 Windows 版本、NAT/隔离网络、测试包哈希、管理员权限、允许创建的进程/接口、凭据隔离和清理复核；
-4. 用户确认方案后才创建环境和执行测试。若创建会改变宿主虚拟交换机或网络状态，则停止并另选平台；
-5. 测试报告分开标注 `host-loopback`、`WSL/Linux`、`OpenWrt`、`isolated-Windows`，不允许用前三级替代 Windows TUN 结论。
+1. 只读盘点本机 Windows 版本、固件虚拟化、Windows Sandbox/Hyper-V 等能力，不安装 Linux 组件，不改变 Hyper-V/vSwitch、路由、DNS、系统代理或 Clash；
+2. 优先使用已经启用且无需重启的 Windows Sandbox；若它不能持久安装/验证 Wintun，再选择可快照回滚的独立 Windows VM；
+3. 环境记录 Windows 版本、NAT/隔离网络、测试包哈希、管理员权限、允许创建的进程/接口、凭据隔离和清理复核；
+4. 若启用功能需要重启主机、创建/修改宿主虚拟交换机或影响宿主网络，则不自动执行，改为给用户精确安装步骤；
+5. 测试报告只区分 `host-windows-loopback` 与 `isolated-windows`，前者不能替代 TUN/系统代理结论。Linux/WSL/OpenWrt 旧证据不再重跑。
 
 完成门：隔离环境可从干净快照重复创建/回滚；不依赖或改变宿主 Clash；测试只清理自身精确资源；至少能承载 Wintun 创建/销毁和项目 TUN 基本生命周期。E-001 是 Windows 专属验收的前置工作，不是三项产品能力本身，也不授权新增 persistent service/WFP。
 
@@ -184,11 +184,11 @@ route/settings/hotkey 和部分 UI 状态仍可能在磁盘保存失败后保留
 | W1（建议下一项） | U-001a：SOCKS base64 userinfo 兼容 | 先用 `adef6cd` 脱敏样本证明当前失败，再只恢复 SOCKS parser/serializer 的最短 round-trip；纯本地测试 | 不同时恢复 VMess、Shadowsocks、external-core，不访问网络 |
 | W2 | U-001b/c：VMess v2rayN 与 Shadowsocks/v2ray-plugin | 两种格式各自建立失败 fixture、字段保真和错误输入测试，各自独立提交 | 不因名称含 `v2ray` 恢复 Xray runtime |
 | W3 | R-001a：人工多入口字段契约 | 只冻结原始 domain、SNI、resolver 来源、候选、诊断、固定入口的单一所有权和旧数据行为，先写 round-trip 测试 | 不做自动择优、DNS fallback 或 UI 大改 |
-| W4 | E-001：隔离环境方案 | 只读能力盘点并形成 Windows VM/沙盒方案；用户二次审核后才创建 | 不停止/改写 Clash，不改变宿主网络，不用 WSL 冒充 Windows TUN |
+| W4 | E-001：隔离 Windows 环境 | 只读能力盘点后直接创建无需重启、不会改变宿主网络的 Windows 沙盒/VM；若前置条件不满足则提供手工安装步骤 | 不停止/改写 Clash，不改变宿主网络，不执行 Linux 验证 |
 | W5 | 逐项恢复 U-002/U-003 | external-core/Naive/schema 与普通上游能力按数据→UI→执行分层恢复；GeoSite、更新、系统代理拆成独立工作包 | 不与 AnyTLS/resolver/端口生命周期混改 |
 | W6 | 三项核心闭环 | 依次推进 R-001/R-002、A-001、P-001/P-002；涉及 Windows TUN 的 U-005/U-006 必须等 E-001 可用 | 不引入第二 runtime、persistent service/WFP 或全局 fallback |
 | W7 | 数据、并发与交付 | D-001..D-003、C-001/C-002，最后做同轮完整 package、旧配置迁移、真实 GUI/线路和分层网络矩阵 | 不用旧二进制或低层测试代替交付证据 |
 
-推荐先执行 W1：它与本轮分享格式审计同域、改动面最小、可完全离线验证，也不会受本机 Clash/TUN 环境影响。W4 可在后续作为独立的只读规划包推进，但隔离环境创建和任何 Windows 网络测试必须再次经过用户审核。
+推荐先执行 W1：它与本轮分享格式审计同域、改动面最小、可完全离线验证，也不会受本机 Clash/TUN 环境影响。用户已批准 W4 在不重启、不改变宿主网络和 Clash 的边界内直接创建；超出该边界时停止并给出手工步骤。
 
 任何步骤若需要自动择优、全局 fallback、persistent service/WFP、第二数据模型或不可逆迁移，必须停止并请求用户决定。

@@ -7,7 +7,7 @@
 
 每次发布候选至少记录：提交号、GUI/core 文件哈希、Windows 版本、命令、预期结果、实际结果和脱敏报告路径。日志、导出配置和报告可能含节点名、服务器地址、路由、进程及本地路径，不得提交真实凭据。
 
-Windows x64 是当前首要验收平台。本机 Clash TUN 必须始终运行，因此当前主机只执行无侵入证据；项目 TUN 和 Windows 网络状态验收转到独立 Windows 隔离环境。WSL/OpenWrt 是相同或对应 core 的诊断环境，不是产品兼容目标，也不能代替 Windows 验收。
+Windows x64 是唯一后续验收平台。本机 Clash TUN 必须始终运行，因此当前主机只执行无侵入证据；项目 TUN 和 Windows 网络状态验收转到独立 Windows 隔离环境。Linux/WSL/OpenWrt 旧结果只作为历史背景，不再重跑或计入当前完成证据。
 
 历史一次性 Mixed/AnyTLS 调查只在矩阵中作为明确标注日期的诊断背景保留；原始证据见 [2026-07-20 接管基线](../archive/audits/2026-07-20-takeover-baseline.md)。历史中的单次成功不能升级为当前通过结论。
 
@@ -86,10 +86,7 @@ Windows x64 是当前首要验收平台。本机 Clash TUN 必须始终运行，
 | L1 本地无侵入 | 配置/schema | 每个导出配置执行 `nekobox_core check`；空配置、迁移、损坏配置 | 已验证损坏主/路由配置及错误类型、非字符串、重复辅助映射原件不被覆盖；其它迁移矩阵不完整 | 必须自动化通过 |
 | L1 本地无侵入 | Mixed contract | HTTP absolute-form、HTTPS CONNECT、SOCKS5h、认证正反例、端口占用、非 loopback/TUN 拒绝 | 正向及安全收紧有证据，反例不完整 | 必须全部通过 |
 | L1 本地无侵入 | 端口映射/OS 副作用 | 主 `2080` 保持上游路由语义；每个专用端口命中其绑定完整 chain；显式 reject/block 可生效；顶层 custom 不得改变专用 listener/outbound 绑定；无明确操作不得改变系统代理/TUN | 2026-07-28 已用导出红绿回归关闭主入口无条件绑定；辅助 reject/terminal 已有纯 C++ golden、显式两跳 chain schema，以及生成 AnyTLS + Trojan group front proxy 与独立 HTTP 单跳线路的回环运行证据。仍缺显式 chain profile 与真实供应商节点验证 | 必须通过 |
-| L1 本地无侵入 | 工具安全 | 不改系统代理/TUN/路由/DNS；拒绝 TUN、系统 NTP 写入和非空 endpoints；只保留目标 outbound detour 闭包并只结束精确 PID；不停止或改写 Clash TUN | 启动 GUI/core、写审计报告及构建/临时目录的脚本参数继续使用固定磁盘、非生产/非 reparse 路径护栏；本地/远端收紧器已有 fixture，OpenWrt Python 单测 19/19 | 必须保持 |
-| L2 WSL/Linux 隔离 | core/配置/协议 | parser、schema、协议 loopback 和无 Windows 副作用的故障路径；报告宿主网络依赖 | 尚未形成当前 commit 的 WSL 专项证据 | 可补充 Linux/core 证据，不替代 L3 |
-| L2 OpenWrt 探针 | core/工具安全 | 相同 `1.13.12-routefluent-anytls-client.7` core 的 schema、loopback Mixed、监听 PID 与远端基线保护 | 2026-07-20 历史执行：既有 PID/命令行、配置/manifest 哈希和监听均不变，临时目录已清理；旧探针对临时副本强制 `auto_detect_interface=true`，尚未按默认 preserve 重跑 | 必须重跑并保持 |
-| L2 OpenWrt 探针 | 远端链路 | Trojan、AnyTLS、DNS、detour 有/无的对照；HTTP/CONNECT/SOCKS5h | 2026-07-20 历史诊断：AnyTLS mihomo 无 detour 与独立 profile 2 Trojan 均三协议 204；真实远端 AnyTLS + `g-2` detour 失败。`f298d46` 的 Windows 回环产品生成组合成功，说明不能全局拒绝该协议组合，但不覆盖服务器实现、网络和旧探针强制 `auto_detect_interface=true` 的远端场景 | 真实远端组合仍阻断发布，按 preserve 重跑 |
+| L1 本地无侵入 | 工具安全 | 不改系统代理/TUN/路由/DNS；拒绝 TUN、系统 NTP 写入和非空 endpoints；只保留目标 outbound detour 闭包并只结束精确 PID；不停止或改写 Clash TUN | 启动 GUI/core、写审计报告及构建/临时目录的脚本参数继续使用固定磁盘、非生产/非 reparse 路径护栏；Windows 本地收紧器已有 fixture | 必须保持 |
 | L1 本地无侵入 | 遥测一致性 | worker 更新 counter/rate 时 UI/JsonStore 只能读取同一代不可变快照，或由统一锁/原子协议保护；Reset 与持久化也必须纳入 | `last_update=0` 已消除未初始化读取；`TrafficBinding` 只隔离 profile/tag 身份。共享 `TrafficData` 的 counter/rate 仍存在无锁跨线程访问，尚无并发测试 | P2，稳定版前关闭 |
 | L3 隔离 Windows 集成 | 生命周期 | GUI 退出/重启、线路重启、core 崩溃；与 4.0.1 对照无额外限制、误杀或数据丢失 | 当前已有 UUID/executor/对账改造，但缺完整 GUI 证据，且复杂度可能超过需求 | 按上游回归审计 |
 | L3 隔离 Windows 集成 | 网络控制 | 系统代理、项目 TUN、IPv4/IPv6、DNS 的手工操作与上游回归；状态区分 requested/observed | 当前加入了多项额外 guard；persistent service/WFP 不属于现行核心要求 | 不得比上游退化；不在当前主机执行 |
@@ -104,7 +101,7 @@ Windows x64 是当前首要验收平台。本机 Clash TUN 必须始终运行，
 - 主 `2080` 必须保留上游路由/reject/DNS 语义；专用线路入口才强绑定完整 profile chain，并拒绝改投 `direct`、主线或另一条线路。
 - 专用入口的断言对象不仅是 tag/port/detour：完整 listener 与全部可达 outbound 必须在 custom merge 后仍保持绑定。该断言不得遮蔽主入口的上游规则。
 - `auto_detect_interface` 仅是底层 OS 接口选择，不能改变入口到逻辑线路的绑定，也不能作为“Mixed 自动选线路”的验收依据。
-- 本机 Clash TUN 存在时，本地远端成功只能证明请求完成，不能单独证明物理出站归属，也不能排除代理套代理/Fake-IP 影响。此时按 [Clash TUN 共存](../operations/CLASH_TUN_COEXISTENCE.md) 和 [OpenWrt 远程实验室](OPENWRT_REMOTE_LAB.md) 做对照。
+- 本机 Clash TUN 存在时，本地远端成功只能证明请求完成，不能单独证明物理出站归属，也不能排除代理套代理/Fake-IP 影响。此时按 [Clash TUN 共存](../operations/CLASH_TUN_COEXISTENCE.md) 转到隔离 Windows 环境。
 
 L2 历史诊断细节见[已验证基线](OPENWRT_REMOTE_LAB.md#已验证基线)。2026-07-20 的旧探针对每个临时变体强制 `auto_detect_interface=true`；它只能在这个共同条件下把故障收敛到 AnyTLS mihomo client 与 `g-2` detour 的组合，不能证明产品导出接口策略。必须按当前默认 preserve 重跑后才能成为现行证据，更不证明 Windows Wintun、WFP、系统代理、GUI 或线路重启已通过。
 
@@ -113,7 +110,7 @@ L2 历史诊断细节见[已验证基线](OPENWRT_REMOTE_LAB.md#已验证基线)
 1. 普通无网络副作用的 GUI/数据测试使用干净 Windows 用户目录且不复用唯一真实配置；凡涉及项目 TUN、系统代理、网卡、路由或 DNS 的测试只在独立 Windows 隔离环境执行。本机 Clash 始终保持运行且不被改写。
 2. 覆盖空配置、旧配置迁移、损坏配置和恢复流程。
 3. 完成 Mixed 三种协议、认证正反例、端口占用、非法端口与主/辅端口映射。
-4. 完成 Trojan、AnyTLS 及有/无 front proxy；L2 只能补充远端归因，最终仍需 L3 Windows 证据。
+4. 在隔离 Windows 中完成 Trojan、AnyTLS 及有/无 front proxy；历史 Linux 结果不计入当前发布候选。
 5. 在隔离 Windows 中对照 `adef6cd` 验证手工系统代理/项目 TUN、GUI 退出、重启和线路切换；不得把旧 persistent 数据面语义当成上游要求。
 6. 分别核对 TUN requested、worker-observed 和 Windows 实际状态；任何显示或 RPC 结果都不能冒充接口/路由已经成立。
 7. 对 U-005/U-006 的每个额外 guard 建独立四象限回归，只移除或缩窄被证明超出上游/产品的阻止；不以一次“大撤 guard”处理。
@@ -126,10 +123,10 @@ L2 历史诊断细节见[已验证基线](OPENWRT_REMOTE_LAB.md#已验证基线)
 
 - `tools/export_profile_core_config.ps1`：导出单个 profile 的实际 core 配置并可执行 `check`；显式 `-IncludeAuxiliaryAudit` 会把已保存的辅助 listener/chain 一并生成，但不会启动它们。
 - `tools/verify_mixed_inbound.ps1`：只接受主 `mixed-in -> proxy` 连通性诊断；拒绝 TUN/系统 NTP 写入/endpoints、裁剪到 `proxy` 的精确 detour 闭包后启动临时配置，验证监听 PID 和三种代理请求；不是辅助映射 contract 或 Windows 集成验收器。
-- `tools/verify_mixed_openwrt.py`：在固定 `192.168.1.7`、`127.0.0.1:52080` 和唯一临时目录中执行相同的严格收紧与 L2 探针；必须先 `--dry-run`，真实结果须满足远端基线未变和清理完成。
+- `tools/verify_mixed_openwrt.py`：历史 Linux 探针；按用户最新要求不再执行。
 - `test/fixtures/mixed-direct-sanitization.json`：验证诊断脚本不会启动额外 LAN inbound/controller、修改系统代理或写配置指定日志。
 - `test/test_mixed_probe.ps1`：用 loopback HTTP 204 origin 运行 direct、dummy auth 与安全拒绝 fixtures，并核对端口、系统代理、文件副作用和 origin 清理；不依赖公共站。2026-07-20 为 7/7。
-- `test/test_verify_mixed_openwrt.py`：覆盖远端收紧器的接口字段、NTP/endpoints、精确 detour 闭包、敏感摘要与命令安全；当前 19/19。
+- `test/test_verify_mixed_openwrt.py`：历史工具单测；不再纳入后续 Windows-only 验证命令。
 - `test/test_runtime_connectivity.ps1`：在临时 package 和 loopback HTTP 204 origin 中验证运行快照脚本的 PID 归属、精确 HTTP 状态、错误期望拒绝及清理；2026-07-20 的 204 正例通过，错误期望 200 正确失败。
 - `test/config_recovery_test.cpp`：覆盖单/多文件恢复基础设施、`VerifiedBefore`/`VerifiedAfter`/`Indeterminate`、退役、hidden/unexpected/exact-case/staging，以及 terminal startup/report 分层校验。路径用例 `routes_box/ROUTE~1` 只证明 `~` 被词法规则拒绝，不表示测试构造了真实 Windows 8.3 alias；选定配置根本身的 junction/别名仍需操作者确认。
 - `test/runtime_transition_test.cpp`：覆盖 GUI process-local transition/queue/crash generation 竞态、daemon generation 与 UUID 同锁快照，以及 `{generation, UUID, PID}` finished tracker 的错误身份/PID拒绝、异常完成、重复 finished 和 finished-before/after-wait；它不创建 QProcess、GUI、core 进程，不执行真实 HTTP/2，也不覆盖 `TrafficData` 并发或 Windows TUN/WFP。

@@ -26,13 +26,13 @@
 - 诊断进程必须按确切 PID 回收。
 - 删除和迁移数据前必须建立可验证备份。
 
-## 多环境验证
+## Windows 双环境验证
 
 1. 本地 fixture、配置导出、schema 和纯逻辑测试始终在本地隔离目录执行。
-2. Clash TUN 使真实 outbound 归因不清时，先用不改变宿主网络的进程级临时对照；仍不清楚时转到 WSL、独立 Windows 环境或 [OpenWrt 隔离实验室](../testing/OPENWRT_REMOTE_LAB.md)。
-3. 远端 probe 只允许精确临时目录、固定测试端口和精确 PID；不得修改 RouteFluent 现有 service、配置、nftables、路由或监听。
-4. WSL/OpenWrt 只证明相应 Linux core、配置、协议和 outbound，不替代 Windows Wintun、系统代理、WFP、GUI 或重启验收。
-5. Windows 专属行为在独立 Windows VM、Windows 沙盒或其它测试机验证。没有合格环境时明确记为未验证；不得向自动化开放停止 Clash 的例外。
+2. Clash TUN 使真实 outbound 归因不清时，先用不改变宿主网络的进程级临时对照；仍不清楚时转到独立 Windows 环境。
+3. 隔离 Windows 测试只允许精确临时目录、固定测试端口和精确 PID/接口；不得修改宿主 Clash、路由、DNS、系统代理或虚拟交换机。
+4. 后续不执行 Linux、WSL 或 OpenWrt 验证；旧报告只保留为历史证据。
+5. 项目 TUN、系统代理和 Windows 专属行为在独立 Windows VM、Windows 沙盒或其它 Windows 测试机验证。没有合格环境时明确记为未验证；不得向自动化开放停止 Clash 的例外。
 
 ## 文档规则
 

@@ -28,8 +28,8 @@
 ## 本机环境与检查点纪律
 
 - 当前开发主机依赖 Clash TUN 联网。用户已明确冻结为不可中断、不可写入的外部基础网络；本轮没有停止、重启、结束或改写它，也没有修改系统代理、TUN、WFP、路由、网卡或 DNS。
-- 当前主机只承担静态、构建、纯逻辑、loopback 和只读证据。WSL/OpenWrt 可以补 Linux core、配置和协议证据，但不能证明 Windows Wintun、系统代理、驱动或 GUI 生命周期。
-- Windows 专属 TUN 验收需要独立 Windows VM、Windows 沙盒或其它测试机。具体隔离、快照、网络和清理方案已列入 `KNOWN_ISSUES.md` 的 E-001，创建前仍待用户审核。
+- 当前主机只承担静态、构建、纯逻辑、loopback 和只读证据。用户已取消 Linux/WSL/OpenWrt 后续验证，正式证据只来自 Windows。
+- TUN 验收需要本机创建的独立 Windows VM、Windows 沙盒或其它 Windows 测试机。具体隔离、快照、网络和清理边界见 `KNOWN_ISSUES.md` 的 E-001；用户已授权在无需重启且不改变宿主网络/Clash 的边界内直接创建。
 - 用户要求后续及时形成远端检查点。每个独立工作包完成验证后应提交并推送当前任务分支，不再跨多轮累积未推送改动；这不授权向 `main` 推送、force push 或合并。
 
 ## 三项核心能力

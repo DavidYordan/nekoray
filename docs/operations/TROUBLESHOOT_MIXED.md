@@ -9,7 +9,7 @@ Mixed 同时接受 HTTP proxy 和 SOCKS5。排障必须区分“监听/入口协
 
 本项目默认 Mixed 端口是 `2080`。本机 Clash TUN 是外部底层网络，必须保持运行；禁止为了排障擅自停止、重启或改写它，也不得把 Clash 的接口/Fake-IP 特例硬编码进产品配置。详见 [Clash TUN 共存](CLASH_TUN_COEXISTENCE.md)。
 
-如果 Clash TUN 使本机出站归因不清，优先使用进程级临时对照、独立 Windows 环境或 [OpenWrt 远程实验室](../testing/OPENWRT_REMOTE_LAB.md)。不要为了完成排障自动关闭 Clash TUN。
+如果 Clash TUN 使本机出站归因不清，优先使用进程级临时对照或独立 Windows 环境。后续不执行 Linux/WSL/OpenWrt 验证，也不要为了完成排障自动关闭 Clash TUN。
 
 ## 1. 确认进程与监听者
 
@@ -90,17 +90,7 @@ powershell -NoProfile -ExecutionPolicy Bypass `
 ... -AnyTLSUtlsOverride chrome
 ```
 
-如果本机 Clash TUN 使底层出站无法归因，用同一个导出配置执行 L2 对照；先 dry-run，不得跳过：
-
-```powershell
-& 'D:\complex\RouteFluent\.venv\Scripts\python.exe' `
-  .\tools\verify_mixed_openwrt.py <exported-config.json> --dry-run --json
-
-& 'D:\complex\RouteFluent\.venv\Scripts\python.exe' `
-  .\tools\verify_mixed_openwrt.py <exported-config.json> --json
-```
-
-真实探针必须看到 `baseline_unchanged=true` 和 `remote_directory_cleaned=true`；否则首先处理安全/清理失败，不继续把联网结果解释成产品结论。
+如果本机 Clash TUN 使底层出站无法归因，应使用同一个脱敏导出配置转到隔离 Windows 环境。不得运行旧 OpenWrt/WSL 探针，也不得通过修改宿主 Clash、路由、DNS 或系统代理制造对照。
 
 ## 5. 按症状定位
 
@@ -112,17 +102,17 @@ powershell -NoProfile -ExecutionPolicy Bypass `
 - 原生 AnyTLS client 收到服务端 internal error、mihomo client 成功：说明 client 兼容语义有实际作用，不要通过删除 client 字段“修复”detour 问题。
 - `resolver_unavailable>0`：先看订阅来源。专用 `proxy-server-nameserver` 显式存在时只检查它，不能借普通 nameserver；专用字段 absent 时再检查 `dns.nameserver` 中的 HTTPS DoH。随后检查 provider DoH 可达性和 `dns-local` 是否只用于 endpoint bootstrap；不得让 provider DoH 失败后通过本机 DNS、direct 或其它线路 fallback 掩盖故障。
 - 出现 `obsolete import policy`：这是旧组里非空 resolver 值的迁移护栏，不要手工复制旧值；成功刷新该订阅后，来源、版本和 DoH 列表会原子地随 group 保存。若刷新失败，旧线路数据保持不变。
-- 只有本机失败、OpenWrt 相同临时配置成功：优先检查 Windows 默认路由、TUN 回环、接口选择和进程生命周期。
-- 本机与 OpenWrt 同一配置均失败：优先检查配置生成、DNS、detour、节点或上游网络。
+- 只有当前主机失败、隔离 Windows 相同临时配置成功：优先检查宿主 Clash 叠加路径；不能把宿主特例写进产品。
+- 当前主机与隔离 Windows 同一配置均失败：优先检查配置生成、DNS、detour、节点或上游网络。
 - GUI 退出时提示正在等待某个精确 core PID：不要重复关闭、kill 该进程或手工替换 core。结构化 Exit ACK 已提交，或 ACK 丢失后无法证明未接纳时，continuation fence 会持续等待同一 `{generation, UUID, PID}` finished；这不是 Mixed 入口自动检测或线路 fallback。只有退出详情明确说明对账已证明 clean non-admission（协议条件为 `STOPPED/FENCED_NOT_ADMITTED`）时，GUI 才能安全恢复控制。
 
-2026-07-20 的历史 OpenWrt 真实对照中：保持主配置时，Mixed 和目标 outbound 均有事件，但 “AnyTLS `mihomo/1.19.28` + `g-2` detour” 返回 HTTP 502、HTTPS 超时、SOCKS 空响应；移除 detour 后三协议均为 204，独立 Trojan/profile 2 与独立 `g-2` 完整 outbound 也均为 204。该轮旧探针对所有临时变体强制 `auto_detect_interface=true`，只能证明共同接口变体下存在组合差异，不能证明产品导出接口策略；必须按当前默认 preserve 重跑。详细证据和安全基线见 [OpenWrt 已验证基线](../testing/OPENWRT_REMOTE_LAB.md#已验证基线)。这也不证明 Windows 集成已经通过。
+2026-07-20 的历史 OpenWrt 真实对照中：保持主配置时，Mixed 和目标 outbound 均有事件，但 “AnyTLS `mihomo/1.19.28` + `g-2` detour” 返回 HTTP 502、HTTPS 超时、SOCKS 空响应；移除 detour 后三协议均为 204，独立 Trojan/profile 2 与独立 `g-2` 完整 outbound 也均为 204。该记录只解释历史判断，不能证明当前导出策略或 Windows 集成；后续不再重跑 Linux 探针。
 
-早期本机接管实验已归档到 [2026-07-20 接管基线](../archive/audits/2026-07-20-takeover-baseline.md)，不得用其中单次成功覆盖新的可重复 OpenWrt 对照。
+早期本机接管实验已归档到 [2026-07-20 接管基线](../archive/audits/2026-07-20-takeover-baseline.md)，不得用其中单次成功覆盖当前隔离 Windows 证据。
 
 ## 6. 何时转移到隔离 Windows 环境
 
-WSL/OpenWrt 能验证相应 Linux core 的 schema、Mixed、Trojan/AnyTLS、DNS 和 detour，不能验证 Wintun、系统代理、WFP、GUI 退出/重启或线路热重启。Windows 专有行为必须转移到带快照和精确资源所有权的独立 Windows VM、Windows 沙盒或其它测试机；若暂时没有合格环境则标记未验证。当前主机的 Clash TUN 不得因排障而停止或改写。
+所有正式验证都必须在 Windows 完成。项目 TUN、系统代理、WFP、GUI 退出/重启或线路热重启必须转移到带快照和精确资源所有权的独立 Windows VM、Windows 沙盒或其它测试机；若暂时没有合格环境则标记未验证。当前主机的 Clash TUN 不得因排障而停止或改写。
 
 ## 7. 无私人节点的工具回归
 

@@ -47,10 +47,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\verify_fail_closed_r
 
 ## 测试环境边界
 
-本机 Clash TUN 必须保持运行，因此日常自动测试只允许执行无侵入快照和隔离 contract。OpenWrt 可验证相同 core 的配置、DNS 和远端出站，但不能验证 Windows Wintun、系统代理、WFP、GUI 退出或线路重启；边界见 [OpenWrt 远程实验室](OPENWRT_REMOTE_LAB.md)。
+本机 Clash TUN 必须保持运行，因此日常自动测试只允许执行无侵入快照和隔离 contract。后续验证只使用 Windows；项目 TUN、系统代理、GUI 退出或线路重启转到独立 Windows 环境。
 
-2026-07-20 的历史 OpenWrt 探针每次都保持既有 RouteFluent PID `24565`、命令行、配置/manifest 哈希和监听集合完全不变，并清理了每个临时目录；但旧探针对临时配置强制 `auto_detect_interface=true`。这些结果只能证明资源所有权/清理约束以及同一接口变体下的组合诊断，必须按默认 preserve 重跑，且不能证明 Windows 产品已经 fail-closed；尤其不能替代 TUN 开启时的线路重启、core 崩溃、WFP 或 IPv4/IPv6 泄漏测试。
+2026-07-20 的历史 OpenWrt 探针每次都保持既有 RouteFluent PID `24565`、命令行、配置/manifest 哈希和监听集合完全不变，并清理了每个临时目录；但旧探针对临时配置强制 `auto_detect_interface=true`。这些结果只能证明当时资源所有权/清理约束以及同一接口变体下的组合诊断，不再安排 Linux 重跑，也不能证明 Windows 产品已经 fail-closed。
 
-当前主机不再把停用 Clash 的维护窗口作为验证选项。Windows 专有场景只能转移到带快照、精确资源所有权和恢复步骤的独立 Windows VM、Windows 沙盒或其它测试机；WSL/OpenWrt 只能保留为 Linux/core 层证据。没有合格环境时标记未验证，工具和 agent 不得自行停止 Clash TUN。
+当前主机不再把停用 Clash 的维护窗口作为验证选项。所有网络场景只能转移到带快照、精确资源所有权和恢复步骤的独立 Windows VM、Windows 沙盒或其它 Windows 测试机；没有合格环境时标记未验证，工具和 agent 不得自行停止 Clash TUN。
 
 任何时候，脚本输出都只能证明其实际采样范围；若用户未来重新批准该扩展方向，再另立验收门，不能用本历史清单反向创造现行需求。

@@ -6,7 +6,7 @@
 | 能力 | NekoRay基线 | 当前分支实现 | 实测证据 | 接管处理 |
 |---|---|---|---|---|
 | AnyTLS | 无 | Bean/UI/链接/Clash/core均有 | 提交 `f298d46`：Windows 回环中由 ProfileManager/ConfigBuilder 生成 Mihomo-client AnyTLS，经 Trojan group front proxy 到独立 HTTP origin 成功；停止 Trojan 后 AnyTLS server/origin 仍存活而该端口失败。2026-07-20 真实远端组合 EOF 仍待 preserve 重跑 | 三项扩展；继续验证真实组合与继承 |
-| Trojan | 有 | 有 | 提交 `f298d46` 已作为 Windows 回环 AnyTLS 前置代理实际承载流量并完成故障隔离；2026-07-20 OpenWrt 单跳三协议 204，真实远端组合仍待 preserve 重跑 | 保留 |
+| Trojan | 有 | 有 | 提交 `f298d46` 已作为 Windows 回环 AnyTLS 前置代理实际承载流量并完成故障隔离；2026-07-20 OpenWrt 结果仅作历史背景，真实远端组合改在隔离 Windows 重测 | 保留 |
 | Shadowsocks | 有 | 有，但v2ray-plugin导入/UI回归 | 未复验 | 恢复兼容并测试 |
 | SOCKS/HTTP | 有 | 有，部分userinfo兼容回归 | Mixed入口协议fixture有基线 | 恢复兼容并测试 |
 | VMess/VLESS | 有 | 有，v2rayN分享格式回归 | 未复验 | 保留；不等于恢复Xray core |
@@ -21,4 +21,4 @@
 
 Xray运行核心保持删除。名称含 `v2ray` 的格式、插件或生态兼容不自动属于Xray核心。
 
-每个协议的正式证据至少覆盖：新建、持久化、编辑、订阅/链接round-trip、core schema、主/辅助端口、HTTP/CONNECT/SOCKS5h、失败关闭、Windows系统代理/TUN。OpenWrt只提供配置/outbound层证据。
+每个协议的正式证据至少覆盖：新建、持久化、编辑、订阅/链接 round-trip、core schema、主/辅助端口、HTTP/CONNECT/SOCKS5h、失败关闭、Windows 系统代理/TUN。后续只接受 Windows 证据；既有 OpenWrt 记录仅为历史背景，不再重跑。

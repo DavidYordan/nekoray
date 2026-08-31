@@ -202,11 +202,11 @@ MultiMapper 可借鉴人工入口选择、来源证据、固定/解除、分层�
 - 本机 Clash TUN 是不可中断的外部基础网络。用户已明确要求它始终保持运行；agent、脚本、构建和测试禁止停止、重启、结束其进程，禁止写入或接管其配置、接口、Fake-IP、DNS、路由及其它网络状态。不得默认存在“可暂停 Clash”的维护窗口。
 - 本地测试默认不得修改系统代理、TUN、WFP、默认路由、网卡或 DNS。
 - 本机只允许不改变 Clash 和 Windows 网络状态的静态检查、构建、纯逻辑、loopback 与只读快照。需要启停本项目 TUN、注入 Windows 网卡/路由/DNS 故障或排除双 TUN 干扰时，必须转移到隔离环境。
-- WSL 只可证明 Linux core、配置、协议和 loopback 行为，不能替代 Windows Wintun、系统代理、WFP、驱动、GUI 生命周期或双 TUN 验收。Windows 专属断言应在独立 Windows VM、Windows 沙盒或其它不依赖本机 Clash 的测试机验证；创建或改变这类环境前先提交隔离、快照、网络和清理方案供用户审核。
-- WSL、VM 或沙盒不得通过修改本机 Hyper-V/vSwitch、默认路由、DNS、系统代理、Clash 配置或网卡来获取测试条件。无法安全隔离时应标记“未验证”，不得在本机冒险补证据。
+- 用户已于 2026-08-31 明确取消 Linux/WSL/OpenWrt 后续验证；所有正式验证只使用 Windows。本机无侵入证据不能覆盖的断言，应在独立 Windows VM、Windows 沙盒或其它不依赖本机 Clash 的 Windows 测试机验证。
+- VM 或沙盒不得通过修改本机 Hyper-V/vSwitch、默认路由、DNS、系统代理、Clash 配置或网卡来获取测试条件。无法安全隔离时应标记“未验证”，不得在本机冒险补证据。
 - 测试进程只按本次创建并核对的精确 PID/路径清理；禁止按进程名、端口范围或模糊匹配批量结束。
 - `deployment/windows64` 中存在运行实例时，正式打包应 fail-fast，不得替用户关闭或强杀。
-- OpenWrt 实验只在任务确实需要协议/配置对照时按隔离实验文档执行；不得修改 RouteFluent 或 MultiMapper 的生产 service、配置、nftables、路由和资产。
+- OpenWrt/WSL 工具与旧报告只保留为历史材料，后续任务不得执行 Linux 相关验证；也不得修改 RouteFluent 或 MultiMapper 的生产 service、配置、nftables、路由和资产。
 
 ## PowerShell、路径与 UTF-8
 
@@ -282,7 +282,7 @@ Pop-Location
 - 多入口：验证刷新/诊断不改 active entry，固定 IP 后保留原 SNI；
 - AnyTLS：验证 round-trip、单跳、front proxy/detour 和专用端口；
 - 并发端口：至少两条线路并发、端口冲突、单线失败隔离、无跨线/direct fallback，并对照原生 `2080` 路由。
-- Windows TUN、Wintun、系统代理、WFP、网卡和路由故障注入不得在当前主机执行；WSL/OpenWrt 结果只能证明相应 Linux/core 层，最终 Windows 证据必须来自隔离 Windows 环境。
+- Windows TUN、Wintun、系统代理、WFP、网卡和路由故障注入不得在当前主机执行，最终证据必须来自隔离 Windows 环境；不再安排 WSL/OpenWrt 验证。
 
 无法执行某层验证时明确写“未验证”及原因，不能用低层测试替代。
 

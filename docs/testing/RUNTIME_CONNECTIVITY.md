@@ -7,7 +7,7 @@
 
 - 本项目默认 Mixed 端口是 `2080`。验证结果必须同时记录监听 PID 与可执行文件路径，不能只凭端口成功认定属于本项目。
 - 本机 Clash TUN 是不可中断的外部底层网络，测试必须保持其运行；不得停止、重启、结束其进程，也不得改写配置、接口、DNS 或路由。当前主机不存在“停 Clash 维护窗口”这条验证路径。
-- Clash TUN 会影响默认路由、Fake-IP DNS 和出站归因。无法用进程级临时对照得出结论时，停止本机实验并转到独立 Windows 环境、WSL 或 [OpenWrt 远程实验室](OPENWRT_REMOTE_LAB.md)，同时遵守各环境的证据边界。
+- Clash TUN 会影响默认路由、Fake-IP DNS 和出站归因。无法用进程级临时对照得出结论时，停止本机实验并转到独立 Windows 环境；后续不执行 Linux/WSL/OpenWrt 验证。
 
 ## 先分清两层语义
 
@@ -18,29 +18,15 @@
 ## 分层验证
 
 1. **本地无侵入验证**：配置导出与 `check`、direct fixture、Mixed HTTP/CONNECT/SOCKS5 contract、监听 PID 和端口映射。此级不得修改系统代理、TUN、路由或 DNS。
-2. **WSL/Linux 隔离验证**：可验证 Linux core、配置、schema、协议 loopback 和无 Windows 副作用的故障路径。WSL2 仍借宿主网络出站，不能据此证明物理出站归属，也不能替代 Windows Wintun、系统代理、WFP、驱动和 GUI 生命周期。
-3. **OpenWrt 临时探针**：本机 Clash TUN 使真实出站归因不清时，在授权且可达的隔离实验机用相同版本 core 验证 schema、DNS、detour 和远端协议。具体边界见 [OpenWrt 远程实验室](OPENWRT_REMOTE_LAB.md)。
-4. **独立 Windows 集成验收**：真实 GUI、Mixed、系统代理/TUN 的上游回归、线路重启和 Windows 接口选择只能在 Windows 验证。WFP/persistent Runtime 不是当前核心发布门。应使用带快照和精确资源所有权的独立 Windows VM、Windows 沙盒或其它测试机；不得为取得证据停止或改写本机 Clash。
+2. **独立 Windows 集成验收**：真实 GUI、Mixed、系统代理/TUN 的上游回归、线路重启和 Windows 接口选择只能在 Windows 验证。WFP/persistent Runtime 不是当前核心发布门。应使用带快照和精确资源所有权的独立 Windows VM、Windows 沙盒或其它测试机；不得为取得证据停止或改写本机 Clash。
 
-WSL/OpenWrt 成功只说明相应 core/配置/出站链在该环境闭环；独立 Windows 失败时，优先调查 Windows 路由、接口和生命周期。各环境以同一脱敏临时配置失败时，再调查节点、DNS、detour 或配置生成。任何低层成功都不能上推为未执行层级已经通过。
+当前主机 loopback 成功只说明相应 core/配置/出站链在叠加网络中闭环；独立 Windows 失败时，优先调查 Windows 路由、接口和生命周期。任何低层成功都不能上推为未执行层级已经通过。
 
-OpenWrt 层的标准入口是先 dry-run、再真实运行；它固定使用 `127.0.0.1:52080`，并复核远端现有服务基线不变：
+## 历史 Linux 诊断（不再执行）
 
-```powershell
-& 'D:\complex\RouteFluent\.venv\Scripts\python.exe' `
-  .\tools\verify_mixed_openwrt.py <exported-config.json> --dry-run --json
+2026-07-20 的历史 OpenWrt 对照中：临时 `52080` Mixed 被显式重写为命中目标 AnyTLS outbound；保持 `mihomo/1.19.28`、移除 `g-2` detour 后三种协议均返回 204。独立 profile 2 的 Trojan 也三协议返回 204，且结构比对确认它与 `g-2` 是同一个完整 outbound 对象。只有 “AnyTLS mihomo client + `g-2` detour” 目标链组合出现 HTTP 502、HTTPS 超时、SOCKS 空响应和 `failed to create session: EOF`；改用原生 AnyTLS client 又触发服务端 internal error。该轮旧探针对所有临时变体强制 `auto_detect_interface=true`，只能在这一共同条件下隔离协议组合，不能代表当前导出接口策略；不再安排 Linux 重跑。
 
-& 'D:\complex\RouteFluent\.venv\Scripts\python.exe' `
-  .\tools\verify_mixed_openwrt.py <exported-config.json> --json
-```
-
-默认探针保留导出配置的 `auto_detect_interface`。`--force-auto-detect-interface` 只用于单独接口诊断，不能混入标准协议验收。
-
-## 当前 L2 结论
-
-2026-07-20 的历史 OpenWrt 对照中：临时 `52080` Mixed 被显式重写为命中目标 AnyTLS outbound；保持 `mihomo/1.19.28`、移除 `g-2` detour 后三种协议均返回 204。独立 profile 2 的 Trojan 也三协议返回 204，且结构比对确认它与 `g-2` 是同一个完整 outbound 对象。只有 “AnyTLS mihomo client + `g-2` detour” 目标链组合出现 HTTP 502、HTTPS 超时、SOCKS 空响应和 `failed to create session: EOF`；改用原生 AnyTLS client 又触发服务端 internal error。该轮旧探针对所有临时变体强制 `auto_detect_interface=true`，只能在这一共同条件下隔离协议组合；需按当前默认 preserve 重跑后才能代表导出接口策略。
-
-因此历史证据只说明临时 `52080` Mixed 解析器能工作，且故障可在该临时映射下收敛到 AnyTLS 与 Trojan detour 的组合；它不能排除产品 `2080`/辅助端口映射问题，也不能把“主 outbound 组合”写成唯一剩余阻断项。完整数据和安全基线见 [OpenWrt 远程实验室](OPENWRT_REMOTE_LAB.md#已验证基线)。这仍不是 Windows Wintun、WFP、系统代理或生命周期通过证明。
+因此历史证据只说明当时临时 Mixed 解析器能工作，且故障可在该临时映射下收敛到 AnyTLS 与 Trojan detour 的组合；它不能排除产品 `2080`/辅助端口映射问题，也不是当前 commit 的完成证据。后续按用户要求只在 Windows 重做必要验证，不再重跑该 Linux 探针。
 
 ## 本地检查入口
 

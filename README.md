@@ -20,7 +20,7 @@
 
 - 当前首要验收平台是 Windows x64 私人便携构建；这不授权删除无冲突的上游能力。
 - 默认主 Mixed 端口恢复为 NekoRay 原生值 `2080`；辅助端口的具体默认范围只是实现参数，不是产品原则。
-- 本机基础网络现为 Clash TUN。它是不可中断的外部底层网络，必须始终运行；本项目和测试不得停止/重启其进程，也不得改写其配置、接口、DNS 或路由。WSL 不能替代 Windows TUN 验收，相关测试应转移到独立 Windows 隔离环境；共存和证据边界见 [Clash TUN 共存](docs/operations/CLASH_TUN_COEXISTENCE.md)。
+- 本机基础网络现为 Clash TUN。它是不可中断的外部底层网络，必须始终运行；本项目和测试不得停止/重启其进程，也不得改写其配置、接口、DNS 或路由。后续只做 Windows 验证，相关网络测试应转移到本机创建的独立 Windows 沙盒/VM；共存和证据边界见 [Clash TUN 共存](docs/operations/CLASH_TUN_COEXISTENCE.md)。
 - `auto_detect_interface` 只承担 NekoRay 原有的产品 TUN 防环路语义，不负责按 Mixed 端口选线路。测试环境绕行只能存在于显式、临时的测试副本中。
 - 系统代理和项目 TUN 的手工操作应恢复并保持 NekoRay 上游语义；诊断、订阅刷新和无关配置操作不得擅自启停它们。GUI 退出、切线等具体行为先对照 `adef6cd`，不能以此反向要求 persistent Runtime/WFP。
 - 受管 provider resolver 和专用并发端口必须失败关闭：不得回落到本机 DNS、主线路、`direct` 或其它可用线路。

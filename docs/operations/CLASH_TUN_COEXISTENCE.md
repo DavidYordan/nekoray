@@ -34,7 +34,7 @@ Mixed-only 模式按 Windows 当前路由发送底层连接。如果 Clash 处�
 2. 从目标 profile 导出配置并执行 `nekobox_core check`。
 3. 用收紧后的临时 Mixed 副本分别测试 HTTP、CONNECT、SOCKS5h；不得启动 TUN或写系统网络状态。
 4. 若日志已命中目标 `proxy`，按 DNS bootstrap、TCP、TLS、协议、detour 分层，不再归咎 Mixed。
-5. 需要绕过 Clash 时，只允许使用显式、一次性的诊断覆盖，并在报告中标记；优先使用独立 Windows 环境或可达的 OpenWrt 实验机。
+5. 需要绕过 Clash 影响时，只允许转到独立 Windows 环境；后续不执行 WSL/OpenWrt 验证。
 6. 当前主机不以停用 Clash、修改其配置或改 Windows 系统代理、路由、DNS、防火墙作为排障步骤；无法归因时停止本机实验并转移环境。
 
 ## 隔离环境与证据范围
@@ -42,8 +42,6 @@ Mixed-only 模式按 Windows 当前路由发送底层连接。如果 Clash 处�
 | 环境 | 可以证明 | 不能据此宣称 |
 |---|---|---|
 | 当前 Windows 主机（Clash 保持运行） | 静态检查、构建、纯逻辑、loopback、只读 PID/端口/路由快照，以及“请求在当前叠加网络中完成” | 本项目 TUN 独立行为、物理出站归属、无双 TUN/Fake-IP 干扰 |
-| WSL2 | Linux core、parser/config/schema、协议 loopback、无 Windows 副作用的分层诊断 | Windows Wintun、系统代理、WFP、网卡/驱动、GUI 生命周期；WSL 远端流量仍受宿主网络影响 |
-| OpenWrt 临时探针 | 相同 core 的 schema、DNS、协议、detour 和远端出站 | 任何 Windows 专属行为 |
 | 独立 Windows VM、Windows 沙盒或其它测试机 | 在快照和精确进程所有权下验证 Wintun、系统代理、GUI/core 生命周期、Windows 路由/DNS | 未实际覆盖的物理机驱动、休眠、多网卡等场景 |
 
 创建隔离环境是独立工作包。开始前应向用户提交：平台和版本、与宿主的网络隔离方式、是否需要管理员权限、快照/回滚、测试包来源、允许创建的进程/接口，以及精确清理方法。不得通过改变宿主 Hyper-V/vSwitch、默认路由、DNS、系统代理或 Clash 来“隔离”。
@@ -52,7 +50,6 @@ Mixed-only 模式按 Windows 当前路由发送底层连接。如果 Clash 处�
 
 - 进程级 socket/interface 绑定；
 - 临时配置副本中的真实 IP、接口诊断字段或 DNS bootstrap 对照；
-- OpenWrt 固定临时端口探针；
 - 独立 Windows 测试机。
 
-这些结果只能用于归因，不得提交为产品默认。若只有修改 Clash、关闭 Clash TUN 或改宿主系统路由才能继续，必须停止当前主机测试；没有合格隔离环境时明确记录未验证，不得请求自动化停网，也不得以 WSL/OpenWrt 结果替代 Windows 验收。
+这些结果只能用于归因，不得提交为产品默认。若只有修改 Clash、关闭 Clash TUN 或改宿主系统路由才能继续，必须停止当前主机测试；没有合格隔离 Windows 环境时明确记录未验证，不得请求自动化停网。

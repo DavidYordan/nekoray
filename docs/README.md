@@ -4,7 +4,7 @@
 
 每类事实只保留一个主要落点，避免再次出现“旧计划反向定义产品”的问题：
 
-环境硬约束：当前开发主机依赖不可中断的 Clash TUN；任何开发或测试都不得停止、重启或改写它。WSL/OpenWrt 只能提供 Linux/core 层证据，Windows TUN/Wintun/系统代理/驱动验收必须转移到独立 Windows 隔离环境。具体规则见[产品契约](PRODUCT.md#34-本机基础网络与-tun-验证边界)与[Clash TUN 共存说明](operations/CLASH_TUN_COEXISTENCE.md)。
+环境硬约束：当前开发主机依赖不可中断的 Clash TUN；任何开发或测试都不得停止、重启或改写它。后续只做 Windows 验证，TUN/Wintun/系统代理/驱动验收必须转移到本机创建的独立 Windows 隔离环境。具体规则见[产品契约](PRODUCT.md#34-本机基础网络与-tun-验证边界)与[Clash TUN 共存说明](operations/CLASH_TUN_COEXISTENCE.md)。
 
 | 文档 | 唯一职责 | 不应承载 |
 |---|---|---|
@@ -55,7 +55,7 @@ MultiMapper 不作为产品依赖或可直接移植的实现，但其多入口�
 - [测试矩阵](testing/TEST_MATRIX.md)
 - [Core 配置导出](testing/CORE_CONFIG_EXPORT.md)
 - [Windows 运行时连通性](testing/RUNTIME_CONNECTIVITY.md)
-- [OpenWrt 隔离实验室](testing/OPENWRT_REMOTE_LAB.md)
+- [OpenWrt 隔离实验室（历史材料；不再执行）](testing/OPENWRT_REMOTE_LAB.md)
 - [全机 fail-closed 历史扩展验证（非现行发布门）](testing/FAIL_CLOSED.md)
 
 ## 历史归档

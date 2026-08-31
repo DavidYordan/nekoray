@@ -14,7 +14,7 @@
 - [x] 冻结 Windows-only、私人项目；主端口于 2026-07-24 按 [ADR 0012](architecture/decisions/0012-restore-native-mixed-port.md) 恢复为 `2080`。
 - [x] 将本机 Clash TUN 标记为外部底层网络：测试保持其运行，不把其接口/Fake-IP 特例写入产品默认。
 - [x] 冻结“仅手动启停系统代理/TUN、端口精确映射、绝不 fallback直连”。
-- [x] 保留上游 `auto_detect_interface=dataStore->spmode_vpn`，未为本机双 TUN 强制开启；OpenWrt helper 单测覆盖默认 preserve，真实 L2 preserve 重跑与 C++ live/test/export golden 仍在后续阶段。持久 runtime 后改由真实 TUN owner/underlay 拓扑决定。
+- [x] 保留上游 `auto_detect_interface=dataStore->spmode_vpn`，未为本机双 TUN 强制开启；OpenWrt helper 的既有结果只作历史证据。2026-08-31 后不再安排 Linux L2 重跑，必要 golden 与网络行为改在隔离 Windows 验证。
 - [x] 打包脚本移除生产安装默认依赖，运行实例存在时 fail-fast。
 - [x] 禁止 Windows legacy 外置 TUN 的占位 PID/按映像名清理路径；未建立精确 owner 前不启动或停止它。
 - [x] 删除无令牌的 TUN 提权重启自动启用；旧 WinINet 系统代理切换在精准 broker 完成前从 Windows UI 路径 fail-closed 禁用。
@@ -100,7 +100,7 @@
 - [ ] 批量分享的 C++ 纯函数矩阵已覆盖 fragment 精确删除、IPv4/端口/协议/认证正负例与冒号/换行拒绝，且只使用假凭据；仍需 GUI 自动化覆盖混合多选的原子失败、剪贴板不变和实际右键菜单触发。
 - [x] 建立首个 Windows-only CI：校验仓库卫生、固定子模块、受控 RouteFluent core 源构建、Go 单测和无侵入 Python 安全契约；不得将其表述为 GUI/TUN/WFP 验收。
 - [ ] 收口干净 Qt/MinGW/C++ 工具链、GUI 自动构建与测试、交付 wrapper 真实 hash/manifest、许可证和 SBOM；libneko 仓内固定已完成。
-- [ ] 先用 OpenWrt复测 patched core协议；再在独立 Windows完成 Mixed、多辅助、Wintun、WFP、IPv4/IPv6/DNS故障注入。
+- [ ] （已被 2026-08-31 用户指令取代）不再执行 OpenWrt/Linux 验证；必要协议与网络矩阵统一在隔离 Windows 完成。
 - [ ] （已被 2026-08-31 用户指令取代）当前主机不再安排停用 Clash 的维护窗口；Windows 专属验证转到独立 Windows VM、Windows 沙盒或其它测试机。
 
 ## 阶段 5：私人预览版
