@@ -206,6 +206,14 @@
         <translation type="unfinished">فاصله (به دقیقا ، اگر کمتر از ۳۰ باشد نادرست است)</translation>
     </message>
     <message>
+        <source>Use v2rayN VMess share format</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Export VMess links as v2rayN-compatible base64 JSON when the fields are representable.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
         <source>Mixed (SOCKS+HTTP) Listen Port</source>
         <translation type="unfinished"></translation>
     </message>

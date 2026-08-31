@@ -148,6 +148,14 @@
         <translation>高级系统代理设置。请选择一种格式。</translation>
     </message>
     <message>
+        <source>Use v2rayN VMess share format</source>
+        <translation>使用 v2rayN VMess 分享格式</translation>
+    </message>
+    <message>
+        <source>Export VMess links as v2rayN-compatible base64 JSON when the fields are representable.</source>
+        <translation>字段可由该格式表示时，将 VMess 链接导出为兼容 v2rayN 的 base64 JSON。</translation>
+    </message>
+    <message>
         <source>Clear servers before updating subscription</source>
         <translation>更新订阅前清除服务器</translation>
     </message>

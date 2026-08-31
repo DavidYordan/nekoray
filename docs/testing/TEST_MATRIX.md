@@ -13,6 +13,18 @@ Windows x64 是唯一后续验收平台。本机 Clash TUN 必须始终运行，
 
 历史一次性 Mixed/AnyTLS 调查只在矩阵中作为明确标注日期的诊断背景保留；原始证据见 [2026-07-20 接管基线](../archive/audits/2026-07-20-takeover-baseline.md)。历史中的单次成功不能升级为当前通过结论。
 
+## 2026-08-31 VMess v2rayN 分享兼容恢复
+
+| 检查 | 结果 | 证明范围 |
+|---|---:|---|
+| 上游与格式来源对照 | 确认回归 | `11ba168` 以删除 Xray 遗留为由同时删除 VMess v2rayN parser、export 选择和设置；`adef6cd` 与 v2rayN 官方 schema 证明它是 VMess 分享格式，不是 Xray runtime |
+| 定向红绿回归 | 修复前失败、修复后通过 | 标准 base64 JSON 的 `add/port/id/aid/net/host/path/type/scy/tls/sni/alpn/fp/insecure/ps` 解析、导出、重解析保真；`h2` 与内部 `http` 可逆，不访问 DNS/网络 |
+| 格式与错误分流 | 通过 | `port/aid` 接受字符串或整数；非法 base64/长度、非 JSON、缺 server/UUID、越界/小数 port 明确失败；现代 `vmess://uuid@server...` 留给原 URI parser |
+| 生产接入 | 通过 | `VMessBean::TryParseLink/ToShareLink` 使用同一 helper；设置恢复、默认启用并注册持久字段。带 Reality public key 时继续导出现代 URI，并补齐 URI 的 ALPN 与 TCP-HTTP path round-trip，避免 v2rayN JSON 无表示字段时丢 key |
+| `nekobox` 增量构建、完整 CTest | 通过、5/5 | UI/DataStore/parser/export 编译链接和纯测试通过；不是 clean package，不证明真实 GUI 剪贴板、二维码、订阅、远端 VMess 或 Windows 网络 |
+
+当前 v2rayN schema 的 `vcn/pcs` 在 NekoRay Bean/runtime 中没有等价字段，本切片未猜测映射；不把基线恢复写成所有新扩展均已支持。
+
 ## 2026-08-31 SOCKS base64 userinfo 上游兼容恢复
 
 | 检查 | 结果 | 证明范围 |

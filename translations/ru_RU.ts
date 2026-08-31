@@ -204,6 +204,14 @@
         <translation>Интервал (в минутах, значение считается неправильным, если меньше 30)</translation>
     </message>
     <message>
+        <source>Use v2rayN VMess share format</source>
+        <translation>Использовать формат VMess v2rayN</translation>
+    </message>
+    <message>
+        <source>Export VMess links as v2rayN-compatible base64 JSON when the fields are representable.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
         <source>Mixed (SOCKS+HTTP) Listen Port</source>
         <translation type="unfinished"></translation>
     </message>

@@ -1,5 +1,6 @@
 #include "db/ProxyEntity.hpp"
 #include "fmt/includes.h"
+#include "fmt/ShareFormats.hpp"
 
 #include <QUrlQuery>
 
@@ -100,6 +101,31 @@ namespace NekoGui_fmt {
     }
 
     QString VMessBean::ToShareLink() {
+        // v2rayN base64 JSON has no fields for VMess Reality keys. Keep the
+        // URI form in that case instead of silently producing a broken link.
+        if (NekoGui::dataStore->old_share_link_format &&
+            stream->reality_pbk.trimmed().isEmpty()) {
+            V2RayNVmessFields fields;
+            fields.name = name;
+            fields.serverAddress = serverAddress;
+            fields.serverPort = serverPort;
+            fields.uuid = uuid;
+            fields.alterId = aid;
+            fields.network = stream->network;
+            fields.host = stream->host;
+            fields.path = stream->path;
+            fields.headerType = stream->header_type;
+            fields.security = security;
+            fields.tls = stream->security == QStringLiteral("tls")
+                             ? QStringLiteral("tls")
+                             : QString{};
+            fields.sni = stream->sni;
+            fields.alpn = stream->alpn;
+            fields.fingerprint = stream->utlsFingerprint;
+            fields.allowInsecure = stream->allow_insecure;
+            return BuildV2RayNVmessLink(fields).link;
+        }
+
         QUrl url;
         QUrlQuery query;
         url.setScheme("vmess");
@@ -115,6 +141,7 @@ namespace NekoGui_fmt {
         query.addQueryItem("security", streamSecurity);
 
         if (!stream->sni.isEmpty()) query.addQueryItem("sni", stream->sni);
+        if (!stream->alpn.isEmpty()) query.addQueryItem("alpn", stream->alpn);
         if (stream->allow_insecure) query.addQueryItem("allowInsecure", "1");
         if (stream->utlsFingerprint.isEmpty()) {
             query.addQueryItem("fp", NekoGui::dataStore->utlsFingerprint);
@@ -137,6 +164,7 @@ namespace NekoGui_fmt {
             if (!stream->path.isEmpty()) query.addQueryItem("serviceName", stream->path);
         } else if (stream->network == "tcp") {
             if (stream->header_type == "http") {
+                if (!stream->path.isEmpty()) query.addQueryItem("path", stream->path);
                 query.addQueryItem("headerType", "http");
                 query.addQueryItem("host", stream->host);
             }

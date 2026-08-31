@@ -65,7 +65,7 @@
 相对 `adef6cd`，下列回归仍明确存在：
 
 - external-core、Naive、custom external 以及 TUIC/Hysteria2 外核选择被删除或禁用；
-- VMess/v2rayN、Shadowsocks v2rayN/v2ray-plugin 等导入分享兼容仍退化；SOCKS base64 userinfo 已恢复；
+- SOCKS base64 userinfo 与 VMess v2rayN base64 JSON 基线已恢复；Shadowsocks v2rayN/v2ray-plugin 等导入分享兼容仍退化；VMess 当前 v2rayN schema 的 `vcn/pcs` 证书验证扩展尚无 Bean/runtime 映射；
 - GeoSite 自动完成失去数据源；
 - Windows 手工系统代理被整体禁用；
 - 在线更新被整体禁用；

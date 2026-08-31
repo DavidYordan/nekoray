@@ -94,6 +94,79 @@ int main(int argc, char** argv) {
                      reparsedCanonical.fragment() == QStringLiteral("legacy"),
                  "legacy SOCKS userinfo must survive parse, canonical export, and reparse");
 
+    const auto v2rayNJson = QByteArrayLiteral(
+        R"({"v":"2","ps":"VMess 示例","add":"vmess.example","port":"443","id":"11111111-2222-3333-4444-555555555555","aid":"7","net":"h2","host":"cdn.example","path":"/edge","type":"http","scy":"auto","tls":"tls","sni":"sni.example","alpn":"h2,http/1.1","fp":"chrome","insecure":"1"})");
+    const auto v2rayNLink = QStringLiteral("vmess://") +
+        QString::fromLatin1(v2rayNJson.toBase64());
+    const auto parsedV2RayN = ParseV2RayNVmessLink(v2rayNLink);
+    ok &= expect(parsedV2RayN.ok() &&
+                     parsedV2RayN.fields.name == QStringLiteral("VMess 示例") &&
+                     parsedV2RayN.fields.serverAddress == QStringLiteral("vmess.example") &&
+                     parsedV2RayN.fields.serverPort == 443 &&
+                     parsedV2RayN.fields.uuid == QStringLiteral("11111111-2222-3333-4444-555555555555") &&
+                     parsedV2RayN.fields.alterId == 7 &&
+                     parsedV2RayN.fields.network == QStringLiteral("http") &&
+                     parsedV2RayN.fields.host == QStringLiteral("cdn.example") &&
+                     parsedV2RayN.fields.path == QStringLiteral("/edge") &&
+                     parsedV2RayN.fields.headerType == QStringLiteral("http") &&
+                     parsedV2RayN.fields.security == QStringLiteral("auto") &&
+                     parsedV2RayN.fields.tls == QStringLiteral("tls") &&
+                     parsedV2RayN.fields.sni == QStringLiteral("sni.example") &&
+                     parsedV2RayN.fields.alpn == QStringLiteral("h2,http/1.1") &&
+                     parsedV2RayN.fields.fingerprint == QStringLiteral("chrome") &&
+                     parsedV2RayN.fields.allowInsecure,
+                 "v2rayN VMess base64 JSON must preserve supported fields and normalize h2");
+
+    const auto rebuiltV2RayN = BuildV2RayNVmessLink(parsedV2RayN.fields);
+    const auto reparsedV2RayN = ParseV2RayNVmessLink(rebuiltV2RayN.link);
+    ok &= expect(rebuiltV2RayN.ok() && reparsedV2RayN.ok() &&
+                     reparsedV2RayN.fields.name == parsedV2RayN.fields.name &&
+                     reparsedV2RayN.fields.serverAddress == parsedV2RayN.fields.serverAddress &&
+                     reparsedV2RayN.fields.serverPort == parsedV2RayN.fields.serverPort &&
+                     reparsedV2RayN.fields.uuid == parsedV2RayN.fields.uuid &&
+                     reparsedV2RayN.fields.alterId == parsedV2RayN.fields.alterId &&
+                     reparsedV2RayN.fields.network == parsedV2RayN.fields.network &&
+                     reparsedV2RayN.fields.host == parsedV2RayN.fields.host &&
+                     reparsedV2RayN.fields.path == parsedV2RayN.fields.path &&
+                     reparsedV2RayN.fields.headerType == parsedV2RayN.fields.headerType &&
+                     reparsedV2RayN.fields.security == parsedV2RayN.fields.security &&
+                     reparsedV2RayN.fields.tls == parsedV2RayN.fields.tls &&
+                     reparsedV2RayN.fields.sni == parsedV2RayN.fields.sni &&
+                     reparsedV2RayN.fields.alpn == parsedV2RayN.fields.alpn &&
+                     reparsedV2RayN.fields.fingerprint == parsedV2RayN.fields.fingerprint &&
+                     reparsedV2RayN.fields.allowInsecure == parsedV2RayN.fields.allowInsecure,
+                 "v2rayN VMess fields must survive parse, export, and reparse");
+
+    const auto invalidV2RayNBase64 = ParseV2RayNVmessLink(QStringLiteral("vmess://%%%"));
+    const auto invalidV2RayNLength = ParseV2RayNVmessLink(QStringLiteral("vmess://A"));
+    const auto invalidV2RayNJson = ParseV2RayNVmessLink(
+        QStringLiteral("vmess://") + QString::fromLatin1(QByteArrayLiteral("not-json").toBase64()));
+    const auto missingV2RayNId = ParseV2RayNVmessLink(
+        QStringLiteral("vmess://") + QString::fromLatin1(
+            QByteArrayLiteral(R"({"add":"vmess.example","port":"443"})").toBase64()));
+    const auto invalidV2RayNPort = ParseV2RayNVmessLink(
+        QStringLiteral("vmess://") + QString::fromLatin1(
+            QByteArrayLiteral(R"({"add":"vmess.example","port":"70000","id":"id"})").toBase64()));
+    const auto fractionalV2RayNPort = ParseV2RayNVmessLink(
+        QStringLiteral("vmess://") + QString::fromLatin1(
+            QByteArrayLiteral(R"({"add":"vmess.example","port":443.5,"id":"id"})").toBase64()));
+    const auto numericV2RayNFields = ParseV2RayNVmessLink(
+        QStringLiteral("vmess://") + QString::fromLatin1(
+            QByteArrayLiteral(R"({"add":"vmess.example","port":8443,"id":"id","aid":0})").toBase64()));
+    ok &= expect(invalidV2RayNBase64.error == V2RayNVmessError::InvalidBase64 &&
+                     invalidV2RayNLength.error == V2RayNVmessError::InvalidBase64 &&
+                     invalidV2RayNJson.error == V2RayNVmessError::InvalidJson &&
+                     missingV2RayNId.error == V2RayNVmessError::MissingRequiredField &&
+                     invalidV2RayNPort.error == V2RayNVmessError::InvalidPort &&
+                     fractionalV2RayNPort.error == V2RayNVmessError::InvalidPort &&
+                     numericV2RayNFields.ok() &&
+                     numericV2RayNFields.fields.serverPort == 8443 &&
+                     numericV2RayNFields.fields.alterId == 0 &&
+                     ParseV2RayNVmessLink(QStringLiteral(
+                         "vmess://uuid@vmess.example:443?type=ws&security=tls"))
+                             .error == V2RayNVmessError::NotV2RayN,
+                 "malformed v2rayN JSON must fail without consuming modern VMess URIs");
+
     const auto socks = ServerPortUserPass(
         CredentialProxyKind::Socks5,
         QStringLiteral("192.0.2.10"),

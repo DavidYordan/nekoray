@@ -128,6 +128,27 @@ namespace NekoGui_fmt {
     }
 
     bool VMessBean::TryParseLink(const QString &link) {
+        const auto v2rayN = ParseV2RayNVmessLink(link);
+        if (v2rayN.ok()) {
+            name = v2rayN.fields.name;
+            serverAddress = v2rayN.fields.serverAddress;
+            serverPort = v2rayN.fields.serverPort;
+            uuid = v2rayN.fields.uuid;
+            aid = v2rayN.fields.alterId;
+            security = v2rayN.fields.security;
+            stream->network = v2rayN.fields.network;
+            stream->host = v2rayN.fields.host;
+            stream->path = v2rayN.fields.path;
+            stream->header_type = v2rayN.fields.headerType;
+            stream->security = v2rayN.fields.tls;
+            stream->sni = v2rayN.fields.sni;
+            stream->alpn = v2rayN.fields.alpn;
+            stream->utlsFingerprint = v2rayN.fields.fingerprint;
+            stream->allow_insecure = v2rayN.fields.allowInsecure;
+            return true;
+        }
+        if (v2rayN.error != V2RayNVmessError::NotV2RayN) return false;
+
         auto url = QUrl(link);
         if (!url.isValid()) return false;
         auto query = GetQuery(url);
@@ -151,6 +172,7 @@ namespace NekoGui_fmt {
         auto sni2 = GetQueryValue(query, "peer");
         if (!sni1.isEmpty()) stream->sni = sni1;
         if (!sni2.isEmpty()) stream->sni = sni2;
+        stream->alpn = GetQueryValue(query, "alpn");
         if (!query.queryItemValue("allowInsecure").isEmpty()) stream->allow_insecure = true;
         stream->reality_pbk = GetQueryValue(query, "pbk", "");
         stream->reality_sid = GetQueryValue(query, "sid", "");
