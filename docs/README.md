@@ -53,6 +53,7 @@ MultiMapper 不作为产品依赖或可直接移植的实现，但其多入口�
 - [协议支持证据](reference/PROTOCOL_SUPPORT.md)
 - [订阅导入规则](reference/SUBSCRIPTION_IMPORT.md)
 - [测试矩阵](testing/TEST_MATRIX.md)
+- [Windows Sandbox 隔离验证](testing/WINDOWS_SANDBOX.md)
 - [Core 配置导出](testing/CORE_CONFIG_EXPORT.md)
 - [Windows 运行时连通性](testing/RUNTIME_CONNECTIVITY.md)
 - [OpenWrt 隔离实验室（历史材料；不再执行）](testing/OPENWRT_REMOTE_LAB.md)

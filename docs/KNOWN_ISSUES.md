@@ -21,12 +21,14 @@
 
 当前开发主机依赖不可中断的 Clash TUN，禁止停止、重启、结束或改写它。后续所有项目 TUN、Wintun、系统代理、Windows 路由/DNS/网卡故障注入和双 TUN 归因都不得在当前主机执行。
 
-整改安排（用户已批准由 agent 在本机创建；不得重启主机或改变 Clash/宿主网络）：
+当前进展：2026-08-31 已完成只读能力盘点，并以 `-NoRestart` 启用 Windows Sandbox feature。Windows 返回 `Enabled`/`RestartNeeded=True`；为避免中断 Clash，本轮没有自动重启。禁用 networking、只读白名单输入、独立结果目录和哈希复核工具已经落地，首次启动必须等待用户在合适时间手工重启 Windows。详见 [Windows Sandbox 隔离验证](testing/WINDOWS_SANDBOX.md)。
+
+整改安排（用户已批准由 agent 在本机创建；不得自动重启主机或改变 Clash/宿主网络）：
 
 1. 只读盘点本机 Windows 版本、固件虚拟化、Windows Sandbox/Hyper-V 等能力，不安装 Linux 组件，不改变 Hyper-V/vSwitch、路由、DNS、系统代理或 Clash；
-2. 优先使用已经启用且无需重启的 Windows Sandbox；若它不能持久安装/验证 Wintun，再选择可快照回滚的独立 Windows VM；
+2. Windows Sandbox feature 已启用但等待一次人工重启完成 servicing；重启后先运行 `Networking=Disable` 的离线 Sandbox，若它不能验证 Wintun，再选择可快照回滚的独立 Windows VM；
 3. 环境记录 Windows 版本、NAT/隔离网络、测试包哈希、管理员权限、允许创建的进程/接口、凭据隔离和清理复核；
-4. 若启用功能需要重启主机、创建/修改宿主虚拟交换机或影响宿主网络，则不自动执行，改为给用户精确安装步骤；
+4. 功能启用已完成；所需重启不自动执行。创建/修改宿主虚拟交换机或影响宿主网络仍不授权，必须先给用户精确方案并等待确认；
 5. 测试报告只区分 `host-windows-loopback` 与 `isolated-windows`，前者不能替代 TUN/系统代理结论。Linux/WSL/OpenWrt 旧证据不再重跑。
 
 完成门：隔离环境可从干净快照重复创建/回滚；不依赖或改变宿主 Clash；测试只清理自身精确资源；至少能承载 Wintun 创建/销毁和项目 TUN 基本生命周期。E-001 是 Windows 专属验收的前置工作，不是三项产品能力本身，也不授权新增 persistent service/WFP。
@@ -185,11 +187,11 @@ route/settings/hotkey 和部分 UI 状态仍可能在磁盘保存失败后保留
 | W1（已完成） | U-001a：SOCKS base64 userinfo 兼容 | 已用 `adef6cd` 脱敏语义建立红绿回归并恢复最短 parser/规范链接 round-trip；纯 Windows 本地测试 | 未同时恢复 VMess、Shadowsocks、external-core，未访问网络 |
 | W2 | U-001b/c：VMess v2rayN 与 Shadowsocks/v2ray-plugin | 两种格式各自建立失败 fixture、字段保真和错误输入测试，各自独立提交 | 不因名称含 `v2ray` 恢复 Xray runtime |
 | W3 | R-001a：人工多入口字段契约 | 只冻结原始 domain、SNI、resolver 来源、候选、诊断、固定入口的单一所有权和旧数据行为，先写 round-trip 测试 | 不做自动择优、DNS fallback 或 UI 大改 |
-| W4 | E-001：隔离 Windows 环境 | 只读能力盘点后直接创建无需重启、不会改变宿主网络的 Windows 沙盒/VM；若前置条件不满足则提供手工安装步骤 | 不停止/改写 Clash，不改变宿主网络，不执行 Linux 验证 |
+| W4（进行中） | E-001：隔离 Windows 环境 | 能力盘点、feature 启用和 offline `.wsb`/runner/verifier 已完成；等待用户手工重启后执行首次启动、哈希和无网络 adapter 验证，再补 Sandbox 内 Wintun 生命周期 | 不自动重启，不停止/改写 Clash，不改变宿主网络，不执行 Linux 验证 |
 | W5 | 逐项恢复 U-002/U-003 | external-core/Naive/schema 与普通上游能力按数据→UI→执行分层恢复；GeoSite、更新、系统代理拆成独立工作包 | 不与 AnyTLS/resolver/端口生命周期混改 |
 | W6 | 三项核心闭环 | 依次推进 R-001/R-002、A-001、P-001/P-002；涉及 Windows TUN 的 U-005/U-006 必须等 E-001 可用 | 不引入第二 runtime、persistent service/WFP 或全局 fallback |
 | W7 | 数据、并发与交付 | D-001..D-003、C-001/C-002，最后做同轮完整 package、旧配置迁移、真实 GUI/线路和分层网络矩阵 | 不用旧二进制或低层测试代替交付证据 |
 
-W1 已完成。下一步先执行用户明确要求的 W4 隔离 Windows 环境；随后进入 W2，并把 VMess v2rayN 与 Shadowsocks/v2ray-plugin 继续拆成独立检查点。用户已批准 W4 在不重启、不改变宿主网络和 Clash 的边界内直接创建；超出该边界时停止并给出手工步骤。
+W1 已完成。W4 已推进到等待 Windows 人工重启的安全边界；在重启条件尚未满足时继续 W2，不让环境前置阻塞纯 parser 工作，并把 VMess v2rayN 与 Shadowsocks/v2ray-plugin 拆成独立检查点。重启后优先完成 W4 首次运行；不得自动重启或把默认 Sandbox networking 当作绕过方案。
 
 任何步骤若需要自动择优、全局 fallback、persistent service/WFP、第二数据模型或不可逆迁移，必须停止并请求用户决定。

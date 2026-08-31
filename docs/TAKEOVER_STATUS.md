@@ -29,7 +29,7 @@
 
 - 当前开发主机依赖 Clash TUN 联网。用户已明确冻结为不可中断、不可写入的外部基础网络；本轮没有停止、重启、结束或改写它，也没有修改系统代理、TUN、WFP、路由、网卡或 DNS。
 - 当前主机只承担静态、构建、纯逻辑、loopback 和只读证据。用户已取消 Linux/WSL/OpenWrt 后续验证，正式证据只来自 Windows。
-- TUN 验收需要本机创建的独立 Windows VM、Windows 沙盒或其它 Windows 测试机。具体隔离、快照、网络和清理边界见 `KNOWN_ISSUES.md` 的 E-001；用户已授权在无需重启且不改变宿主网络/Clash 的边界内直接创建。
+- TUN 验收需要本机创建的独立 Windows VM、Windows 沙盒或其它 Windows 测试机。2026-08-31 已启用 Windows Sandbox feature，但 OS 要求重启；为保护 Clash 未自动重启。offline `.wsb`、白名单 staging、runner 和结果 verifier 已准备，等待人工重启后首次运行。具体边界见 [Windows Sandbox 隔离验证](testing/WINDOWS_SANDBOX.md)与 `KNOWN_ISSUES.md` 的 E-001。
 - 用户要求后续及时形成远端检查点。每个独立工作包完成验证后应提交并推送当前任务分支，不再跨多轮累积未推送改动；这不授权向 `main` 推送、force push 或合并。
 
 ## 三项核心能力

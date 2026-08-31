@@ -22,6 +22,8 @@
 
 当前主机 loopback 成功只说明相应 core/配置/出站链在叠加网络中闭环；独立 Windows 失败时，优先调查 Windows 路由、接口和生命周期。任何低层成功都不能上推为未执行层级已经通过。
 
+当前首选环境及其离线限制、安装状态和操作命令见 [Windows Sandbox 隔离验证](WINDOWS_SANDBOX.md)。该 `.wsb` 固定禁用 networking；启用 Windows Sandbox feature 后仍需一次用户手工重启，重启前不得把“配置已生成”记成隔离运行通过。
+
 ## 历史 Linux 诊断（不再执行）
 
 2026-07-20 的历史 OpenWrt 对照中：临时 `52080` Mixed 被显式重写为命中目标 AnyTLS outbound；保持 `mihomo/1.19.28`、移除 `g-2` detour 后三种协议均返回 204。独立 profile 2 的 Trojan 也三协议返回 204，且结构比对确认它与 `g-2` 是同一个完整 outbound 对象。只有 “AnyTLS mihomo client + `g-2` detour” 目标链组合出现 HTTP 502、HTTPS 超时、SOCKS 空响应和 `failed to create session: EOF`；改用原生 AnyTLS client 又触发服务端 internal error。该轮旧探针对所有临时变体强制 `auto_detect_interface=true`，只能在这一共同条件下隔离协议组合，不能代表当前导出接口策略；不再安排 Linux 重跑。

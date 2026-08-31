@@ -9,6 +9,8 @@
 
 Windows x64 是唯一后续验收平台。本机 Clash TUN 必须始终运行，因此当前主机只执行无侵入证据；项目 TUN 和 Windows 网络状态验收转到独立 Windows 隔离环境。Linux/WSL/OpenWrt 旧结果只作为历史背景，不再重跑或计入当前完成证据。
 
+2026-08-31 已启用 Windows Sandbox feature，但 Windows 要求重启后才可首次启动；本轮为保护 Clash 未自动重启。仓库已加入固定禁用 networking 的 `.wsb` 生成、只读白名单 staging、Sandbox runner 和宿主结果核验。当前只证明安装与工具准备，不证明 Sandbox、Wintun、GUI 或项目 TUN 已运行；证据边界见 [Windows Sandbox 隔离验证](WINDOWS_SANDBOX.md)。
+
 历史一次性 Mixed/AnyTLS 调查只在矩阵中作为明确标注日期的诊断背景保留；原始证据见 [2026-07-20 接管基线](../archive/audits/2026-07-20-takeover-baseline.md)。历史中的单次成功不能升级为当前通过结论。
 
 ## 2026-08-31 SOCKS base64 userinfo 上游兼容恢复
