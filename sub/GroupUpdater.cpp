@@ -2,6 +2,7 @@
 #include "db/ResolverConfig.hpp"
 #include "fmt/includes.h"
 #include "fmt/Preset.hpp"
+#include "fmt/ShareFormats.hpp"
 #include "main/ConfigMutation.hpp"
 #include "main/HTTPRequestHelper.hpp"
 
@@ -368,15 +369,28 @@ namespace NekoGui_sub {
                         if (bean->uot == 0) bean->uot = 2;
                     }
 
-                    if (plugin_n.IsDefined() && pluginOpts_n.IsDefined()) {
+                    if (plugin_n.IsDefined()) {
                         QStringList ssPlugin;
                         auto plugin = Node2QString(plugin_n);
-                        if (plugin == "obfs") {
+                        if (plugin == "obfs" && pluginOpts_n.IsDefined()) {
                             ssPlugin << "obfs-local";
                             ssPlugin << "obfs=" + Node2QString(pluginOpts_n["mode"]);
                             ssPlugin << "obfs-host=" + Node2QString(pluginOpts_n["host"]);
+                            bean->plugin = ssPlugin.join(";");
+                        } else if (plugin == "v2ray-plugin") {
+                            QString mode;
+                            QString host;
+                            QString path;
+                            bool tls = false;
+                            if (pluginOpts_n.IsDefined()) {
+                                mode = Node2QString(pluginOpts_n["mode"]);
+                                host = Node2QString(pluginOpts_n["host"]);
+                                path = Node2QString(pluginOpts_n["path"]);
+                                tls = Node2Bool(pluginOpts_n["tls"]);
+                            }
+                            bean->plugin = NekoGui_fmt::V2RayPluginFromClash(
+                                mode, host, path, tls);
                         }
-                        bean->plugin = ssPlugin.join(";");
                     }
 
                     // sing-mux

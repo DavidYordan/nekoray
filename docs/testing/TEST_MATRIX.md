@@ -13,6 +13,18 @@ Windows x64 是唯一后续验收平台。本机 Clash TUN 必须始终运行，
 
 历史一次性 Mixed/AnyTLS 调查只在矩阵中作为明确标注日期的诊断背景保留；原始证据见 [2026-07-20 接管基线](../archive/audits/2026-07-20-takeover-baseline.md)。历史中的单次成功不能升级为当前通过结论。
 
+## 2026-08-31 Shadowsocks 分享与 v2ray-plugin 兼容恢复
+
+| 检查 | 结果 | 证明范围 |
+|---|---:|---|
+| 上游与协议来源对照 | 确认回归 | `11ba168` 删除 legacy whole-payload parser，随后又从 Clash mapping/UI 删除 v2ray-plugin；SIP002、Shadowsocks legacy 文档、v2ray-plugin 和受控 sing-box 源码证明它们不是 Xray runtime |
+| 定向红绿回归 | 修复前失败、修复后通过 | SIP002 base64url userinfo、plain userinfo、AEAD-2022 百分号编码、domain/IPv6、备注和 plugin query 解析/导出/reparse；不访问 DNS/网络 |
+| legacy 与错误输入 | 通过 | 整段 base64 兼容导入按首个 method colon、最后 server `@` 拆分，password 内 colon/`@` 保留；非法 base64/结构/端口失败；legacy 不作为新导出格式 |
+| v2ray-plugin 字段 | 通过 | URI plugin 反斜杠转义 round-trip；Clash `mode/host/path/tls` 生成 SIP003 options，`\`、`;`、`=`、`,`、`:` 在值中转义；UI 重新提供选项，C++ outbound 仍生成 sing-box `plugin/plugin_opts` |
+| `nekobox` 增量构建、完整 CTest | 通过、5/5 | parser/export/Clash/UI 编译链接和纯测试通过；不证明真实 WebSocket/TLS/QUIC plugin、订阅事务、GUI 剪贴板或辅助端口运行 |
+
+本恢复使用 sing-box 1.13.12 源码中的内置 `v2ray-plugin` 实现，不下载、打包或启动外置 v2ray/Xray 可执行文件。本机 Clash 和 Windows 网络状态未改变。
+
 ## 2026-08-31 VMess v2rayN 分享兼容恢复
 
 | 检查 | 结果 | 证明范围 |

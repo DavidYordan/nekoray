@@ -6,6 +6,8 @@
 #include <QJsonObject>
 #include <QJsonParseError>
 #include <QStringList>
+#include <QUrl>
+#include <QUrlQuery>
 
 #include <cmath>
 #include <limits>
@@ -197,6 +199,243 @@ namespace NekoGui_fmt {
         result.link = QStringLiteral("vmess://") + QString::fromLatin1(json.toBase64());
         result.error = V2RayNVmessError::None;
         return result;
+    }
+
+    ShadowSocksShareParseResult ParseShadowSocksShareLink(const QString& link) {
+        ShadowSocksShareParseResult result;
+        const auto prefix = QStringLiteral("ss://");
+        if (!link.startsWith(prefix)) return result;
+
+        const auto fragmentStart = link.indexOf('#');
+        const auto withoutFragment = fragmentStart < 0 ? link : link.left(fragmentStart);
+        const auto body = withoutFragment.mid(prefix.size());
+        if (fragmentStart >= 0) {
+            result.fields.name = QUrl::fromPercentEncoding(
+                link.mid(fragmentStart + 1).toUtf8());
+        }
+
+        auto decodeBase64 = [](const QString& payload, bool urlSafe, QByteArray* output) {
+            if (payload.isEmpty() || payload.size() % 4 == 1) return false;
+            auto options = Qt515Base64::Base64Options(
+                Qt515Base64::Base64Option::AbortOnBase64DecodingErrors);
+            if (urlSafe) options |= Qt515Base64::Base64Option::Base64UrlEncoding;
+            const auto decoded = Qt515Base64::QByteArray_fromBase64Encoding(
+                payload.toLatin1(), options);
+            if (!decoded) return false;
+            *output = decoded.decoded;
+            return true;
+        };
+        auto normalizePlugin = [](QString plugin) {
+            if (plugin == QStringLiteral("simple-obfs")) {
+                return QStringLiteral("obfs-local");
+            }
+            if (plugin.startsWith(QStringLiteral("simple-obfs;"))) {
+                plugin.replace(0, QStringLiteral("simple-obfs").size(), QStringLiteral("obfs-local"));
+            }
+            return plugin;
+        };
+        auto validRequiredFields = [&] {
+            return !result.fields.serverAddress.trimmed().isEmpty() &&
+                !result.fields.method.isEmpty() && !result.fields.password.isEmpty();
+        };
+
+        if (body.contains('@')) {
+            // Pre-validate the authority port so QUrl's generic invalid status
+            // does not hide a precise protocol error.
+            const auto authorityEndCandidates = QStringList{
+                QStringLiteral("/"), QStringLiteral("?"),
+            };
+            auto authorityEnd = body.size();
+            for (const auto& delimiter : authorityEndCandidates) {
+                const auto index = body.indexOf(delimiter);
+                if (index >= 0 && index < authorityEnd) authorityEnd = index;
+            }
+            const auto authority = body.left(authorityEnd);
+            const auto serverPart = authority.mid(authority.lastIndexOf('@') + 1);
+            const auto portSeparator = serverPart.lastIndexOf(':');
+            bool portOk = false;
+            const auto explicitPort = portSeparator >= 0
+                ? serverPart.mid(portSeparator + 1).toInt(&portOk)
+                : 0;
+            if (!portOk || explicitPort < 1 || explicitPort > 65535) {
+                result.error = ShadowSocksShareError::InvalidPort;
+                return result;
+            }
+
+            const QUrl url(link, QUrl::StrictMode);
+            if (!url.isValid()) {
+                result.error = ShadowSocksShareError::InvalidSyntax;
+                return result;
+            }
+            result.fields.serverAddress = url.host(QUrl::FullyDecoded);
+            result.fields.serverPort = explicitPort;
+
+            const auto encodedUserInfo = authority.left(authority.lastIndexOf('@'));
+            if (encodedUserInfo.contains(':')) {
+                result.fields.method = url.userName(QUrl::FullyDecoded);
+                result.fields.password = url.password(QUrl::FullyDecoded);
+            } else {
+                QByteArray decodedUserInfo;
+                if (!decodeBase64(url.userName(QUrl::FullyDecoded), true, &decodedUserInfo)) {
+                    result.error = ShadowSocksShareError::InvalidBase64;
+                    return result;
+                }
+                const auto decodedText = QString::fromUtf8(decodedUserInfo);
+                if (decodedText.toUtf8() != decodedUserInfo) {
+                    result.error = ShadowSocksShareError::InvalidSyntax;
+                    return result;
+                }
+                const auto decodedSeparator = decodedText.indexOf(':');
+                if (decodedSeparator < 0) {
+                    result.error = ShadowSocksShareError::InvalidSyntax;
+                    return result;
+                }
+                result.fields.method = decodedText.left(decodedSeparator);
+                result.fields.password = decodedText.mid(decodedSeparator + 1);
+            }
+
+            const QUrlQuery query(url);
+            result.fields.plugin = normalizePlugin(
+                query.queryItemValue(QStringLiteral("plugin"), QUrl::FullyDecoded));
+        } else {
+            QByteArray decodedPayload;
+            if (!decodeBase64(body, false, &decodedPayload) &&
+                !decodeBase64(body, true, &decodedPayload)) {
+                result.error = ShadowSocksShareError::InvalidBase64;
+                return result;
+            }
+            const auto decodedText = QString::fromUtf8(decodedPayload);
+            if (decodedText.toUtf8() != decodedPayload) {
+                result.error = ShadowSocksShareError::InvalidSyntax;
+                return result;
+            }
+
+            const auto methodSeparator = decodedText.indexOf(':');
+            const auto serverSeparator = decodedText.lastIndexOf('@');
+            if (methodSeparator <= 0 || serverSeparator <= methodSeparator + 1) {
+                result.error = ShadowSocksShareError::InvalidSyntax;
+                return result;
+            }
+            const auto serverPort = decodedText.mid(serverSeparator + 1);
+            QString portText;
+            if (serverPort.startsWith('[')) {
+                const auto bracketEnd = serverPort.indexOf(']');
+                if (bracketEnd <= 1 || bracketEnd + 1 >= serverPort.size() ||
+                    serverPort.at(bracketEnd + 1) != ':') {
+                    result.error = ShadowSocksShareError::InvalidSyntax;
+                    return result;
+                }
+                result.fields.serverAddress = serverPort.mid(1, bracketEnd - 1);
+                portText = serverPort.mid(bracketEnd + 2);
+            } else {
+                const auto portSeparator = serverPort.lastIndexOf(':');
+                if (portSeparator <= 0) {
+                    result.error = ShadowSocksShareError::InvalidSyntax;
+                    return result;
+                }
+                result.fields.serverAddress = serverPort.left(portSeparator);
+                portText = serverPort.mid(portSeparator + 1);
+            }
+            bool portOk = false;
+            result.fields.serverPort = portText.toInt(&portOk);
+            if (!portOk || result.fields.serverPort < 1 || result.fields.serverPort > 65535) {
+                result.error = ShadowSocksShareError::InvalidPort;
+                return result;
+            }
+            result.fields.method = decodedText.left(methodSeparator);
+            result.fields.password = decodedText.mid(
+                methodSeparator + 1,
+                serverSeparator - methodSeparator - 1);
+        }
+
+        if (!validRequiredFields()) {
+            result.error = ShadowSocksShareError::MissingRequiredField;
+            return result;
+        }
+        result.error = ShadowSocksShareError::None;
+        return result;
+    }
+
+    ShadowSocksShareBuildResult BuildShadowSocksShareLink(
+        const ShadowSocksShareFields& fields) {
+        ShadowSocksShareBuildResult result;
+        if (fields.serverAddress.trimmed().isEmpty() ||
+            fields.method.isEmpty() || fields.password.isEmpty()) {
+            return result;
+        }
+        if (fields.serverPort < 1 || fields.serverPort > 65535) {
+            result.error = ShadowSocksShareError::InvalidPort;
+            return result;
+        }
+
+        QString encodedUserInfo;
+        if (fields.method.startsWith(QStringLiteral("2022-"))) {
+            encodedUserInfo = QString::fromLatin1(QUrl::toPercentEncoding(fields.method)) + ':' +
+                QString::fromLatin1(QUrl::toPercentEncoding(fields.password));
+        } else {
+            const auto userInfo = (fields.method + ':' + fields.password)
+                                      .toUtf8()
+                                      .toBase64(QByteArray::Base64UrlEncoding |
+                                                QByteArray::OmitTrailingEquals);
+            encodedUserInfo = QString::fromLatin1(userInfo);
+        }
+
+        auto plugin = fields.plugin;
+        if (plugin == QStringLiteral("simple-obfs")) {
+            plugin = QStringLiteral("obfs-local");
+        } else if (plugin.startsWith(QStringLiteral("simple-obfs;"))) {
+            plugin.replace(0, QStringLiteral("simple-obfs").size(), QStringLiteral("obfs-local"));
+        }
+        QUrl endpoint;
+        endpoint.setScheme(QStringLiteral("ss"));
+        endpoint.setHost(fields.serverAddress);
+        endpoint.setPort(fields.serverPort);
+        if (!plugin.isEmpty()) endpoint.setPath(QStringLiteral("/"));
+
+        if (!endpoint.isValid()) {
+            result.error = ShadowSocksShareError::InvalidSyntax;
+            return result;
+        }
+        const auto endpointText = endpoint.toString(QUrl::FullyEncoded);
+        result.link = QStringLiteral("ss://") + encodedUserInfo + '@' +
+            endpointText.mid(QStringLiteral("ss://").size());
+        if (!plugin.isEmpty()) {
+            result.link += QStringLiteral("?plugin=") +
+                QString::fromLatin1(QUrl::toPercentEncoding(plugin));
+        }
+        if (!fields.name.isEmpty()) {
+            result.link += '#' + QString::fromLatin1(QUrl::toPercentEncoding(fields.name));
+        }
+        result.error = ShadowSocksShareError::None;
+        return result;
+    }
+
+    QString V2RayPluginFromClash(
+        const QString& mode,
+        const QString& host,
+        const QString& path,
+        bool tls) {
+        const auto escapeValue = [](const QString& value) {
+            QString escaped;
+            escaped.reserve(value.size() * 2);
+            for (const auto character : value) {
+                if (character == '\\' || character == ';' || character == '=' ||
+                    character == ',' || character == ':') {
+                    escaped += '\\';
+                }
+                escaped += character;
+            }
+            return escaped;
+        };
+
+        QStringList options{QStringLiteral("v2ray-plugin")};
+        if (!mode.isEmpty() && mode != QStringLiteral("websocket")) {
+            options += QStringLiteral("mode=") + escapeValue(mode);
+        }
+        if (tls) options += QStringLiteral("tls");
+        if (!host.isEmpty()) options += QStringLiteral("host=") + escapeValue(host);
+        if (!path.isEmpty()) options += QStringLiteral("path=") + escapeValue(path);
+        return options.join(';');
     }
 
     ShareFormatResult ServerPortUserPass(

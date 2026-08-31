@@ -78,6 +78,40 @@ namespace NekoGui_fmt {
         }
     };
 
+    enum class ShadowSocksShareError {
+        None,
+        NotShadowsocks,
+        InvalidBase64,
+        InvalidSyntax,
+        MissingRequiredField,
+        InvalidPort,
+    };
+
+    struct ShadowSocksShareFields {
+        QString name;
+        QString serverAddress;
+        int serverPort = 0;
+        QString method;
+        QString password;
+        QString plugin;
+    };
+
+    struct ShadowSocksShareParseResult {
+        ShadowSocksShareFields fields;
+        ShadowSocksShareError error = ShadowSocksShareError::NotShadowsocks;
+
+        [[nodiscard]] bool ok() const { return error == ShadowSocksShareError::None; }
+    };
+
+    struct ShadowSocksShareBuildResult {
+        QString link;
+        ShadowSocksShareError error = ShadowSocksShareError::MissingRequiredField;
+
+        [[nodiscard]] bool ok() const {
+            return error == ShadowSocksShareError::None && !link.isEmpty();
+        }
+    };
+
     // Native links are already FullyEncoded. A literal '#' can therefore only
     // begin the URI fragment; percent-encoded data such as "%23" is preserved.
     [[nodiscard]] ShareFormatResult ShareLinkWithoutRemark(const QString& nativeLink);
@@ -95,6 +129,22 @@ namespace NekoGui_fmt {
     [[nodiscard]] V2RayNVmessParseResult ParseV2RayNVmessLink(const QString& link);
     [[nodiscard]] V2RayNVmessBuildResult BuildV2RayNVmessLink(
         const V2RayNVmessFields& fields);
+
+    // Supports SIP002 plus the deprecated whole-payload base64 format for
+    // import compatibility. Export always uses SIP002. Plugin text remains a
+    // SIP003 option string; parsing it does not select an external core.
+    [[nodiscard]] ShadowSocksShareParseResult ParseShadowSocksShareLink(
+        const QString& link);
+    [[nodiscard]] ShadowSocksShareBuildResult BuildShadowSocksShareLink(
+        const ShadowSocksShareFields& fields);
+
+    // Clash expresses v2ray-plugin options as YAML fields while sing-box's
+    // internal SIP003 implementation consumes the escaped semicolon string.
+    [[nodiscard]] QString V2RayPluginFromClash(
+        const QString& mode,
+        const QString& host,
+        const QString& path,
+        bool tls);
 
     // This deliberately narrow credential-list format preserves the server
     // field verbatim and never performs DNS or percent-encodes delimiters.

@@ -44,6 +44,14 @@ dns:
 
 节点显式client、组级兼容默认和继承标志必须分别保存。不能简单把“Clash来源”永久等同于Mihomo；不能把非法client静默退成native；链接/刷新round-trip必须保真显式native。
 
+## Shadowsocks plugin
+
+- URI/普通订阅同时读取 SIP002 和仅用于兼容的 legacy 整段 base64；新分享只输出 SIP002。
+- SIP002 的 plugin query 保留完整 SIP003 option string；`simple-obfs` 拼写只规范化为 sing-box 使用的 `obfs-local`，不做其它插件猜测。
+- Clash `plugin: v2ray-plugin` 的 `mode/host/path/tls` 显式转换为转义后的 `plugin_opts`；`mode=websocket` 可省略为该 plugin 默认值。无 `plugin-opts` 时仍保留 `v2ray-plugin` 默认配置，不能因空 map 丢节点。
+- 当前受控 sing-box 源码内置 `obfs-local` 与 `v2ray-plugin`。这里的 `v2ray` 是 SIP003 插件名，不代表、也不要求恢复 Xray runtime 或外置 v2ray 进程。
+- Clash-only `skip-cert-verify`、headers 和 mux 等没有等价 plugin 字段的内容不得猜测写入；真实组合仍需隔离 Windows 线路验证。
+
 ## 不复刻完整 Clash runtime
 
 本扩展不承诺导入 `proxy-groups`、rules、rule-providers、dashboard或health-check运行语义。解析器必须统计并报告忽略项，不能无提示声称完整兼容。

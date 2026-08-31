@@ -4,9 +4,14 @@
 #include <QDebug>
 #include <QUrl>
 
+#include <cstdio>
+
 namespace {
     bool expect(bool condition, const char* message) {
-        if (!condition) qCritical() << message;
+        if (!condition) {
+            qCritical() << message;
+            std::fprintf(stderr, "%s\n", message);
+        }
         return condition;
     }
 }
@@ -166,6 +171,95 @@ int main(int argc, char** argv) {
                          "vmess://uuid@vmess.example:443?type=ws&security=tls"))
                              .error == V2RayNVmessError::NotV2RayN,
                  "malformed v2rayN JSON must fail without consuming modern VMess URIs");
+
+    ShadowSocksShareFields shadowsocksFields;
+    shadowsocksFields.name = QStringLiteral("SS 示例");
+    shadowsocksFields.serverAddress = QStringLiteral("ss.example");
+    shadowsocksFields.serverPort = 8388;
+    shadowsocksFields.method = QStringLiteral("aes-256-gcm");
+    shadowsocksFields.password = QStringLiteral("pass:word");
+    shadowsocksFields.plugin = QStringLiteral(
+        R"(v2ray-plugin;mode=websocket;host=cdn.example;path=/edge\=a\,b;tls;mux=0)");
+    const auto builtShadowsocks = BuildShadowSocksShareLink(shadowsocksFields);
+    const auto parsedShadowsocks = ParseShadowSocksShareLink(builtShadowsocks.link);
+    ok &= expect(builtShadowsocks.ok() &&
+                     !builtShadowsocks.link.contains(QLatin1String("%3D@")) &&
+                     parsedShadowsocks.ok() &&
+                     parsedShadowsocks.fields.name == shadowsocksFields.name &&
+                     parsedShadowsocks.fields.serverAddress == shadowsocksFields.serverAddress &&
+                     parsedShadowsocks.fields.serverPort == shadowsocksFields.serverPort &&
+                     parsedShadowsocks.fields.method == shadowsocksFields.method &&
+                     parsedShadowsocks.fields.password == shadowsocksFields.password &&
+                     parsedShadowsocks.fields.plugin == shadowsocksFields.plugin,
+                 "SIP002 Shadowsocks fields and escaped v2ray-plugin options must round-trip");
+
+    ShadowSocksShareFields shadowsocks2022;
+    shadowsocks2022.serverAddress = QStringLiteral("ss2022.example");
+    shadowsocks2022.serverPort = 443;
+    shadowsocks2022.method = QStringLiteral("2022-blake3-aes-256-gcm");
+    shadowsocks2022.password = QStringLiteral("YctPZ6U7xPPcU+gp3u+0tx/RizJN9K8y+uKlW2qjlI=");
+    const auto builtShadowsocks2022 = BuildShadowSocksShareLink(shadowsocks2022);
+    const auto parsedShadowsocks2022 = ParseShadowSocksShareLink(builtShadowsocks2022.link);
+    ok &= expect(builtShadowsocks2022.ok() &&
+                     builtShadowsocks2022.link.contains(QLatin1String("2022-blake3-aes-256-gcm:")) &&
+                     builtShadowsocks2022.link.contains(QLatin1String("%2B")) &&
+                     parsedShadowsocks2022.ok() &&
+                     parsedShadowsocks2022.fields.password == shadowsocks2022.password,
+                 "AEAD-2022 Shadowsocks userinfo must remain plain and percent encoded");
+
+    const auto legacyShadowsocksPayload = QByteArrayLiteral(
+        "chacha20-ietf-poly1305:pa:ss@word@legacy.example:1443").toBase64(
+            QByteArray::Base64Encoding | QByteArray::OmitTrailingEquals);
+    const auto legacyShadowsocks = ParseShadowSocksShareLink(
+        QStringLiteral("ss://") + QString::fromLatin1(legacyShadowsocksPayload) +
+        QStringLiteral("#legacy%20node"));
+    ok &= expect(legacyShadowsocks.ok() &&
+                     legacyShadowsocks.fields.name == QStringLiteral("legacy node") &&
+                     legacyShadowsocks.fields.serverAddress == QStringLiteral("legacy.example") &&
+                     legacyShadowsocks.fields.serverPort == 1443 &&
+                     legacyShadowsocks.fields.method == QStringLiteral("chacha20-ietf-poly1305") &&
+                     legacyShadowsocks.fields.password == QStringLiteral("pa:ss@word"),
+                 "deprecated whole-payload Shadowsocks base64 must split first colon and last at-sign");
+
+    const auto plainSip002 = ParseShadowSocksShareLink(QStringLiteral(
+        "ss://aes-256-gcm:pass%3Aword@[2001:db8::17]:8388/"
+        "?plugin=simple-obfs%3Bobfs%3Dhttp#plain"));
+    ok &= expect(plainSip002.ok() &&
+                     plainSip002.fields.serverAddress == QStringLiteral("2001:db8::17") &&
+                     plainSip002.fields.serverPort == 8388 &&
+                     plainSip002.fields.method == QStringLiteral("aes-256-gcm") &&
+                     plainSip002.fields.password == QStringLiteral("pass:word") &&
+                     plainSip002.fields.plugin == QStringLiteral("obfs-local;obfs=http"),
+                 "plain SIP002 userinfo, IPv6 server, and simple-obfs alias must parse without DNS");
+
+    auto ipv6ShadowsocksFields = shadowsocksFields;
+    ipv6ShadowsocksFields.serverAddress = QStringLiteral("2001:db8::18");
+    ipv6ShadowsocksFields.plugin.clear();
+    const auto builtIpv6Shadowsocks = BuildShadowSocksShareLink(ipv6ShadowsocksFields);
+    const auto parsedIpv6Shadowsocks = ParseShadowSocksShareLink(builtIpv6Shadowsocks.link);
+    ok &= expect(builtIpv6Shadowsocks.ok() && parsedIpv6Shadowsocks.ok() &&
+                     parsedIpv6Shadowsocks.fields.serverAddress == ipv6ShadowsocksFields.serverAddress,
+                 "SIP002 export must preserve an IPv6 server with URI brackets only at the format boundary");
+
+    const auto clashV2RayPlugin = V2RayPluginFromClash(
+        QStringLiteral("websocket"),
+        QStringLiteral("cdn.example"),
+        QStringLiteral(R"(/edge\a=b,c;d)"),
+        true);
+    ok &= expect(clashV2RayPlugin == QStringLiteral(
+                     R"(v2ray-plugin;tls;host=cdn.example;path=/edge\\a\=b\,c\;d)") &&
+                     V2RayPluginFromClash({}, {}, {}, false) == QStringLiteral("v2ray-plugin"),
+                 "Clash v2ray-plugin values must be escaped for SIP003 without restoring Xray runtime");
+
+    const auto invalidLegacyShadowsocks = ParseShadowSocksShareLink(QStringLiteral("ss://%%%"));
+    const auto malformedLegacyShadowsocks = ParseShadowSocksShareLink(
+        QStringLiteral("ss://") + QString::fromLatin1(QByteArrayLiteral("method:password").toBase64()));
+    const auto invalidPortShadowsocks = ParseShadowSocksShareLink(
+        QStringLiteral("ss://YWVzLTI1Ni1nY206cGFzcw@ss.example:70000"));
+    ok &= expect(invalidLegacyShadowsocks.error == ShadowSocksShareError::InvalidBase64 &&
+                     malformedLegacyShadowsocks.error == ShadowSocksShareError::InvalidSyntax &&
+                     invalidPortShadowsocks.error == ShadowSocksShareError::InvalidPort,
+                 "invalid Shadowsocks base64, syntax, and ports must fail explicitly");
 
     const auto socks = ServerPortUserPass(
         CredentialProxyKind::Socks5,

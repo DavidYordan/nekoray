@@ -41,6 +41,7 @@
 | G-002 | TCP Ping 因“不经过所选 outbound”被 GUI/core 双层禁用 | 恢复上游 direct server reachability 语义；明确它走当前 Windows 网络路径，不等价于 URL Test；不再为它构建临时代理配置 | core 回环 listener Go 测试通过；`nekobox` 增量构建通过 | 真实 GUI、域名解析提示、活动 TUN 下结果展示、远端节点 |
 | U-001a | SOCKS legacy 分享链接的 base64 `user:password` 解析被删除 | 恢复上游识别点；只在 URI 没有显式 password、base64 严格合法、UTF-8 可逆且解码结果含冒号时拆分，首个冒号之后完整保留为 password；其它输入原样保留 | 定向回归修复前失败、修复后通过；覆盖规范导出/重解析、显式 password、非法 base64、无分隔符、非法 UTF-8；`nekobox` 增量构建和完整 CTest 5/5 通过 | 普通 GUI 剪贴板导入、保存后从真实 profile 再导出 |
 | U-001b | VMess v2rayN base64 JSON 导入、导出选择和设置被当作 Xray 遗留删除 | 恢复为纯分享格式：严格区分 base64 JSON 与现代 URI，映射 `h2`/内部 `http`，保真上游字段及已有 Bean 可承载的 `alpn/fp/insecure`；Reality 使用 URI 并补齐 URI 的 ALPN/TCP-HTTP path 保真，避免丢 key；设置默认启用并持久化 | 对照 v2rayN 官方 schema 与 `adef6cd`；定向红绿、字段 round-trip、数字/字符串端口、错误输入和现代 URI 分流通过；`nekobox` 增量构建、CTest 5/5 通过 | 真实 GUI 剪贴板/二维码、真实 profile 持久化；当前 v2rayN 的 `vcn/pcs` 尚无 Bean/runtime 映射，不在本恢复切片内 |
+| U-001c | Shadowsocks 整段 legacy base64、Clash v2ray-plugin 导入和 UI 选项被当作 Xray 遗留删除 | legacy 整段 base64 只恢复兼容导入，导出统一 SIP002；支持 base64url/plain/AEAD-2022 userinfo、域名/IPv6、plugin URL/SIP003 转义；恢复 Clash 字段映射和 UI 选择，运行仍使用 sing-box 内置 v2ray-plugin | 对照 SIP002、Shadowsocks legacy 说明、v2ray-plugin/v2rayN 与 `adef6cd`；定向红绿、SIP002/legacy/plugin round-trip、错误输入通过；`nekobox` 增量构建、CTest 5/5 通过 | 真实 GUI/订阅刷新、真实 v2ray-plugin WebSocket/TLS/QUIC 线路和辅助端口 |
 
 G-001/G-002 的恢复不是放宽 provider resolver 或专用端口的 fail-close。分享导出不产生网络访问；TCP Ping 是用户显式触发的只读诊断，其结果不得自动改入口或线路。
 
@@ -48,7 +49,7 @@ G-001/G-002 的恢复不是放宽 provider resolver 或专用端口的 fail-clos
 
 ### U-001 导入和分享兼容
 
-SOCKS base64 userinfo 已在 U-001a 恢复，VMess v2rayN base64 JSON 基线已在 U-001b 恢复。Shadowsocks v2rayN legacy 格式和 v2ray-plugin 识别回归仍未修复。名称包含 `v2ray` 不能作为删除依据；当前 v2rayN schema 中 NekoRay Bean 尚不能表示的证书验证扩展也不能靠猜测写入现有 TLS 字段。
+SOCKS base64 userinfo、VMess v2rayN base64 JSON 基线以及 Shadowsocks legacy/SIP002/v2ray-plugin 基线已分别在 U-001a/b/c 恢复。名称包含 `v2ray` 不能作为删除依据；当前 v2rayN schema 中 NekoRay Bean 尚不能表示的证书验证扩展也不能靠猜测写入现有 TLS 字段。真实 GUI、订阅和线路证据仍按上表分层补齐。
 
 整改安排：
 
@@ -186,13 +187,13 @@ route/settings/hotkey 和部分 UI 状态仍可能在磁盘保存失败后保留
 |---|---|---|---|
 | C0 | 当前审计检查点 | 固化 G-001/G-002、产品/文档纠偏、Clash no-touch 约束和当前验证结果，并推送远端任务分支 | 不执行 GUI/TUN/系统网络测试 |
 | W1（已完成） | U-001a：SOCKS base64 userinfo 兼容 | 已用 `adef6cd` 脱敏语义建立红绿回归并恢复最短 parser/规范链接 round-trip；纯 Windows 本地测试 | 未同时恢复 VMess、Shadowsocks、external-core，未访问网络 |
-| W2（U-001b 已完成） | U-001b/c：VMess v2rayN 与 Shadowsocks/v2ray-plugin | VMess 已完成独立红绿回归与实现；下一检查点只处理 Shadowsocks legacy/v2ray-plugin 的字段保真和错误输入 | 不因名称含 `v2ray` 恢复 Xray runtime，不把未映射证书字段静默猜成 SNI |
+| W2（已完成） | U-001b/c：VMess v2rayN 与 Shadowsocks/v2ray-plugin | 两种格式已各自完成失败 fixture、字段/错误分流、生产接入、Windows 增量构建和独立提交 | 不因名称含 `v2ray` 恢复 Xray runtime；未把纯格式测试写成真实线路通过 |
 | W3 | R-001a：人工多入口字段契约 | 只冻结原始 domain、SNI、resolver 来源、候选、诊断、固定入口的单一所有权和旧数据行为，先写 round-trip 测试 | 不做自动择优、DNS fallback 或 UI 大改 |
 | W4（进行中） | E-001：隔离 Windows 环境 | 能力盘点、feature 启用和 offline `.wsb`/runner/verifier 已完成；等待用户手工重启后执行首次启动、哈希和无网络 adapter 验证，再补 Sandbox 内 Wintun 生命周期 | 不自动重启，不停止/改写 Clash，不改变宿主网络，不执行 Linux 验证 |
 | W5 | 逐项恢复 U-002/U-003 | external-core/Naive/schema 与普通上游能力按数据→UI→执行分层恢复；GeoSite、更新、系统代理拆成独立工作包 | 不与 AnyTLS/resolver/端口生命周期混改 |
 | W6 | 三项核心闭环 | 依次推进 R-001/R-002、A-001、P-001/P-002；涉及 Windows TUN 的 U-005/U-006 必须等 E-001 可用 | 不引入第二 runtime、persistent service/WFP 或全局 fallback |
 | W7 | 数据、并发与交付 | D-001..D-003、C-001/C-002，最后做同轮完整 package、旧配置迁移、真实 GUI/线路和分层网络矩阵 | 不用旧二进制或低层测试代替交付证据 |
 
-W1 已完成。W4 已推进到等待 Windows 人工重启的安全边界；在重启条件尚未满足时继续 W2，不让环境前置阻塞纯 parser 工作，并把 VMess v2rayN 与 Shadowsocks/v2ray-plugin 拆成独立检查点。重启后优先完成 W4 首次运行；不得自动重启或把默认 Sandbox networking 当作绕过方案。
+W1/W2 已完成。W4 已推进到等待 Windows 人工重启的安全边界；重启后优先完成首次 Sandbox 运行。在此之前下一代码切片是 W3 人工多入口字段契约，只先冻结数据所有权和 round-trip，不越过自动选择/系统 DNS 边界。不得自动重启或把默认 Sandbox networking 当作绕过方案。
 
 任何步骤若需要自动择优、全局 fallback、persistent service/WFP、第二数据模型或不可逆迁移，必须停止并请求用户决定。

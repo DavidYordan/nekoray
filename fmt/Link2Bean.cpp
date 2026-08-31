@@ -98,33 +98,15 @@ namespace NekoGui_fmt {
     }
 
     bool ShadowSocksBean::TryParseLink(const QString &link) {
-        if (SubStrBefore(link, "#").contains("@")) {
-            // SS
-            auto url = QUrl(link);
-            if (!url.isValid()) return false;
-
-            name = url.fragment(QUrl::FullyDecoded);
-            serverAddress = url.host();
-            serverPort = url.port();
-
-            if (url.password().isEmpty()) {
-                // traditional format
-                auto method_password = DecodeB64IfValid(url.userName(), QByteArray::Base64Option::Base64UrlEncoding);
-                if (method_password.isEmpty()) return false;
-                method = SubStrBefore(method_password, ":");
-                password = SubStrAfter(method_password, ":");
-            } else {
-                // 2022 format
-                method = url.userName();
-                password = url.password();
-            }
-
-            auto query = GetQuery(url);
-            plugin = query.queryItemValue("plugin").replace("simple-obfs;", "obfs-local;");
-        } else {
-            return false;
-        }
-        return !(serverAddress.isEmpty() || method.isEmpty() || password.isEmpty());
+        const auto parsed = ParseShadowSocksShareLink(link);
+        if (!parsed.ok()) return false;
+        name = parsed.fields.name;
+        serverAddress = parsed.fields.serverAddress;
+        serverPort = parsed.fields.serverPort;
+        method = parsed.fields.method;
+        password = parsed.fields.password;
+        plugin = parsed.fields.plugin;
+        return true;
     }
 
     bool VMessBean::TryParseLink(const QString &link) {

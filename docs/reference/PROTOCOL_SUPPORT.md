@@ -7,7 +7,7 @@
 |---|---|---|---|---|
 | AnyTLS | 无 | Bean/UI/链接/Clash/core均有 | 提交 `f298d46`：Windows 回环中由 ProfileManager/ConfigBuilder 生成 Mihomo-client AnyTLS，经 Trojan group front proxy 到独立 HTTP origin 成功；停止 Trojan 后 AnyTLS server/origin 仍存活而该端口失败。2026-07-20 真实远端组合 EOF 仍待 preserve 重跑 | 三项扩展；继续验证真实组合与继承 |
 | Trojan | 有 | 有 | 提交 `f298d46` 已作为 Windows 回环 AnyTLS 前置代理实际承载流量并完成故障隔离；2026-07-20 OpenWrt 结果仅作历史背景，真实远端组合改在隔离 Windows 重测 | 保留 |
-| Shadowsocks | 有 | 有，但v2ray-plugin导入/UI回归 | 未复验 | 恢复兼容并测试 |
+| Shadowsocks | 有 | SIP002、legacy 整段 base64 导入、v2ray-plugin Clash/URI/UI 与 sing-box 内置 plugin 配置路径已恢复 | 脱敏格式/plugin round-trip、错误输入、增量 GUI 构建和 CTest 通过；真实 plugin 线路未复验 | 保留；legacy 只导入，导出统一 SIP002；不恢复 Xray runtime |
 | SOCKS/HTTP | 有 | 有；2026-08-31 已恢复 legacy SOCKS base64 `user:password` 解析，HTTP 路径未改 | 严格 base64/UTF-8/分隔符保留与规范链接 round-trip 纯测试、Mixed 入口协议 fixture 有基线；真实 GUI 导入未验收 | 保留并继续补 Windows GUI 证据 |
 | VMess/VLESS | 有 | VMess v2rayN base64 JSON 基线导入/导出、持久设置与现代 URI 分流已恢复；VLESS 运行路径未改 | 脱敏字段 round-trip、错误输入、增量 GUI 构建和 CTest 通过；真实 GUI/线路未复验 | 保留；分享格式不等于恢复 Xray core；`vcn/pcs` 扩展仍待单独建模 |
 | Hysteria2/TUIC | 有 | sing-box路径有，外核选项被删 | 未复验 | 恢复上游外核能力 |
@@ -22,5 +22,7 @@
 Xray运行核心保持删除。名称含 `v2ray` 的格式、插件或生态兼容不自动属于Xray核心。
 
 VMess v2rayN 恢复以其官方 base64 JSON schema 和上游 `adef6cd` 为边界。`add` 原样承载 IP 或域名，不解析 DNS；`port`/`aid` 同时读取 JSON 字符串或整数，导出为 v2rayN 要求的字符串；`net=h2` 只在格式边界转换为内部 `http` transport。项目 Bean 已有对应字段的 `alpn`、`fp`、`insecure` 同步保真。v2rayN 当前 schema 另有 `vcn`/`pcs` 证书验证字段，而当前 NekoRay Bean/runtime 没有等价所有权；本切片不猜测映射，也不据此恢复 Xray runtime。官方说明：<https://github.com/2dust/v2rayn/wiki/Description-of-VMess-share-link>。
+
+Shadowsocks 导入区分两类格式：SIP002 的 `userinfo@server:port` 与已弃用的整段 `method:password@server:port` base64。后者只为旧订阅/剪贴板兼容保留，所有新导出统一为 SIP002；非 2022 userinfo 使用无 padding 的 base64url，AEAD-2022 使用逐字段百分号编码的明文 userinfo。plugin query 保留 SIP003 反斜杠转义；Clash 的 `v2ray-plugin` 字段转换为当前 sing-box 内置 plugin 的 `plugin/plugin_opts`，不启动外置 v2ray/Xray core。格式依据：<https://github.com/shadowsocks/shadowsocks-org/wiki/SIP002-URI-Scheme>、<https://github.com/shadowsocks/shadowsocks-org/blob/main/docs/doc/configs.md>、<https://github.com/shadowsocks/v2ray-plugin>。
 
 每个协议的正式证据至少覆盖：新建、持久化、编辑、订阅/链接 round-trip、core schema、主/辅助端口、HTTP/CONNECT/SOCKS5h、失败关闭、Windows 系统代理/TUN。后续只接受 Windows 证据；既有 OpenWrt 记录仅为历史背景，不再重跑。
