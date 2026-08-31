@@ -154,15 +154,16 @@ namespace NekoGui_fmt {
 
         QJsonObject settings;
         if (proxy_type == proxy_VLESS) {
-            if (flow.right(7) == "-udp443") {
+            auto effectiveFlow = flow;
+            if (effectiveFlow.right(7) == "-udp443") {
                 // 检查末尾是否包含"-udp443"，如果是，则删去
-                flow.chop(7);
-            } else if (flow == "none") {
+                effectiveFlow.chop(7);
+            } else if (effectiveFlow == "none") {
                 // 不使用 flow
-                flow = "";
+                effectiveFlow = "";
             }
             outbound["uuid"] = password.trimmed();
-            outbound["flow"] = flow;
+            outbound["flow"] = effectiveFlow;
         } else {
             outbound["password"] = password;
         }

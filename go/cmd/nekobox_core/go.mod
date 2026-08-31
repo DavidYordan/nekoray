@@ -161,7 +161,7 @@ require (
 
 replace grpc_server => ../../grpc_server
 
-replace github.com/matsuridayo/libneko => ../../../../libneko
+replace github.com/matsuridayo/libneko => ../../../third_party/libneko
 
 replace github.com/sagernet/sing-box => ../../../third_party/routefluent-sing-box/work/src/sing-box-1.13.12
 

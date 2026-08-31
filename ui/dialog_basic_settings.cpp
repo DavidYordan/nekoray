@@ -66,6 +66,7 @@ DialogBasicSettings::DialogBasicSettings(QWidget *parent)
     D_LOAD_INT(test_download_timeout)
     D_LOAD_STRING(test_latency_url)
     D_LOAD_STRING(test_download_url)
+    D_LOAD_BOOL(old_share_link_format)
 
     connect(ui->custom_inbound_edit, &QPushButton::clicked, this, [=] {
         C_EDIT_JSON_ALLOW_EMPTY(custom_inbound)
@@ -169,7 +170,30 @@ DialogBasicSettings::~DialogBasicSettings() {
 }
 
 void DialogBasicSettings::accept() {
+    if (NekoGui::dataStore->core_transition_depth.load() > 0) {
+        MessageBoxWarning(
+            software_name,
+            tr("Settings cannot be changed while a core transition is in progress. Wait for it to finish and try again."));
+        return;
+    }
     // Common
+
+    bool mixedPortOk = false;
+    bool auxStartOk = false;
+    bool auxEndOk = false;
+    const auto mixedPort = ui->inbound_socks_port->text().toInt(&mixedPortOk);
+    const auto auxStart = ui->aux_port_pool_start->text().toInt(&auxStartOk);
+    const auto auxEnd = ui->aux_port_pool_end->text().toInt(&auxEndOk);
+    if (!mixedPortOk || !IsValidPort(mixedPort)) {
+        MessageBoxWarning(tr("Invalid port"), tr("Mixed listen port must be between 1 and 65535."));
+        ui->inbound_socks_port->setFocus();
+        return;
+    }
+    if (!auxStartOk || !auxEndOk || !IsValidPort(auxStart) || !IsValidPort(auxEnd) || auxStart > auxEnd) {
+        MessageBoxWarning(tr("Invalid port range"), tr("Auxiliary port range must be between 1 and 65535, and the start must not exceed the end."));
+        ui->aux_port_pool_start->setFocus();
+        return;
+    }
 
     D_SAVE_STRING(inbound_address)
     D_SAVE_COMBO_STRING(log_level)
@@ -182,6 +206,7 @@ void DialogBasicSettings::accept() {
     D_SAVE_INT(test_download_timeout)
     D_SAVE_STRING(test_latency_url)
     D_SAVE_STRING(test_download_url)
+    D_SAVE_BOOL(old_share_link_format)
 
     // Style
 

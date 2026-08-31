@@ -1,0 +1,23 @@
+{
+  "inbounds": [
+    {
+      "type": "mixed",
+      "tag": "mixed-in",
+      "listen": "127.0.0.1",
+      "listen_port": 18087
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "direct",
+      "tag": "proxy"
+    }
+  ],
+  "route": {
+    "final": "proxy"
+  },
+  "ntp": {
+    "enabled": true,
+    "write_to_system": true
+  }
+}

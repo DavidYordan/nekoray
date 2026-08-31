@@ -5,6 +5,7 @@ param(
     [string] $OutputPath = "",
     [switch] $ForTest,
     [switch] $ForShare,
+    [switch] $IncludeAuxiliaryAudit,
     [switch] $Check,
     [switch] $Json
 )
@@ -12,10 +13,15 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
+if ($ForTest -and $IncludeAuxiliaryAudit) {
+    throw "IncludeAuxiliaryAudit is only valid for the standard side-effect-free export mode."
+}
+
 $Root = Split-Path -Parent $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($Root)) {
     $Root = (Get-Location).Path
 }
+. (Join-Path $PSScriptRoot "path_safety.ps1")
 
 function Get-FullPath([string] $Path) {
     if ([System.IO.Path]::IsPathRooted($Path)) {
@@ -32,16 +38,19 @@ function Require-File([string] $Path, [string] $Name) {
 }
 
 $packageFull = Get-FullPath $PackageDir
+$packageFull = Assert-PathOutsideProtectedProduction $packageFull "Profile-export package directory"
+Assert-DirectoryTreeHasNoReparsePoints $packageFull "Profile-export package tree"
 $nekobox = Require-File (Join-Path $packageFull "nekobox.exe") "nekobox.exe"
 $core = Require-File (Join-Path $packageFull "nekobox_core.exe") "nekobox_core.exe"
 
 if ([string]::IsNullOrWhiteSpace($OutputPath)) {
     $auditDir = Join-Path $packageFull "runtime_audit"
-    New-Item -ItemType Directory -Path $auditDir -Force | Out-Null
-    $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
-    $OutputPath = Join-Path $auditDir "profile_${ProfileId}_core_config_$stamp.json"
+    $stamp = Get-Date -Format "yyyyMMdd_HHmmss_fff"
+    $uniqueId = [Guid]::NewGuid().ToString("N").Substring(0, 8)
+    $OutputPath = Join-Path $auditDir "profile_${ProfileId}_core_config_${stamp}_${uniqueId}.json"
 }
 $outputFull = Get-FullPath $OutputPath
+$outputFull = Assert-NewFileOutsideProtectedProduction $outputFull "Profile-export output"
 $outputDir = Split-Path -Parent $outputFull
 New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
 
@@ -51,6 +60,9 @@ if ($ForTest) {
 }
 if ($ForShare) {
     $argsList += "-flag_export_profile_config_for_share"
+}
+if ($IncludeAuxiliaryAudit) {
+    $argsList += "-flag_export_profile_config_include_auxiliary_audit"
 }
 
 $exportProcess = Start-Process -FilePath $nekobox -ArgumentList $argsList -WorkingDirectory $packageFull -WindowStyle Hidden -Wait -PassThru
@@ -94,6 +106,7 @@ $dohServers = @($dnsServers | Where-Object { $_.type -eq "https" -or $_.type -eq
 
 $result = [pscustomobject]@{
     profile_id = $ProfileId
+    includes_auxiliary_audit = [bool]$IncludeAuxiliaryAudit
     output_path = $outputFull
     check_exit_code = $checkExitCode
     inbound_count = @($config.inbounds).Count

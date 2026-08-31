@@ -8,7 +8,9 @@ pushd ..
 
 ####
 
-git -C nekoray submodule update --init --recursive third_party/routefluent-sing-box
+git -C nekoray submodule update --init --recursive \
+  third_party/routefluent-sing-box \
+  third_party/libneko
 
 ####
 
@@ -17,16 +19,6 @@ if [ ! -d "sing-quic" ]; then
 fi
 pushd sing-quic
 git checkout "$COMMIT_SING_QUIC"
-
-popd
-
-####
-
-if [ ! -d "libneko" ]; then
-  git clone --no-checkout https://github.com/MatsuriDayo/libneko.git
-fi
-pushd libneko
-git checkout "$COMMIT_LIBNEKO"
 
 popd
 

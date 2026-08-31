@@ -2,6 +2,10 @@
 
 #include <QProcess>
 
+#include <chrono>
+
+#include "main/RuntimeTransition.hpp"
+
 namespace NekoGui_sys {
     class CoreProcess : public QProcess {
     public:
@@ -11,7 +15,34 @@ namespace NekoGui_sys {
 
         void Restart();
 
-        int start_profile_when_core_is_up = -1;
+        void EnsureStarted();
+
+        [[nodiscard]] NekoGui_Runtime::DaemonProfileStartRequest
+        QueueProfileStartWhenCoreIsUp(int profileId);
+
+        [[nodiscard]] bool CancelQueuedProfileStart();
+
+        [[nodiscard]] bool ConsumeQueuedProfileStart(
+            std::uint64_t daemonGeneration,
+            std::uint64_t requestGeneration,
+            int profileId);
+
+        [[nodiscard]] std::uint64_t CurrentDaemonGeneration() const;
+
+        [[nodiscard]] NekoGui_Runtime::DaemonInstanceSnapshot CurrentDaemonInstance() const;
+
+        [[nodiscard]] NekoGui_Runtime::DaemonProcessSnapshot CurrentDaemonProcess() const;
+
+        [[nodiscard]] bool WaitForDaemonFinished(
+            const NekoGui_Runtime::DaemonProcessSnapshot& expected,
+            std::chrono::milliseconds timeout,
+            NekoGui_Runtime::DaemonProcessFinishedResult* result = nullptr) const;
+
+        [[nodiscard]] NekoGui_Runtime::DaemonReadyResult ConfirmDaemonReady(
+            std::uint64_t expectedGeneration,
+            const QString& expectedInstanceId);
+
+        [[nodiscard]] bool IsDaemonReady(std::uint64_t daemonGeneration) const;
 
     private:
         QString program;
@@ -22,6 +53,14 @@ namespace NekoGui_sys {
         bool show_stderr = false;
         bool failed_to_start = false;
         bool restarting = false;
+        NekoGui_Runtime::DaemonGenerationState daemonGeneration;
+        NekoGui_Runtime::DaemonProcessExitState daemonProcessExit;
+        QByteArray stdoutProbeBuffer;
+        QByteArray stderrProbeBuffer;
+
+        void HandleCoreLog(QByteArray& probeBuffer, const QByteArray& log);
+
+        void RequestDaemonHandshake();
     };
 
     inline QAtomicInt logCounter;

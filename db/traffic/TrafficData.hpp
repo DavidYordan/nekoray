@@ -13,7 +13,7 @@ namespace NekoGui_traffic {
         long long downlink_rate = 0;
         long long uplink_rate = 0;
 
-        long long last_update;
+        long long last_update = 0;
 
         explicit TrafficData(std::string tag) {
             this->tag = std::move(tag);
@@ -36,5 +36,15 @@ namespace NekoGui_traffic {
             if (downlink + uplink == 0) return "";
             return UNICODE_LRO + QStringLiteral("%1↑ %2↓").arg(ReadableSize(uplink), ReadableSize(downlink));
         }
+    };
+
+    // Immutable routing identity produced by ConfigBuilder. Traffic counters
+    // remain attached to the profile-owned TrafficData object, while each
+    // generation keeps its own outbound tag and profile id by value. Building
+    // a test/export/candidate must never rewrite live runtime telemetry tags.
+    struct TrafficBinding {
+        int profileId = -1;
+        std::string outboundTag;
+        std::shared_ptr<TrafficData> data;
     };
 } // namespace NekoGui_traffic

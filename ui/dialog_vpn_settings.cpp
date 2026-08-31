@@ -14,12 +14,16 @@ DialogVPNSettings::DialogVPNSettings(QWidget *parent) : QDialog(parent), ui(new 
     ui->fake_dns->setChecked(NekoGui::dataStore->fake_dns);
     ui->vpn_implementation->setCurrentIndex(NekoGui::dataStore->vpn_implementation);
     ui->vpn_mtu->setCurrentText(Int2String(NekoGui::dataStore->vpn_mtu));
-    ui->vpn_ipv6->setChecked(NekoGui::dataStore->vpn_ipv6);
+    ui->vpn_ipv6->setChecked(true);
+    ui->vpn_ipv6->setEnabled(false);
+    ui->vpn_ipv6->setToolTip(tr("IPv4 and IPv6 coverage is enforced for fail-closed Windows Tun."));
     ui->hide_console->setChecked(NekoGui::dataStore->vpn_hide_console);
 #ifndef Q_OS_WIN
     ui->hide_console->setVisible(false);
 #endif
-    ui->strict_route->setChecked(NekoGui::dataStore->vpn_strict_route);
+    ui->strict_route->setChecked(true);
+    ui->strict_route->setEnabled(false);
+    ui->strict_route->setToolTip(tr("Strict routing is enforced for fail-closed Windows Tun."));
     ui->single_core->setChecked(NekoGui::dataStore->vpn_internal_tun);
     //
     D_LOAD_STRING_PLAIN(vpn_rule_cidr)
@@ -42,15 +46,19 @@ DialogVPNSettings::~DialogVPNSettings() {
 }
 
 void DialogVPNSettings::accept() {
+    if (NekoGui::dataStore->core_transition_depth.load() > 0) {
+        MessageBoxWarning(
+            software_name,
+            tr("Tun settings cannot be changed while a core transition is in progress. Wait for it to finish and try again."));
+        return;
+    }
     //
     auto mtu = ui->vpn_mtu->currentText().toInt();
     if (mtu > 10000 || mtu < 1000) mtu = 9000;
     NekoGui::dataStore->vpn_implementation = ui->vpn_implementation->currentIndex();
     NekoGui::dataStore->fake_dns = ui->fake_dns->isChecked();
     NekoGui::dataStore->vpn_mtu = mtu;
-    NekoGui::dataStore->vpn_ipv6 = ui->vpn_ipv6->isChecked();
     NekoGui::dataStore->vpn_hide_console = ui->hide_console->isChecked();
-    NekoGui::dataStore->vpn_strict_route = ui->strict_route->isChecked();
     NekoGui::dataStore->vpn_rule_white = ui->whitelist_mode->isChecked();
     bool isInternalChanged = NekoGui::dataStore->vpn_internal_tun != ui->single_core->isChecked();
     NekoGui::dataStore->vpn_internal_tun = ui->single_core->isChecked();
@@ -69,6 +77,12 @@ void DialogVPNSettings::accept() {
 }
 
 void DialogVPNSettings::on_troubleshooting_clicked() {
+#ifdef Q_OS_WIN
+    MessageBoxWarning(
+        tr("Troubleshooting"),
+        tr("Legacy force reset is disabled on Windows because it cannot prove ownership of the target core process and could affect another NekoRay installation. No process was stopped. See docs/testing/FAIL_CLOSED.md and docs/operations/TROUBLESHOOT_MIXED.md."));
+    return;
+#else
     auto r = QMessageBox::information(this, tr("Troubleshooting"),
                                       tr("If you have trouble starting VPN, you can force reset nekobox_core process here.\n\n"
                                          "If still not working, see documentation for more information.\n"
@@ -78,4 +92,5 @@ void DialogVPNSettings::on_troubleshooting_clicked() {
     if (r == 0) {
         GetMainWindow()->StopVPNProcess(true);
     }
+#endif
 }

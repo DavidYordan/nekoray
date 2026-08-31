@@ -3,9 +3,9 @@
 
 #include "3rdparty/qt_compat/ui/widgets/editors/w_JsonEditor.hpp"
 #include "main/GuiUtils.hpp"
+#include "main/ConfigTransaction.hpp"
 #include "fmt/Preset.hpp"
 
-#include <QFile>
 #include <QMessageBox>
 #include <QListWidget>
 #include <QLineEdit>
@@ -90,6 +90,12 @@ DialogManageRoutes::~DialogManageRoutes() {
 }
 
 void DialogManageRoutes::accept() {
+    if (NekoGui::dataStore->core_transition_depth.load() > 0) {
+        MessageBoxWarning(
+            software_name,
+            tr("Routing cannot be changed while a core transition is in progress. Wait for it to finish and try again."));
+        return;
+    }
     D_C_SAVE_STRING(custom_route_global)
     bool routeChanged = false;
     if (NekoGui::dataStore->active_routing != active_routing) routeChanged = true;
@@ -199,6 +205,10 @@ void DialogManageRoutes::on_load_save_clicked() {
     connect(load, &QPushButton::clicked, w, [=] {
         auto fn = lineEdit->text();
         if (!fn.isEmpty()) {
+            if (!NekoGui::Routing::IsSafeName(fn)) {
+                QMessageBox::warning(w, tr("Invalid routing profile name"), tr("Use a Windows file name without path separators or reserved device names."));
+                return;
+            }
             auto r = std::make_unique<NekoGui::Routing>();
             r->load_control_must = true;
             r->fn = ROUTES_PREFIX + fn;
@@ -211,27 +221,87 @@ void DialogManageRoutes::on_load_save_clicked() {
         }
     });
     connect(save, &QPushButton::clicked, w, [=] {
+        if (NekoGui::dataStore->core_transition_depth.load() > 0) {
+            QMessageBox::warning(
+                w,
+                software_name,
+                tr("Routing cannot be saved while a core transition is in progress. Wait for it to finish and try again."));
+            return;
+        }
         auto fn = lineEdit->text();
         if (!fn.isEmpty()) {
+            if (!NekoGui::Routing::IsSafeName(fn)) {
+                QMessageBox::warning(w, tr("Invalid routing profile name"), tr("Use a Windows file name without path separators or reserved device names."));
+                return;
+            }
             auto r = std::make_unique<NekoGui::Routing>();
-            SaveDisplayRouting(r.get());
             r->fn = ROUTES_PREFIX + fn;
+            if (NekoGui::Routing::List().contains(fn)) {
+                r->load_control_must = true;
+                if (!r->Load()) {
+                    QMessageBox::warning(
+                        w,
+                        tr("Routing save failed"),
+                        tr("The existing routing profile was preserved because it could not be loaded safely."));
+                    return;
+                }
+            }
+            SaveDisplayRouting(r.get());
             if (QMessageBox::question(nullptr, software_name, tr("Save routing: %1").arg(fn) + "\n" + r->DisplayRouting()) == QMessageBox::Yes) {
                 r->Save();
+                if (!r->last_save_succeeded) {
+                    QMessageBox::warning(
+                        w,
+                        tr("Routing save failed"),
+                        tr("The routing profile could not be saved; existing data was preserved."));
+                    return;
+                }
                 REFRESH_ACTIVE_ROUTING(fn, r.get())
                 w->accept();
             }
         }
     });
     connect(remove, &QPushButton::clicked, w, [=] {
+        if (NekoGui::dataStore->core_transition_depth.load() > 0) {
+            QMessageBox::warning(
+                w,
+                software_name,
+                tr("Routing cannot be removed while a core transition is in progress. Wait for it to finish and try again."));
+            return;
+        }
         auto fn = lineEdit->text();
-        if (!fn.isEmpty() && NekoGui::Routing::List().length() > 1) {
+        const auto availableRoutes = NekoGui::Routing::List();
+        if (!fn.isEmpty() && NekoGui::Routing::IsSafeName(fn) &&
+            availableRoutes.length() > 1 && availableRoutes.contains(fn)) {
             if (QMessageBox::question(nullptr, software_name, tr("Remove routing: %1").arg(fn)) == QMessageBox::Yes) {
-                QFile f(ROUTES_PREFIX + fn);
-                f.remove();
                 if (NekoGui::dataStore->active_routing == fn) {
-                    NekoGui::Routing::SetToActive(NekoGui::Routing::List().first());
-                    REFRESH_ACTIVE_ROUTING(NekoGui::dataStore->active_routing, NekoGui::dataStore->routing.get())
+                    QMessageBox::warning(
+                        w,
+                        tr("Routing deletion failed"),
+                        tr("The active routing profile was preserved. Load and confirm another profile before deleting this one."));
+                    return;
+                }
+
+                NekoGui::Routing target;
+                target.load_control_must = true;
+                target.fn = ROUTES_PREFIX + fn;
+                if (!target.Load()) {
+                    QMessageBox::warning(
+                        w,
+                        tr("Routing deletion failed"),
+                        tr("The routing profile was preserved because its source could not be loaded safely."));
+                    return;
+                }
+
+                const auto transaction = NekoGui_ConfigTransaction::Execute(
+                    QStringLiteral("Explicit inactive routing-profile deletion confirmed in GUI."),
+                    {{target.fn, {true, target.last_save_content}, {false, {}}}});
+                if (!transaction.succeeded()) {
+                    QMessageBox::warning(
+                        w,
+                        tr("Routing deletion failed"),
+                        tr("The routing profile was preserved. %1").arg(transaction.error));
+                    return;
                 }
                 w->accept();
             }

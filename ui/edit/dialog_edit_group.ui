@@ -299,13 +299,6 @@
         </property>
        </widget>
       </item>
-      <item>
-       <widget class="QPushButton" name="copy_links_multimapper">
-        <property name="text">
-         <string>Copy to MultiMapper</string>
-        </property>
-       </widget>
-      </item>
      </layout>
     </widget>
    </item>
@@ -346,7 +339,6 @@
   <tabstop>reset_profiles_inherit_defaults</tabstop>
   <tabstop>copy_links</tabstop>
   <tabstop>copy_links_nkr</tabstop>
-  <tabstop>copy_links_multimapper</tabstop>
  </tabstops>
  <resources/>
  <connections>

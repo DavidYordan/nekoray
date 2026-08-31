@@ -1,12 +1,14 @@
 #pragma once
 
+#include <atomic>
+
 #include "Const.hpp"
 #include "NekoGui_Utils.hpp"
 #include "NekoGui_ConfigItem.hpp"
 #include "NekoGui_DataStore.hpp"
 
 namespace NekoGui {
-    QString FindCoreAsset(const QString &name);
+    QString FindCoreAsset(const QString& name);
 
     QString FindNekoBoxCoreRealPath();
 

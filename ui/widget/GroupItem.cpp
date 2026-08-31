@@ -119,8 +119,18 @@ void GroupItem::on_remove_clicked() {
     if (NekoGui::profileManager->groups.size() <= 1) return;
     if (QMessageBox::question(this, tr("Confirmation"), tr("Remove %1?").arg(ent->name)) ==
         QMessageBox::StandardButton::Yes) {
-        NekoGui::profileManager->DeleteGroup(ent->id);
-        MW_dialog_message(Dialog_DialogManageGroups, "refresh-1");
-        delete item;
+        QString error;
+        if (NekoGui::profileManager->DeleteGroup(
+                ent->id,
+                QStringLiteral("Explicit empty-group deletion confirmed in GUI."),
+                &error)) {
+            MW_dialog_message(Dialog_DialogManageGroups, "refresh-1");
+            delete item;
+        } else {
+            QMessageBox::warning(
+                this,
+                tr("Group deletion failed"),
+                tr("The group was preserved. %1").arg(error));
+        }
     }
 }

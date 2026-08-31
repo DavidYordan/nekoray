@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -23,21 +24,62 @@ import (
 )
 
 type BaseServer struct {
-	gen.LibcoreServiceServer
+	gen.UnimplementedLibcoreServiceServer
+	gracefulShutdownMu       sync.Mutex
+	gracefulShutdownOnce     sync.Once
+	gracefulShutdownCallback func()
 }
 
-func (s *BaseServer) Exit(ctx context.Context, in *gen.EmptyReq) (out *gen.EmptyResp, _ error) {
-	out = &gen.EmptyResp{}
+const LifecycleProtocolVersion uint32 = 3
 
-	// Connection closed
-	os.Exit(0)
-	return
+func (s *BaseServer) GetDaemonInfo(ctx context.Context, in *gen.EmptyReq) (*gen.DaemonInfoResp, error) {
+	return &gen.DaemonInfoResp{
+		DaemonInstanceId:         auth.DaemonInstanceID(ctx),
+		LifecycleProtocolVersion: LifecycleProtocolVersion,
+	}, nil
+}
+
+// ConfigureGracefulShutdown binds this service instance to the gRPC server
+// that owns it. It is configured exactly once before Serve starts.
+func (s *BaseServer) ConfigureGracefulShutdown(callback func()) bool {
+	if callback == nil {
+		return false
+	}
+	s.gracefulShutdownMu.Lock()
+	defer s.gracefulShutdownMu.Unlock()
+	if s.gracefulShutdownCallback != nil {
+		return false
+	}
+	s.gracefulShutdownCallback = callback
+	return true
+}
+
+func (s *BaseServer) GracefulShutdownConfigured() bool {
+	s.gracefulShutdownMu.Lock()
+	defer s.gracefulShutdownMu.Unlock()
+	return s.gracefulShutdownCallback != nil
+}
+
+// RequestGracefulShutdown starts the callback outside the Exit handler. A
+// synchronous GracefulStop would wait for that same handler and deadlock.
+func (s *BaseServer) RequestGracefulShutdown() bool {
+	s.gracefulShutdownMu.Lock()
+	callback := s.gracefulShutdownCallback
+	s.gracefulShutdownMu.Unlock()
+	if callback == nil {
+		return false
+	}
+	s.gracefulShutdownOnce.Do(func() {
+		go callback()
+	})
+	return true
 }
 
 func RunCore(setupCore func(), server gen.LibcoreServiceServer) {
 	_token := flag.String("token", "", "")
 	_port := flag.Int("port", 19810, "")
 	_debug := flag.Bool("debug", false, "")
+	_instanceID := flag.String("instance-id", "", "")
 	flag.CommandLine.Parse(os.Args[2:])
 
 	neko_common.Debug = *_debug
@@ -82,22 +124,33 @@ func RunCore(setupCore func(), server gen.LibcoreServiceServer) {
 		fmt.Println("You must set a token")
 		os.Exit(0)
 	}
+	instanceID := strings.TrimSpace(*_instanceID)
+	if instanceID == "" {
+		log.Fatalln("daemon instance id is required")
+	}
 	os.Stderr.WriteString("token is set\n")
 
 	auther := auth.Authenticator{
-		Token: token,
+		Token:            token,
+		DaemonInstanceID: instanceID,
 	}
 
-	s := grpc.NewServer(
+	grpcServer := grpc.NewServer(
 		grpc.StreamInterceptor(grpc_auth.StreamServerInterceptor(auther.Authenticate)),
 		grpc.UnaryInterceptor(grpc_auth.UnaryServerInterceptor(auther.Authenticate)),
 	)
-	gen.RegisterLibcoreServiceServer(s, server)
+	shutdownController, ok := server.(interface {
+		ConfigureGracefulShutdown(func()) bool
+	})
+	if !ok || !shutdownController.ConfigureGracefulShutdown(grpcServer.GracefulStop) {
+		log.Fatalln("core service does not provide a one-shot graceful shutdown controller")
+	}
+	gen.RegisterLibcoreServiceServer(grpcServer, server)
 
 	name := "nekobox_core"
 
 	log.Printf("%s grpc server listening at %v\n", name, lis.Addr())
-	if err := s.Serve(lis); err != nil {
+	if err := grpcServer.Serve(lis); err != nil {
 		log.Fatalf("failed to serve: %v", err)
 	}
 }

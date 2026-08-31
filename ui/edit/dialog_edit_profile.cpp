@@ -12,43 +12,19 @@
 
 #include "fmt/includes.h"
 #include "fmt/Preset.hpp"
+#include "db/ResolverConfig.hpp"
 
 #include "3rdparty/qt_compat/ui/widgets/editors/w_JsonEditor.hpp"
 #include "main/GuiUtils.hpp"
 
 #include <QInputDialog>
-#include <QSet>
-#include <QUrl>
-
 namespace {
     QStringList parseResolverDohUpstreamsForUi(const QString &raw) {
-        auto normalized = raw;
-        normalized.replace(",", "\n");
-        QStringList out;
-        QSet<QString> seen;
-        for (const auto &line: SplitLinesSkipSharp(normalized)) {
-            const auto value = line.trimmed();
-            if (value.isEmpty() || seen.contains(value)) continue;
-            seen.insert(value);
-            out << value;
-        }
-        return out;
+        return NekoGui_resolver::ParseDohUpstreams(raw);
     }
 
     bool isValidDohUpstreamForUi(const QString &raw, QString *error = nullptr) {
-        const auto value = raw.trimmed();
-        const auto url = QUrl(value);
-        auto fail = [&](const QString &message) {
-            if (error != nullptr) *error = QStringLiteral("%1: %2").arg(value, message);
-            return false;
-        };
-        if (!url.isValid() || url.scheme().toLower() != "https") return fail("must use https");
-        if (url.host().isEmpty()) return fail("must have host");
-        if (url.path().isEmpty() || url.path() == "/") return fail("must have non-root path");
-        if (!url.userName().isEmpty() || !url.password().isEmpty()) return fail("must not include credentials");
-        if (url.hasQuery()) return fail("must not include query");
-        if (url.hasFragment()) return fail("must not include fragment");
-        return true;
+        return NekoGui_resolver::ValidateDohUpstream(raw, error);
     }
 } // namespace
 
@@ -66,7 +42,9 @@ DialogEditProfile::DialogEditProfile(const QString &_type, int profileOrGroupId,
     ui->serverResolverMode->setToolTip(resolverHelp);
     ui->serverResolverDohUpstreams_l->setToolTip(tr("HTTPS DoH upstreams, one per line. Used for this profile's server address only."));
     ui->serverResolverDohUpstreams->setToolTip(tr("HTTPS DoH upstreams, one per line. Used only when this profile overrides with doh mode."));
-    ui->serverResolverAllowLocalFallback->setToolTip(tr("Allow local system resolver if provider DoH is unavailable at runtime."));
+    // Legacy data is retained for compatibility, but local DNS fallback is
+    // outside the fail-closed product contract and must not be user-selectable.
+    ui->serverResolverAllowLocalFallback->setVisible(false);
     connect(ui->serverResolverMode, &QComboBox::currentTextChanged, this, [=](const QString &txt) {
         const auto enableDoh = txt == "doh";
         ui->serverResolverDohUpstreams->setEnabled(enableDoh);
@@ -252,7 +230,7 @@ void DialogEditProfile::typeSelected(const QString &newType) {
     ui->serverResolverMode_l->setVisible(showAddressPort);
     ui->serverResolverDohUpstreams->setVisible(showAddressPort);
     ui->serverResolverDohUpstreams_l->setVisible(showAddressPort);
-    ui->serverResolverAllowLocalFallback->setVisible(showAddressPort);
+    ui->serverResolverAllowLocalFallback->setVisible(false);
 
     // 右边 stream
     auto stream = GetStreamSettings(ent->bean.get());
@@ -402,7 +380,6 @@ bool DialogEditProfile::onEnd() {
     ent->bean->serverPort = ui->port->text().toInt();
     ent->bean->serverResolverDohUpstreams = "";
     ent->bean->inheritSubscriptionResolver = ui->serverResolverMode->currentText() == "subscription";
-    ent->bean->serverResolverAllowLocalFallback = ui->serverResolverAllowLocalFallback->isChecked();
     if (ui->serverResolverMode->currentText() == "doh" && !IsIpAddress(ent->bean->serverAddress)) {
         ent->bean->inheritSubscriptionResolver = false;
         auto upstreams = parseResolverDohUpstreamsForUi(ui->serverResolverDohUpstreams->toPlainText());
@@ -451,6 +428,12 @@ bool DialogEditProfile::onEnd() {
 }
 
 void DialogEditProfile::accept() {
+    if (NekoGui::dataStore->core_transition_depth.load() > 0) {
+        MessageBoxWarning(
+            software_name,
+            tr("Profiles cannot be changed while a core transition is in progress. Wait for it to finish and try again."));
+        return;
+    }
     // save to ent
     if (!onEnd()) {
         return;
@@ -522,6 +505,12 @@ void DialogEditProfile::on_certificate_edit_clicked() {
 }
 
 void DialogEditProfile::on_apply_to_group_clicked() {
+    if (NekoGui::dataStore->core_transition_depth.load() > 0) {
+        MessageBoxWarning(
+            software_name,
+            tr("Profiles cannot be changed while a core transition is in progress. Wait for it to finish and try again."));
+        return;
+    }
     if (apply_to_group_ui.empty()) {
         apply_to_group_ui[ui->multiplex] = new FloatCheckBox(ui->multiplex, this);
         apply_to_group_ui[ui->sni] = new FloatCheckBox(ui->sni, this);
@@ -533,7 +522,6 @@ void DialogEditProfile::on_apply_to_group_clicked() {
         apply_to_group_ui[ui->certificate_edit] = new FloatCheckBox(ui->certificate_edit, this);
         apply_to_group_ui[ui->serverResolverMode] = new FloatCheckBox(ui->serverResolverMode, this);
         apply_to_group_ui[ui->serverResolverDohUpstreams] = new FloatCheckBox(ui->serverResolverDohUpstreams, this);
-        apply_to_group_ui[ui->serverResolverAllowLocalFallback] = new FloatCheckBox(ui->serverResolverAllowLocalFallback, this);
         apply_to_group_ui[ui->custom_config_edit] = new FloatCheckBox(ui->custom_config_edit, this);
         apply_to_group_ui[ui->custom_outbound_edit] = new FloatCheckBox(ui->custom_outbound_edit, this);
         ui->apply_to_group->setText(tr("Confirm"));
@@ -613,8 +601,6 @@ void DialogEditProfile::do_apply_to_group(const std::shared_ptr<NekoGui::Group> 
         copyStream(&stream->certificate);
     } else if (key == ui->serverResolverMode || key == ui->serverResolverDohUpstreams) {
         copyServerResolver();
-    } else if (key == ui->serverResolverAllowLocalFallback) {
-        copyBean(&ent->bean->serverResolverAllowLocalFallback);
     } else if (key == ui->custom_config_edit) {
         copyBean(&ent->bean->custom_config);
     } else if (key == ui->custom_outbound_edit) {

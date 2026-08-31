@@ -1,5 +1,6 @@
 #include "db/ProxyEntity.hpp"
 #include "fmt/includes.h"
+#include "fmt/ShareFormats.hpp"
 
 #include <QUrlQuery>
 
@@ -18,6 +19,10 @@ namespace NekoGui_fmt {
         username = url.userName();
         password = url.password();
         if (serverPort == -1) serverPort = socks_http_type == type_HTTP ? 443 : 1080;
+
+        const auto normalizedUserInfo = DecodeLegacySocksBase64UserInfo(username, password);
+        username = normalizedUserInfo.username;
+        password = normalizedUserInfo.password;
 
         stream->security = GetQueryValue(query, "security", "");
         stream->sni = GetQueryValue(query, "sni");
@@ -93,36 +98,39 @@ namespace NekoGui_fmt {
     }
 
     bool ShadowSocksBean::TryParseLink(const QString &link) {
-        if (SubStrBefore(link, "#").contains("@")) {
-            // SS
-            auto url = QUrl(link);
-            if (!url.isValid()) return false;
-
-            name = url.fragment(QUrl::FullyDecoded);
-            serverAddress = url.host();
-            serverPort = url.port();
-
-            if (url.password().isEmpty()) {
-                // traditional format
-                auto method_password = DecodeB64IfValid(url.userName(), QByteArray::Base64Option::Base64UrlEncoding);
-                if (method_password.isEmpty()) return false;
-                method = SubStrBefore(method_password, ":");
-                password = SubStrAfter(method_password, ":");
-            } else {
-                // 2022 format
-                method = url.userName();
-                password = url.password();
-            }
-
-            auto query = GetQuery(url);
-            plugin = query.queryItemValue("plugin").replace("simple-obfs;", "obfs-local;");
-        } else {
-            return false;
-        }
-        return !(serverAddress.isEmpty() || method.isEmpty() || password.isEmpty());
+        const auto parsed = ParseShadowSocksShareLink(link);
+        if (!parsed.ok()) return false;
+        name = parsed.fields.name;
+        serverAddress = parsed.fields.serverAddress;
+        serverPort = parsed.fields.serverPort;
+        method = parsed.fields.method;
+        password = parsed.fields.password;
+        plugin = parsed.fields.plugin;
+        return true;
     }
 
     bool VMessBean::TryParseLink(const QString &link) {
+        const auto v2rayN = ParseV2RayNVmessLink(link);
+        if (v2rayN.ok()) {
+            name = v2rayN.fields.name;
+            serverAddress = v2rayN.fields.serverAddress;
+            serverPort = v2rayN.fields.serverPort;
+            uuid = v2rayN.fields.uuid;
+            aid = v2rayN.fields.alterId;
+            security = v2rayN.fields.security;
+            stream->network = v2rayN.fields.network;
+            stream->host = v2rayN.fields.host;
+            stream->path = v2rayN.fields.path;
+            stream->header_type = v2rayN.fields.headerType;
+            stream->security = v2rayN.fields.tls;
+            stream->sni = v2rayN.fields.sni;
+            stream->alpn = v2rayN.fields.alpn;
+            stream->utlsFingerprint = v2rayN.fields.fingerprint;
+            stream->allow_insecure = v2rayN.fields.allowInsecure;
+            return true;
+        }
+        if (v2rayN.error != V2RayNVmessError::NotV2RayN) return false;
+
         auto url = QUrl(link);
         if (!url.isValid()) return false;
         auto query = GetQuery(url);
@@ -146,6 +154,7 @@ namespace NekoGui_fmt {
         auto sni2 = GetQueryValue(query, "peer");
         if (!sni1.isEmpty()) stream->sni = sni1;
         if (!sni2.isEmpty()) stream->sni = sni2;
+        stream->alpn = GetQueryValue(query, "alpn");
         if (!query.queryItemValue("allowInsecure").isEmpty()) stream->allow_insecure = true;
         stream->reality_pbk = GetQueryValue(query, "pbk", "");
         stream->reality_sid = GetQueryValue(query, "sid", "");

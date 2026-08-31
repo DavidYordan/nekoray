@@ -4,17 +4,19 @@
 #include <QList>
 #include <QMutex>
 
+#include <atomic>
+
 #include "TrafficData.hpp"
 
 namespace NekoGui_traffic {
     class TrafficLooper {
     public:
-        bool loop_enabled = false;
-        bool looping = false;
+        std::atomic_bool loop_enabled = false;
+        std::atomic_bool looping = false;
         QMutex loop_mutex;
 
-        QList<std::shared_ptr<TrafficData>> items;
-        TrafficData *proxy = nullptr;
+        QList<TrafficBinding> items;
+        std::shared_ptr<TrafficData> proxy;
 
         void UpdateAll();
 
@@ -23,7 +25,7 @@ namespace NekoGui_traffic {
     private:
         TrafficData *bypass = new TrafficData("bypass");
 
-        [[nodiscard]] static TrafficData *update_stats(TrafficData *item);
+        [[nodiscard]] static TrafficData *update_stats(TrafficData* data, const std::string& outboundTag);
 
         [[nodiscard]] static QJsonArray get_connection_list();
     };

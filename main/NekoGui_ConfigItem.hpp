@@ -15,10 +15,10 @@ namespace NekoGui_ConfigItem {
     class configItem {
     public:
         QString name;
-        void *ptr;
+        void* ptr;
         itemType type;
 
-        configItem(QString n, void *p, itemType t) {
+        configItem(QString n, void* p, itemType t) {
             name = std::move(n);
             ptr = p;
             type = t;
@@ -30,13 +30,19 @@ namespace NekoGui_ConfigItem {
     public:
         QMap<QString, std::shared_ptr<configItem>> _map;
 
+        std::function<QString(const QJsonObject&)> callback_validate_load = nullptr;
         std::function<void()> callback_after_load = nullptr;
-        std::function<void()> callback_before_save = nullptr;
+        std::function<QString()> callback_before_save = nullptr;
 
         QString fn;
         bool load_control_must = false; // must load from file
         bool save_control_compact = false;
         bool save_control_no_save = false;
+        bool load_failed_existing = false;
+        bool last_save_succeeded = false;
+        bool last_save_indeterminate = false;
+        bool last_save_existed = false;
+        QString last_load_error;
         QByteArray last_save_content;
 
         JsonStore() = default;
@@ -45,21 +51,21 @@ namespace NekoGui_ConfigItem {
             fn = std::move(fileName);
         }
 
-        void _add(configItem *item);
+        void _add(configItem* item);
 
-        QString _name(void *p);
+        QString _name(void* p);
 
-        std::shared_ptr<configItem> _get(const QString &name);
+        std::shared_ptr<configItem> _get(const QString& name);
 
-        void _setValue(const QString &name, void *p);
+        void _setValue(const QString& name, void* p);
 
-        QJsonObject ToJson(const QStringList &without = {});
+        QJsonObject ToJson(const QStringList& without = {});
 
         QByteArray ToJsonBytes();
 
         void FromJson(QJsonObject object);
 
-        void FromJsonBytes(const QByteArray &data);
+        bool FromJsonBytes(const QByteArray& data);
 
         bool Save();
 

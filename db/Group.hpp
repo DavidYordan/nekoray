@@ -21,6 +21,8 @@ namespace NekoGui {
         QString default_client_source = "";
         QString default_server_resolver_doh = "";
         QString default_server_resolver_source = "";
+        QString default_server_resolver_origin = "";
+        int default_server_resolver_policy_version = 0;
         bool default_server_resolver_allow_local_fallback = false;
 
         // list ui

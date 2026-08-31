@@ -1,0 +1,7 @@
+{
+  "inbound_address": "127.0.0.1",
+  "inbound_socks_port": 18087,
+  "core_box_clash_api": -9090,
+  "test_url": "http://cp.cloudflare.com/",
+  "aux_profile_ports": []
+}

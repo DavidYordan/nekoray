@@ -14,8 +14,9 @@ namespace NekoGui_traffic {
     TrafficLooper *trafficLooper = new TrafficLooper;
     QElapsedTimer elapsedTimer;
 
-    TrafficData *TrafficLooper::update_stats(TrafficData *item) {
+    TrafficData *TrafficLooper::update_stats(TrafficData* item, const std::string& outboundTag) {
 #ifndef NKR_NO_GRPC
+        if (item == nullptr || outboundTag.empty()) return nullptr;
         // last update
         auto now = elapsedTimer.elapsed();
         auto interval = now - item->last_update;
@@ -23,8 +24,8 @@ namespace NekoGui_traffic {
         if (interval <= 0) return nullptr;
 
         // query
-        auto uplink = NekoGui_rpc::defaultClient->QueryStats(item->tag, "uplink");
-        auto downlink = NekoGui_rpc::defaultClient->QueryStats(item->tag, "downlink");
+        auto uplink = NekoGui_rpc::defaultClient->QueryStats(outboundTag, "uplink");
+        auto downlink = NekoGui_rpc::defaultClient->QueryStats(outboundTag, "downlink");
 
         // add diff
         item->downlink += downlink;
@@ -33,7 +34,7 @@ namespace NekoGui_traffic {
         item->uplink_rate = uplink * 1000 / interval;
 
         // return diff
-        auto ret = new TrafficData(item->tag);
+        auto ret = new TrafficData(outboundTag);
         ret->downlink = downlink;
         ret->uplink = uplink;
         ret->downlink_rate = item->downlink_rate;
@@ -55,13 +56,14 @@ namespace NekoGui_traffic {
 
     void TrafficLooper::UpdateAll() {
         std::map<std::string, TrafficData *> updated; // tag to diff
-        for (const auto &item: this->items) {
-            auto data = item.get();
-            auto diff = updated[data->tag];
+        for (const auto &binding: this->items) {
+            auto data = binding.data.get();
+            if (data == nullptr || binding.outboundTag.empty()) continue;
+            auto diff = updated[binding.outboundTag];
             // 避免重复查询一个 outbound tag
             if (diff == nullptr) {
-                diff = update_stats(data);
-                updated[data->tag] = diff;
+                diff = update_stats(data, binding.outboundTag);
+                updated[binding.outboundTag] = diff;
             } else {
                 data->uplink += diff->uplink;
                 data->downlink += diff->downlink;
@@ -69,7 +71,7 @@ namespace NekoGui_traffic {
                 data->downlink_rate = diff->downlink_rate;
             }
         }
-        updated[bypass->tag] = update_stats(bypass);
+        updated[bypass->tag] = update_stats(bypass, bypass->tag);
         //
         for (const auto &pair: updated) {
             delete pair.second;
@@ -85,10 +87,9 @@ namespace NekoGui_traffic {
             if (NekoGui::dataStore->traffic_loop_interval == 0) continue; // user disabled
 
             // profile start and stop
-            if (!loop_enabled) {
+            if (!loop_enabled.load()) {
                 // 停止
-                if (looping) {
-                    looping = false;
+                if (looping.exchange(false)) {
                     runOnUiThread([=] {
                         auto m = GetMainWindow();
                         m->refresh_status("STOP");
@@ -97,9 +98,7 @@ namespace NekoGui_traffic {
                 continue;
             } else {
                 // 开始
-                if (!looping) {
-                    looping = true;
-                }
+                looping.store(true);
             }
 
             // do update
@@ -113,17 +112,20 @@ namespace NekoGui_traffic {
                 conn_list = get_connection_list();
             }
 
+            const auto proxySnapshot = proxy;
+            const auto itemSnapshot = items;
+
             loop_mutex.unlock();
 
             // post to UI
             runOnUiThread([=] {
                 auto m = GetMainWindow();
-                if (proxy != nullptr) {
-                    m->refresh_status(QObject::tr("Proxy: %1\nDirect: %2").arg(proxy->DisplaySpeed(), bypass->DisplaySpeed()));
+                if (proxySnapshot != nullptr) {
+                    m->refresh_status(QObject::tr("Proxy: %1\nDirect: %2").arg(proxySnapshot->DisplaySpeed(), bypass->DisplaySpeed()));
                 }
-                for (const auto &item: items) {
-                    if (item->id < 0) continue;
-                    m->refresh_proxy_list(item->id);
+                for (const auto &item: itemSnapshot) {
+                    if (item.profileId < 0) continue;
+                    m->refresh_proxy_list(item.profileId);
                 }
                 if (NekoGui::dataStore->connection_statistics) {
                     m->refresh_connection_list(conn_list);

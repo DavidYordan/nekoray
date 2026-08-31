@@ -524,10 +524,11 @@
      </property>
      <addaction name="menu_qr"/>
      <addaction name="menu_export_config"/>
-     <addaction name="separator"/>
-     <addaction name="menu_copy_links"/>
-     <addaction name="menu_copy_links_nkr"/>
-     <addaction name="menu_copy_links_multimapper"/>
+      <addaction name="separator"/>
+      <addaction name="menu_copy_links"/>
+      <addaction name="menu_copy_links_without_remarks"/>
+      <addaction name="menu_copy_server_port_user_pass"/>
+      <addaction name="menu_copy_links_nkr"/>
     </widget>
     <widget class="QMenu" name="menuCurrent_Group">
      <property name="title">
@@ -683,6 +684,9 @@
    <property name="text">
     <string notr="true">Tcp Ping</string>
    </property>
+   <property name="toolTip">
+    <string>Test direct TCP reachability of the server through the current Windows network path; this does not test the selected proxy outbound.</string>
+   </property>
    <property name="shortcut">
     <string notr="true">Ctrl+Alt+T</string>
    </property>
@@ -825,11 +829,6 @@
     <string notr="true">Ctrl+N</string>
    </property>
   </action>
-  <action name="menu_copy_links_multimapper">
-   <property name="text">
-    <string>Copy to MultiMapper</string>
-   </property>
-  </action>
   <action name="actionfake_2">
    <property name="text">
     <string>fake</string>
@@ -852,6 +851,16 @@
    </property>
    <property name="shortcut">
     <string notr="true">Ctrl+C</string>
+   </property>
+  </action>
+  <action name="menu_copy_links_without_remarks">
+   <property name="text">
+    <string>Copy links of selected (without remarks)</string>
+   </property>
+  </action>
+  <action name="menu_copy_server_port_user_pass">
+   <property name="text">
+    <string>Copy selected as server:port:user:pass</string>
    </property>
   </action>
   <action name="menu_spmode_vpn">

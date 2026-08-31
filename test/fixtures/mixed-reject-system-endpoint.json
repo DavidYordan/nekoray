@@ -1,0 +1,26 @@
+{
+  "inbounds": [
+    {
+      "type": "mixed",
+      "tag": "mixed-in",
+      "listen": "127.0.0.1",
+      "listen_port": 18088
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "direct",
+      "tag": "proxy"
+    }
+  ],
+  "route": {
+    "final": "proxy"
+  },
+  "endpoints": [
+    {
+      "type": "wireguard",
+      "tag": "system-endpoint",
+      "system": true
+    }
+  ]
+}
